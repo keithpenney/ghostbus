@@ -1,0 +1,7 @@
+
+__pycache__
+
+# Some files I'm using as reference but aren't in the codebase
+axilb_decoder.py
+hregs.py
+parse.ys
