@@ -58,5 +58,123 @@ reg [3:0] foo=0;                            // Non-host-accessible register
 (* ghostbus_ha, ghostbus_addr='h100 *)
 reg [7:0] baz [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
 
+`ifdef GHOSTBUS_LIVE
+`include "gb_mod_foo.vh"
+`endif
+
 endmodule
 ```
+
+## Design considerations
+
+### Pipeline and fanout
+The behavior of the decoder should be parameterized.  In the simplest case, we can route the whole bus with
+combinational logic (pipeline depth of 0).  This should be sufficient for small designs, but will create
+high fanout and resource usage as the project grows.
+
+As the HDL design itself is structured hierarchically and the whole _ghostbus_ memory management concept is
+similarly structured, it would make sense to use module boundaries as natural pipeline delimiters (i.e. the
+bus decoding in a child module will be one cycle delayed from the decoding in the parent).  Blindly applying
+this rule would create unnatural and buggy dependence of the bus timing on the hierarchy.  Instead, I propose
+a configurable parameter for pipeline length.
+
+Consider an example design as a tree of modules with the longest branch being 5 modules deep.  If we choose
+a decoder pipeline length of 2 for this design, the longest branch would behave like this:
+  cycle num     branch level
+  --------------------------
+  0             0           // The top level is not delayed wrt the bus controller
+  1             1           // The first level down is one cycle delayed
+  2             2, 3, 4     // The remainder of the branch is two cycles delayed
+
+If it is determined to be important, extra logic could be added to ensure the delay between the bus controller
+asserting a write strobe and module receiving it is consistent across the entire design, regardless of hierarchy.
+
+### Read cycles
+
+The above consideration has implications for read cycle delays as well.  For a read operation, the bus controller
+would need to wait at least twice the pipeline depth for the result to be valid (assuming both the `din` and `dout`
+paths are pipelined in the same way).  Additional logic should be spent to ensure that the local read cycle delay
+is consistent across the entire design.  That is to say, every module should see the same number of cycles between
+the time a read is asserted and when the value is latched by the read pipeline.
+
+### Hierarchy and Mirror Memory
+
+The flat memory map (no hierarchy) of Newad-enabled projects makes the mirror memory concept easier.  With hierarchy,
+it becomes necessary to alias addresses in the mirror memory region.  So for any host-accessible register placed in
+the mirror memory address space, there will be two addresses associated with it: a write address and a read address.
+The write address will be used for the write decoding and will propagate to the local decoding within its module.
+The read address will be the arbitrarily-assigned index into the mirror memory which will be used for both writes
+(need to store the data if you want to read it back) and reads.
+
+The decoding for the mirror memory will not be distributed the same way the normal bus decoding is.  A natural place
+for this to live is either at the top level or at the same level as the bus controller since it functions purely as
+RAM attached to the bus.
+
+### Passthrough modules
+
+A conceivable hierarchy could be the following:
+
+```
+| bus controller |
+        \
+         | module A |
+              \
+               | module B |
+                    \
+                     | module C (HA regs) |
+```
+
+In this example, there are no host-accessible registers ("HA regs") in modules `A` or `B` but the auto-generated bus
+needs to route through these two modules to reach the HA regs in module `C`.
+
+To solve this problem, two options come to mind:
+
+1. Only require routing the bus ports inside module A and module B, as in:
+```verilog
+module mod_a (
+  input bus_clk,
+  input [AW-1:0] bus_addr,
+  input [DW-1:0] bus_din,
+  output [DW-1:0] bus_dout,
+  input bus_we
+);
+
+mod_b mod_b_i (
+  .bus_clk(bus_clk),
+  .bus_addr(bus_addr),
+  .bus_din(bus_din),
+  .bus_dout(bus_dout)
+);
+endmodule
+```
+And similarly for `mod_c` within `mod_b`.
+
+2. Insert auto-generated decoding even though there are no HA regs in this module, as in:
+```verilog
+module mod_a (
+  input bus_clk,
+  input [AW-1:0] bus_addr,
+  input [DW-1:0] bus_din,
+  output [DW-1:0] bus_dout,
+  input bus_we
+);
+
+mod_b mod_b_i (
+  .bus_clk(bus_clk),
+  .bus_addr(bus_addr),
+  .bus_din(bus_din),
+  .bus_dout(bus_dout)
+);
+
+`ifdef GHOSTBUS_LIVE
+`include "gb_mod_a.vh"
+`endif
+
+endmodule
+```
+
+In case __1__ above, module `A` and `B` function as transparent passthrough and do not count as pipeline boundaries
+(because decoding logic is not included).  In the second option, if the pipeline depth is >1, module `A` will include
+decoding pipeline logic (i.e. `gb_mod_a.vh` will be non-empty).  Similarly, if pipeline depth is >2, module `B` will
+include such logic as well.
+
