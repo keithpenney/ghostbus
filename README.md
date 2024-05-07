@@ -30,7 +30,7 @@ automatically as well, though that competes with some of the goals below.
 |__GhostBus__                        |__Newad__                               |
 |------------------------------------|----------------------------------------|
 |Decoding at top level               |Distributed decoder (in each module)    |
-|"Magic" (auto-generated) ports      |No magic ports                          |
+|"Magic" (auto-generated) ports      |...sadly, magic ports for the bus       |
 |Flat memory map; all registers in the same scope; name mangling|Hierarchical memory map; name mangling if needed for EPICS|
 |Preprocessing required              |Valid Verilog without preprocessing; host-accessible registers retain initial values|
 |Manual (global) address via static JSON |Manual (module-relative) address via Verilog attribute|
@@ -66,6 +66,53 @@ endmodule
 ```
 
 ## Design considerations
+
+### Magic ports
+I can't figure out a way to avoid magic ports in Verilog.  That was a big goal here, but I can't figure out
+a way to generically wire up a bus without pre-defining the memory map within the constraints of the language
+(and without abusing the preprocessor to the point of complete obfuscation).
+
+So I sadly yield to the concept of magic ports, but ONLY for the bus itself (hence the "ghost").  But this
+brings up several important issues to resolve:
+
+* How do the magic ports appear?
+
+Do we mandate preprocessor macros galore (ugh), or do we invoke a custom preprocessor (yikes)?  The latter
+would probably just be a custom Python script; developing the script is not the hard part - it's integrating
+it with an existing build system that's a pain.  So I think the macro method is still somehow favorable.
+
+* How do we allow a user to manually hook up to the ghost bus?
+
+This use case would appear pretty quickly, i.e. putting a dual-port RAM on the bus.  Remember, the raison
+d'etre of this whole thing is to allow the source to be valid Verilog outside of the ghostbus toolchain
+(making code more obvious/self-documenting, and simplifying testbench coverage).  So the only halfway decent
+solution that comes to mind is declaring nets and labeling them as part of the ghost bus with attributes.
+
+```Verilog
+// Example of manually hooking up to the ghost bus
+
+(* ghostbus_port=clk *)  wire gb_clk;
+(* ghostbus_port=addr *) wire [DW-1:0] gb_addr;
+(* ghostbus_port=din *)  wire [DW-1:0] gb_din;
+(* ghostbus_port=dout *) wire [DW-1:0] gb_dout;
+(* ghostbus_port=wen *)  wire gb_we;
+
+// Optionally drive with actual signals in a non-ghostbus context
+`ifndef GHOSTBUS_LIVE
+assign gb_clk  = clk;
+assign gb_addr = test_addr;
+assign gb_din  = test_din;
+assign gb_dout = test_dout;
+assign gb_we   = test_we;
+`endif
+
+// And here we manually wire up the dpram. Note that we'll need to communicate its
+// size (address width 'AW') to the ghostbus memory map
+(* ghostbus_aw=AW *) dpram #(.AW(AW)) dpram_i (
+  .clk_a(clk_a), .addr_a(addr_a), .din_a(din_a), .dout_a(dout_a), .wen_a(wen_a),
+  .clk_b(gb_clk), .addr_b(gb_addr), .din_b(gb_din), .dout_b(gb_dout), .wen_b(gb_we)
+);
+```
 
 ### Pipeline and fanout
 The behavior of the decoder should be parameterized.  In the simplest case, we can route the whole bus with

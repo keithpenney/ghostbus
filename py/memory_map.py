@@ -14,19 +14,39 @@ MEMORY_RANGE_SCALAR = (0,1024)
 MEMORY_RANGE_MIRROR = ((1<<23), (1<<24))
 MEMORY_RANGE_ARRAY  = (1024, (1<<23))
 
+def bits(v):
+    return int(math.ceil(math.log2(v+1)))
+
 
 class Register():
-    def __init__(self, name=None, dw=1, aw=0):
+    def __init__(self, name=None, dw=1, aw=0, base=None):
         self._name = name
         self._size = 1 << int(aw)
-        self._width = int(dw)
+        self._data_width = int(dw)
+        self._addr_width = int(aw)
+        self._base_addr = base
 
+    @property
     def name(self):
         if self._name is None:
             return "Register_{}".format(size)
+        return self._name
 
+    @property
     def size(self):
         return self._size
+
+    @property
+    def width(self):
+        return self._addr_width
+
+    @property
+    def datawidth(self):
+        return self._data_width
+
+    @property
+    def base(self):
+        return self._base_addr
 
 class MemoryRegion():
     """A memory allocator.
@@ -57,18 +77,108 @@ class MemoryRegion():
         cls._nregion += 1
         return
 
-    def __init__(self, addr_range=(0, (1<<24)), label = None):
-        self.range = addr_range
-        # Each entry is (start, end+1)
+    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
+        """addr_range is [low, high), where the 'high' address is
+        not inclusive.  For example, an 8-bit address range starting
+        at 0x100 should be listed as: addr_range=(0x100, 0x200), not
+        (0x100, 0x1ff).
+        To identify the memory region, there are two (non-conflicting) options:
+            'label' can be used to identify the memory region per application
+            'hierarchy' can be used to keep track of region hierarchy
+        """
+        self._offset = addr_range[0]
+        # -1 because the upper address is not inclusive
+        self._aw = bits((addr_range[1]-addr_range[0])-1)
+        # Its own memory map will be defined relative to the base (not absolute addresses)
+        self._top = (1 << self._aw)
+        # Each entry is (start, end+1, ref) where 'ref' is either None or a Python object reference
         self.map = []
         self.vacant = [list(addr_range)]
         self._keepout = []
         self.refs = []
+        self._hierarchy = hierarchy
         if label is None:
             self.label = "MemoryRegion" + str(self._nregion)
             self._inc()
         else:
             self.label = label
+        self._delta_indent = 0 # see self.print()
+
+    def shrink(self):
+        """Reduce address range to the minimum aligned range containing
+        the occupied portions of the map.  Note that it only scales the
+        upper bound.  The lower bound remains fixed.
+        Note that this could cause problems if you try to add more items
+        to the memory region after shrinking.  It should probably only
+        be called after you're sure you're done adding entries."""
+        hi_occupied = self.high_addr()
+        min_aw = bits(hi_occupied)
+        self._top = (1 << min_aw)
+        # Also need to truncate the last entry in the "vacant" map
+        self.vacant[-1] = (self.vacant[-1][0], self._top)
+        return
+
+    def grow(self, high, absolute=False):
+        """If high is an address greater than the current max address,
+        extend the memory range to the next aligned point including that
+        address (relative to the base, unless absolute=True).
+        An exception is raised if 'high' is less than the current upper
+        address."""
+        if not absolute:
+            aw = bits(high)
+            high = self.base + high
+        else:
+            aw = bits(high-self.base)
+        if self.top > high:
+            raise Exception(("Memory region currently spans [0x{:x}, 0x{:x})." \
+                    + " Cannot grow to 0x{:x}.").format(self.base, self.top, high))
+        self._top = (1 << aw)
+        # Also need to extend the last entry in the "vacant" map
+        self.vacant[-1] = (self.vacant[-1][0], self._top)
+        return
+
+    @property
+    def hierarchy(self):
+        return self._hierarchy
+
+    @hierarchy.setter
+    def hierarchy(self, hier):
+        self._hierarchy = hier
+        # Propagate to lower regions
+        for entry, _type in self: # Iterator magic
+            ref = entry[2]
+            if ref is not None and isinstance(ref, MemoryRegion):
+                ref_hier = ref.hierarchy
+                if ref_hier is not None:
+                    ref_name = ref_hier[-1]
+                else:
+                    ref_name = ref.label
+                ref.hierarchy = (*hier, ref_name)
+        return
+
+    @property
+    def base(self):
+        return self._offset
+
+    @property
+    def top(self):
+        return self._offset + self._top
+
+    @base.setter
+    def base(self, value):
+        self._offset = value
+        return
+
+    @property
+    def width(self):
+        return bits(self._top-1)
+
+    @property
+    def name(self):
+        if self.hierarchy is None:
+            return self.label
+        else:
+            return ".".join([str(x) for x in self.hierarchy])
 
     def _vet_addr(self, addr, width=0):
         """Raise an exception if 'addr' is not aligned to 'width' or if an
@@ -80,9 +190,9 @@ class MemoryRegion():
             raise Exception("Address must be unsigned, not {}".format(addr))
         if addr % size:
             raise Exception("Address 0x{:x} is not aligned to width {}".format(addr, width))
-        if addr + size > self.range[1]:
+        if addr + size > self.top:
             raise Exception("Adding element of size {} rooted at address 0x{:x}".format(size, addr) \
-                    + "would exceed bounds of memory region [0x{:x}->0x{:x})".format(*self.range))
+                    + "would exceed bounds of memory region [0x{:x}->0x{:x})".format(self.base, self.top))
         return True
 
     def __iter__(self):
@@ -101,6 +211,7 @@ class MemoryRegion():
             mempty = True
         if self._iv < len(self.vacant):
             vac = self.vacant[self._iv]
+            vac = (vac[0], vac[1], None) # Same shape as 'mem'
         else:
             vempty = True
         if mempty and vempty:
@@ -118,8 +229,32 @@ class MemoryRegion():
             self._iv += 1
             return vac, self.TYPE_VACANT
 
+    def add_item(self, item, offset=None, keep_base=False):
+        """Raises an exception if 'item' has no 'width' property.
+        If self has a hierarchy, it gets propagated to the item."""
+        if item == self:
+            raise Exception("Attempting to add self to own memory map.")
+        ref = item
+        addr = None
+        width = int(getattr(item, "width"))
+        if keep_base and hasattr(item, "base"):
+            addr = int(getattr(item, "base"))
+        if offset is not None:
+            if addr is None:
+                addr = offset
+            else:
+                addr += offset
+        if self.hierarchy is not None:
+            if hasattr(item, 'hierarchy'):
+                item.hierarchy = (*self.hierarchy, item.label)
+        return self.add(width=width, ref=ref, addr=addr)
+
     def add(self, width=0, ref=None, addr=None):
-        return self._add(width, ref=ref, addr=addr, type=self.TYPE_MEM)
+        base = self._add(width, ref=ref, addr=addr, type=self.TYPE_MEM)
+        # If the item referenced by 'ref' has a 'base' attribute, update it
+        if ref is not None and hasattr(ref, "base"):
+            ref.base = base
+        return base
 
     def keepout(self, addr, width=0):
         return self._add(width, ref=None, addr=addr, type=self.TYPE_KEEPOUT)
@@ -134,14 +269,15 @@ class MemoryRegion():
         aligned to the width, if it would overlap an existing entry, or if it
         is outside the bounds of the region."""
         if addr is None:
-            base, end = self._push(width)
+            base, end = self._push(width, ref=ref)
         else:
-            base, end = self._insert(addr, width, type=type)
+            base, end = self._insert(addr, width, type=type, ref=ref)
+        # TODO DELETEME
         if (type == self.TYPE_MEM) and (base is not None) and (end is not None):
             self.refs.append((base, end, ref))
         return base
 
-    def _insert(self, addr, width=0, type=TYPE_MEM):
+    def _insert(self, addr, width=0, type=TYPE_MEM, ref=None):
         """Add a memory element of address width 'width' to the memory map
         starting at address 'addr'.  Raises an exception if such an entry would
         overlap with existing elements or the bounds of the region."""
@@ -151,7 +287,7 @@ class MemoryRegion():
         fit_elem = None
         # First find whether 'addr' is within an occupied or vacant region
         for entry, _type in self: # Iterator magic
-            e_base, e_end = entry
+            e_base, e_end, ref = entry
             if (base >= e_base) and (base < e_end):
                 # 'addr' is in this element
                 if _type != self.TYPE_VACANT:
@@ -163,7 +299,7 @@ class MemoryRegion():
                         addr, end, e_end))
                 else:
                     # It fits!
-                    fit_elem = entry
+                    fit_elem = entry[:2]
                     break
         if fit_elem is None:
             raise Exception("Could not fit [0x{:x}->0x{:x}) into memory map.".format(addr, end) \
@@ -194,7 +330,7 @@ class MemoryRegion():
                     del self.vacant[n]
             # Add the memory region
             if type == self.TYPE_MEM:
-                self.map.append((base, end))
+                self.map.append((base, end, ref))
             elif type == self.TYPE_KEEPOUT:
                 self._keepout.append((base, end))
             else:
@@ -202,7 +338,7 @@ class MemoryRegion():
             break
         return base, end
 
-    def _push(self, width=0):
+    def _push(self, width=0, ref=None):
         """Add a memory element of address width 'width' to the memory map
         at the first location which fits and is aligned to 'width'."""
         size = 1<<int(width)
@@ -233,7 +369,7 @@ class MemoryRegion():
                         # We occupied the exact size of this vacant region
                         del self.vacant[n]
                 # Add the memory region
-                self.map.append((aligned_start, mem_end))
+                self.map.append((aligned_start, mem_end, ref))
                 base = aligned_start
                 end = mem_end
                 break
@@ -248,20 +384,46 @@ class MemoryRegion():
         return
 
     def __str__(self):
+        return self.str()
+
+    def __repr__(self):
+        return self.__str__()
+
+    def str(self, indent=0):
         ss = ["|{:^19s}|{:^19s}|".format("Used", "Free"),
               "|{0}|{0}|".format("-"*19)]
         empty = " "*19
         for entry, _type in self: # Iterator magic
-            elemstr = " {:8x}-{:8x} ".format(*entry)
-            if _type == self.TYPE_MEM:
-                ordered = (elemstr, empty)
-            else: # _type == self.TYPE_VACANT
-                ordered = (empty, elemstr)
-            ss.append("|{}|{}|".format(*ordered))
-        return "\n".join(ss)
+            ref = entry[2]
+            if ref is not None and isinstance(ref, MemoryRegion):
+                dn = indent+self._delta_indent
+                ref._delta_indent = self._delta_indent
+                rs = ref.str(dn)
+                rslines = rs.split('\n')
+                # Replace the top line
+                title = "{}: {:x}-{:x}".format(ref.name, ref.base, ref.top)
+                rslines[0] = " "*(dn) + "|{:^39s}|".format(title)
+                # Add a delimiter to the top and bottom
+                delim_top = " "*(self._delta_indent)+ "|{}|".format("-"*39)
+                delim_bottom = " "*(indent) + delim_top
+                rslines.insert(0, delim_top)
+                rslines.append(delim_bottom)
+                rs = '\n'.join(rslines)
+                ss.append(rs)
+            else:
+                elemstr = " {:8x}-{:8x} ".format(self.base + entry[0], self.base + entry[1])
+                if _type == self.TYPE_MEM:
+                    ordered = (elemstr, empty)
+                else: # _type == self.TYPE_VACANT
+                    ordered = (empty, elemstr)
+                ss.append("|{}|{}|".format(*ordered))
+        sindent = "\n" + " "*indent
+        return " "*indent + sindent.join(ss)
 
-    def __repr__(self):
-        return self.__str__()
+    def print(self, indent=0):
+        self._delta_indent = indent
+        print(self.str())
+        return
 
     def high_addr(self):
         """Return the highest occupied address + 1."""
@@ -270,7 +432,7 @@ class MemoryRegion():
 
     def base_addr(self):
         """Return the base address of the memory region"""
-        return self.range[0]
+        return self._offset
 
 
 class Addrspace():
@@ -408,3 +570,41 @@ class Addrspace():
                     base = region_end
         return
 
+def test_MemoryRegion():
+    mr = MemoryRegion(hierarchy=("top",))
+    # Set some keep-out regions
+    mr.keepout(0x100, width=8)
+    widths = [0, 0, 0, 2, 2, 8, 4, 8, 0, 0, 0, 0, 1, 2]
+    for w in widths:
+        base = mr.add(w)
+        print("Adding {} to 0x{:x}".format(w, base))
+    mr.sort()
+    # Add a few to specific addresses
+    addr_widths = [(0x110, 4), (0x40, 4), (0x300, 8), (0x1001, 2)]
+    for addr, w in addr_widths:
+        try:
+            base = mr.add(w, addr=addr)
+            print("Adding {} to 0x{:x}".format(w, base))
+        except Exception as e:
+            print("EXCEPTION: " + str(e))
+    # Create a second memory map
+    submr = MemoryRegion(label="foo")
+    submr.add(0)
+    submr.add(0)
+    submr.add(4)
+    submr.add(4)
+    submr.add(6)
+    # Create a third memory map
+    subsubmr = MemoryRegion(label="bar")
+    subsubmr.add(10)
+    subsubmr.shrink() # Shrink now that we're done adding
+    # Nest the structure
+    submr.add_item(subsubmr)
+    submr.shrink() # Shrink now that we're done adding
+    mr.add_item(submr)
+    #print(mr)
+    mr.print(4)
+    return
+
+if __name__ == "__main__":
+    test_MemoryRegion()
