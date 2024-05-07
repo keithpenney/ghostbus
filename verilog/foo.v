@@ -11,11 +11,39 @@ module foo #(
   input we
 );
 
-reg [3:0] foo=0;                            // Non-host-accessible register
+reg [3:0] foo_reg=0;                            // Non-host-accessible register
 
-(* ghostbus_ha *) reg [7:0] bar=8'h42;      // Host-accessible register (will be auto-decoded)
+(* ghostbus_ha *) reg [31:0] foo_ha_reg=8'h42; // Host-accessible register (will be auto-decoded)
 
-(* ghostbus_ha, ghostbus_addr='h100 *)
-reg [7:0] baz [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
+(* ghostbus_addr='h40 *)
+reg [3:0] foo_ram [0:7];                    // Host-accessible RAM with pre-defined relative address (0x40)
+
+`ifdef GHOSTBUS_LIVE
+`GHOSTBUS_MAGIC
+`endif
+
+wire [DW-1:0] dout_baz, dout_bar; // Is this going to kill the whole concept dead?
+
+baz #(
+  .AW(AW),
+  .DW(DW)
+) baz_0 (
+  .clk(clk),
+  .addr(addr),
+  .din(din),
+  .dout(dout_baz),
+  .we(we)
+);
+
+bar #(
+  .AW(AW),
+  .DW(DW)
+) bar_0 (
+  .clk(clk),
+  .addr(addr),
+  .din(din),
+  .dout(dout_bar),
+  .we(we)
+);
 
 endmodule

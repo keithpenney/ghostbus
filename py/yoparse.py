@@ -14,6 +14,7 @@ class VParser():
 
     def __init__(self, filelist):
         self._filelist = filelist
+        print(f"filelist = {filelist}")
         self.valid = self.parse()
 
     def parse(self):

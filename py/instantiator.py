@@ -296,9 +296,9 @@ def doBrowse(argv):
     parser = argparse.ArgumentParser("Browse a JSON AST from a verilog codebase")
     parser.add_argument("-d", "--depth", default=4, help="Depth to browse from the partselect.")
     parser.add_argument("-s", "--select", default=None, help="Partselect string.")
-    parser.add_argument("files", default=[], action="append", help="Source files.")
+    parser.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
     args = parser.parse_args()
-    vp = VParser(args.files)
+    vp = VParser(args.files[0])
     if not vp.valid:
         return False
     print(vp.strToDepth(int(args.depth), args.select))
