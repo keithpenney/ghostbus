@@ -7,13 +7,13 @@ PY_DIR=$(THIS_DIR)/py
 
 PYTHON=python3
 
-TEST_SOURCES=$(VERILOG_DIR)/foo.v $(VERILOG_DIR)/bar.v $(VERILOG_DIR)/baz.v 
+TOP=foo
+TEST_SOURCES=$(VERILOG_DIR)/foo.v $(VERILOG_DIR)/bar.v $(VERILOG_DIR)/baz.v
 .PHONY: test
 test: $(TEST_SOURCES)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py $^
+	$(PYTHON) $(PY_DIR)/ghostbusser.py $^ -t $(TOP)
 
-MAGIC_SOURCES=$(VGHOST_DIR)/foo.v $(VGHOST_DIR)/bar.v $(VGHOST_DIR)/baz.v 
+MAGIC_SOURCES=$(VGHOST_DIR)/foo.v $(VGHOST_DIR)/bar.v $(VGHOST_DIR)/baz.v $(VGHOST_DIR)/bif.v
 .PHONY: magic
 magic: $(MAGIC_SOURCES)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py $^
-
+	$(PYTHON) $(PY_DIR)/ghostbusser.py $^ -t $(TOP)

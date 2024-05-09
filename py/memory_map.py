@@ -19,11 +19,11 @@ def bits(v):
 
 
 class Register():
-    def __init__(self, name=None, dw=1, aw=0, base=None):
+    def __init__(self, name=None, dw=1, base=None):
         self._name = name
-        self._size = 1 << int(aw)
+        self._size = 1
         self._data_width = int(dw)
-        self._addr_width = int(aw)
+        self._addr_width = 0
         self._base_addr = base
 
     @property
@@ -47,6 +47,17 @@ class Register():
     @property
     def base(self):
         return self._base_addr
+
+    @base.setter
+    def base(self, value):
+        self._base_addr = value
+        return
+
+class Memory(Register):
+    def __init__(self, name=None, dw=1, aw=0, base=None):
+        super().__init__(name=name, dw=dw, base=base)
+        self._size = 1 << int(aw)
+        self._addr_width = int(aw)
 
 class MemoryRegion():
     """A memory allocator.
@@ -104,6 +115,15 @@ class MemoryRegion():
             self.label = label
         self._delta_indent = 0 # see self.print()
 
+    def copy(self):
+        addr_range = (self._offset, self._top)
+        mr = MemoryRegion(addr_range=addr_range, label=self.label, hierarchy=self._hierarchy)
+        mr.map = self.map.copy()
+        mr.vacant = self.vacant.copy()
+        mr._keepout = self._keepout.copy()
+        mr.refs = self.refs.copy()
+        return mr
+
     def shrink(self):
         """Reduce address range to the minimum aligned range containing
         the occupied portions of the map.  Note that it only scales the
@@ -112,10 +132,14 @@ class MemoryRegion():
         to the memory region after shrinking.  It should probably only
         be called after you're sure you're done adding entries."""
         hi_occupied = self.high_addr()
-        min_aw = bits(hi_occupied)
+        min_aw = bits(hi_occupied-1)
         self._top = (1 << min_aw)
         # Also need to truncate the last entry in the "vacant" map
-        self.vacant[-1] = (self.vacant[-1][0], self._top)
+        vacant = (self.vacant[-1][0], self._top)
+        if vacant[1] == vacant[0]:
+            self.vacant.pop()
+        else:
+            self.vacant[-1] = (self.vacant[-1][0], self._top)
         return
 
     def grow(self, high, absolute=False):
@@ -157,6 +181,12 @@ class MemoryRegion():
         return
 
     @property
+    def size(self):
+        if len(self.map) == 0:
+            return 0
+        return self.high_addr()
+
+    @property
     def base(self):
         return self._offset
 
@@ -167,6 +197,10 @@ class MemoryRegion():
     @base.setter
     def base(self, value):
         self._offset = value
+        for n in range(len(self.map)):
+            start, end, ref = self.map[n]
+            if isinstance(ref, MemoryRegion):
+                ref.base = value + start
         return
 
     @property
@@ -234,7 +268,6 @@ class MemoryRegion():
         If self has a hierarchy, it gets propagated to the item."""
         if item == self:
             raise Exception("Attempting to add self to own memory map.")
-        ref = item
         addr = None
         width = int(getattr(item, "width"))
         if keep_base and hasattr(item, "base"):
@@ -247,7 +280,7 @@ class MemoryRegion():
         if self.hierarchy is not None:
             if hasattr(item, 'hierarchy'):
                 item.hierarchy = (*self.hierarchy, item.label)
-        return self.add(width=width, ref=ref, addr=addr)
+        return self.add(width=width, ref=item, addr=addr)
 
     def add(self, width=0, ref=None, addr=None):
         base = self._add(width, ref=ref, addr=addr, type=self.TYPE_MEM)

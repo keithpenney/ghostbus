@@ -12,9 +12,10 @@ class VParser():
     LINETYPE_PORT  = 0
     LINETYPE_MACRO = 1
 
-    def __init__(self, filelist):
+    def __init__(self, filelist, top=None):
         self._filelist = filelist
         print(f"filelist = {filelist}")
+        self._top = top
         self.valid = self.parse()
 
     def parse(self):
@@ -26,7 +27,11 @@ class VParser():
         #ycmd = f'yosys -q -p "proc -noopt read_verilog {self._filename}" -p write_json'
         #ycmd = f'yosys -q -p "read_verilog {self._filename}" -p write_json'
         filestr = " ".join(self._filelist)
-        ycmd = f'yosys -q -p "read_verilog {filestr}\nproc" -p write_json'
+        if self._top is not None:
+            topstr = f"\nhierarchy -top {self._top}"
+        else:
+            topstr = ""
+        ycmd = f'yosys -q -p "read_verilog {filestr}{topstr}\nproc" -p write_json'
         try:
             jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
         except subprocess.CalledProcessError as e:

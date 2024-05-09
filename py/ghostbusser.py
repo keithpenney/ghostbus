@@ -3,9 +3,224 @@
 # GhostBus top level
 
 import math
+import re
 
 from yoparse import VParser
-from memory_map import MemoryRegion, Register, Addrspace
+from memory_map import MemoryRegion, Register, Memory
+
+# When Yosys generates a JSON, it follows this structure:
+#   modules: {
+#     mod_inst : {},
+#   }
+# where 'mod_inst' is a special identifier for not just every module present in the
+# design, but every unique instance (uniqueness determined by module type and
+# parameter values).
+# For any instantiated parameterized modules (when hierarchy set), their names are
+# listed as "$paramod$HASH\mod_name" where 'HASH' is a 40-character hex string
+# which is probably just randomly generated as a hashmap key.
+
+# I'll need to keep these unique identifiers internally, but replace the hash stuff
+# with the hierarchy of the particular instance (which is also unique) before
+# generating the memory map.
+
+class ModuleInstance():
+    def __init__(self, module_type, inst_name, instances=()):
+        self.type = module_type
+        self.name = inst_name
+        self.instances = instances
+
+    def __str__(self):
+        instances = strDict(self.instances)
+        return f"ModuleInstance({self.type}, {self.name})"
+
+    def __repr__(self):
+        return self.__str__()
+
+    def items(self):
+        return self.instances.items()
+
+    def __len__(self):
+        return self.instances.__len__()
+
+    def __setitem__(self, key, value):
+        self.instances[key] = value
+        return
+
+class WalkDict():
+    def __init__(self, dd, parent=None, key=None, verbose=False):
+        self._verbose = verbose
+        self._dd = dd
+        self._key = key
+        self._parent = parent
+        # Transform whole structure into a WalkDict
+        for key, val in self._dd.items():
+            if key is None:
+                print("WARNING! key is None! val = {val}")
+            if hasattr(val, "items"):
+                self._dd[key] = self.__class__(val, parent=self, key=key)
+        self._mark = False
+        return
+
+    def _print(self, *args, **kwargs):
+        if self._verbose:
+            print(*args, **kwargs)
+        return
+
+    def __len__(self):
+        return self._dd.__len__()
+
+    def get(self, item, default=None):
+        return self._dd.get(item, default=default)
+
+    def __getitem__(self, item):
+        return self._dd.__getitem__(item)
+
+    def __setitem__(self, item, value):
+        return self._dd.__setitem__(item, value)
+
+    def items(self):
+        return self._dd.items()
+
+    def reset_node(self):
+        """Reset just this node"""
+        self._mark = False
+        return
+
+    def reset(self):
+        """Reset this branch"""
+        self._mark = False
+        for key, val in self._dd.items():
+            if hasattr(val, "reset"):
+                val.reset()
+        return
+
+    def mark(self):
+        self._mark = True
+        return
+
+    def marked(self):
+        return self._mark
+
+    def walk(self):
+        self.reset()
+        rval = self._get_leaf()
+        self._print(f"rval = {rval}")
+        return iter(rval)
+
+    def __iter__(self):
+        return self
+
+    def _get_leaf(self):
+        if len(self._dd) == 0:
+            if not self._mark:
+                self._print("leaf returning self")
+                return self
+            else:
+                self._print("leaf pass to parent")
+                if self._parent is None:
+                    self._print("leaf is done?")
+                    return None
+                return self._parent._get_leaf()
+        unmarked_child = None
+        for key, val in self._dd.items():
+            if hasattr(val, "marked"):
+                if not val.marked():
+                    unmarked_child = val
+                    break
+        if unmarked_child is not None:
+            self._print("parent pass to unmarked child")
+            return unmarked_child._get_leaf()
+        else:
+            if not self._mark:
+                self._print("returning self")
+                return self
+            elif self._parent is not None:
+                self._print("pass to parent")
+                return self._parent._get_leaf()
+        self._print("done")
+        return None
+
+    def __next__(self):
+        rval = self._get_leaf()
+        if rval is None:
+            raise StopIteration
+        if hasattr(rval, "mark"):
+            rval.mark()
+        return (rval._key, rval)
+
+
+class MemoryTree(WalkDict):
+    def __init__(self, dd, parent=None, key=None, verbose=False, hierarchy=None, inst_hash=None):
+        #super().__init__(dd, parent=parent, key=key, verbose=verbose)
+        self._verbose = verbose
+        self._dd = dd
+        self._key = key
+        self._parent = parent
+        # Transform whole structure into a MemoryTree
+        for key, inst_dict in self._dd.items():
+            #print(f"key, inst_dict = {key}, {inst_dict}")
+            print(f"key = {key}")
+            inst_name = key[0]
+            inst_hash = key[1]
+            instances = inst_dict
+            self._dd[key] = self.__class__(instances, parent=self, key=key, inst_hash=inst_hash)
+            #if hasattr(val, "items"):
+            #    self._dd[key] = self.__class__(val, parent=self, key=key)
+        self._mark = False
+        self._mr = MemoryRegion(hierarchy=hierarchy)
+        self._label = None
+        if hierarchy is not None:
+            self._label = hierarchy[0]
+
+    def __str__(self):
+        if self._mr._hierarchy is not None:
+            label = self._mr._hierarchy[-1]
+        elif self._mr.label is not None:
+            label = self._mr.label
+        else:
+            label = "Unknown"
+        return "MemoryTree({})".format(label)
+
+    def __repr__(self):
+        return self.__str__()
+
+    @property
+    def label(self):
+        if self._label is None:
+            return self._mr.label
+        return self._label
+
+    def resolve(self):
+        for key, node in self.walk():
+            if node is None:
+                print(f"WARNING! node is None! key = {key}")
+            if hasattr(node, "memsize"):
+                if node.memsize > 0:
+                    node.memory.shrink()
+                    if node._parent is not None:
+                        print("Adding {} to {}".format(node.label, node._parent.label))
+                        node._parent.memory.add_item(node.memory)
+                else:
+                    print(f"Node {node.label} has memsize {node.memsize}")
+            if hasattr(node, "mark"):
+                node.mark()
+        return self._mr
+
+    @property
+    def memory(self):
+        return self._mr
+
+    @memory.setter
+    def memory(self, value):
+        if not isinstance(value, MemoryRegion):
+            raise Exception("MemoryTree can only accept MemoryRegon instances as memory")
+        self._mr = value
+        return
+
+    @property
+    def memsize(self):
+        return self._mr.size
+
 
 def print_dict(dd, depth=-1):
     print(strDict(dd, depth=depth))
@@ -30,23 +245,52 @@ def strDict(_dict, depth=-1):
     return '\n'.join(l)
 
 
+def ismodule(s):
+    restr = "^\$(\w+)\$"
+    _match = re.search(restr, s)
+    if _match:
+        yotype = _match.groups()[0]
+        if yotype == "paramod":
+            # all other yosys magic should be ignored
+            return True
+    else:
+        # If it gets here, it's probably a module
+        return True
+    return False
+
+
+def get_modname(s):
+    restr = r"^\$(\w+)\$([0-9a-fA-F]+)\\(\w+)"
+    _match = re.search(restr, s)
+    if _match:
+        modname = _match.groups()[2]
+        return modname
+    return s
+
+
 class GhostBusser(VParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def get_map(self):
-        ghostmods = []
+        ghostmods = {}
         modtree = {}
+        top_mod = None
         top_dict = self._dict["modules"]
         for module, mod_dict in top_dict.items():
+            mod_hash = module
             if not hasattr(mod_dict, "items"):
                 continue
+            for attr in mod_dict["attributes"]:
+                if attr == "top":
+                    top_mod = mod_hash
             # Check for instantiated modules
-            modtree[module] = {}
+            modtree[mod_hash] = {}
             cells = mod_dict.get("cells")
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
-                    modtree[module][inst_name] = inst_dict["type"]
+                    if ismodule(inst_name):
+                        modtree[mod_hash][inst_name] = inst_dict["type"]
             mr = None
             # Check for regs
             netnames = mod_dict.get("netnames")
@@ -63,11 +307,12 @@ class GhostBusser(VParser):
                                 addr = int(val, 2)
                     if hit:
                         dw = len(net_dict['bits'])
-                        aw = 0
-                        reg = Register(name=netname, dw=dw, aw=aw)
+                        reg = Register(name=netname, dw=dw)
                         if mr is None:
-                            mr = MemoryRegion()
-                        mr.add(width=aw, ref=reg, addr=addr)
+                            label = get_modname(mod_hash)
+                            mr = MemoryRegion(label=label, hierarchy=(label,))
+                            print("created mr label {}".format(mr.label))
+                        mr.add(width=0, ref=reg, addr=addr)
             # Check for RAMs
             memories = mod_dict.get("memories")
             if memories is not None:
@@ -85,32 +330,113 @@ class GhostBusser(VParser):
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
-                        reg = Register(name=netname, dw=dw, aw=aw)
+                        reg = Memory(name=netname, dw=dw, aw=aw)
                         if mr is None:
-                            mr = MemoryRegion()
+                            label = get_modname(mod_hash)
+                            mr = MemoryRegion(label=label, hierarchy=(label,))
+                            print("created mr label {}".format(mr.label))
                         mr.add(width=aw, ref=reg, addr=addr)
             if mr is not None:
-                ghostmods.append(mr)
+                ghostmods[mod_hash] = mr
+        self._top = top_mod
         print_dict(modtree)
-        modtree = build_modtree(modtree)
-        #print_dict(modtree)
+        modtree = self.build_modtree(modtree)
+        print("===============================================")
+        print_dict(modtree)
+        memtree = self.build_memory_tree(modtree, ghostmods)
+        print("***********************************************")
+        mr = memtree.resolve()
+        mr.print(4)
         return ghostmods
 
-def build_modtree(dd):
-    # I don't know how to do this...
-    return dd
+    def build_modtree(self, dd):
+        top = self._top
+        if top is None:
+            raise Exception("I don't know how to do this without top specified")
+        modtree = {}
+        for module, mod_dict in dd.items():
+            if module == top:
+                modtree[module] = {}
+        if len(modtree) == 0:
+            raise Exception("Could not find top: {}".format(top))
+        for module, instances_dict in dd.items():
+            new_mod_dict = {}
+            for inst_name, inst_key in instances_dict.items():
+                #new_mod_dict[inst_name] = ModuleInstance(inst_key, inst_name, dd[inst_key])
+                dict_key = (inst_name, inst_key)
+                new_mod_dict[dict_key] = dd[inst_key]
+            dd[module] = new_mod_dict
+        return ModuleInstance(top, top, dd[top])
+
+    def build_memory_tree(self, modtree, ghostmods):
+        # First build an empty dict of MemoryRegions
+        # Start from leaf,
+        print("++++++++++++++++++++++++++++++++++++++++++++")
+        modtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
+        print("////////////////////////////////////////////")
+        for key, val in modtree.walk():
+            print("{}: {}".format(key, val))
+            if key is None:
+                break
+            inst_label, inst_hash = key
+            mr = ghostmods.get(inst_hash, None)
+            hier = (inst_label,)
+            if mr is not None and hasattr(val, "memory"):
+                mrcopy = mr.copy()
+                mrcopy.label = inst_label
+                mrcopy.hierarchy = hier
+                val.memory = mrcopy
+            else:
+                print(f"no {key} in ghostmods")
+                val.memory = MemoryRegion(label=inst_label, hierarchy=hier)
+        # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
+        return modtree
+
+def testWalkDict():
+    dd = {
+        'F': {
+            'A': {
+            },
+            'D': {
+                'C': {
+                    'B': {
+                    }
+                }
+            },
+            'E': {
+            },
+        },
+        'K': {
+            'I': {
+                'G': {
+                },
+                'H': {
+                },
+            },
+            'J': {
+            }
+        }
+    }
+    top = WalkDict(dd, key="top")
+    for key, val in top.walk():
+        print("{}".format(key), end="")
+        counter += 1
+    print()
+    return
 
 def test():
     import argparse
     parser = argparse.ArgumentParser("Ghostbus Verilog router")
     parser.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
+    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
     args = parser.parse_args()
-    vp = GhostBusser(args.files[0]) # Why does this end up as a double-wrapped list?
+    vp = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = vp.get_map()
     print(f"len(mods) = {len(mods)}")
-    for mod in mods:
-        print(mod)
+    #for mod in mods:
+    #    print(mod)
     return True
 
 if __name__ == "__main__":
     test()
+    #testWalkDict()

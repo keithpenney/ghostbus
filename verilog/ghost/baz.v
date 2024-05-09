@@ -7,10 +7,6 @@ module baz #(
   parameter DW = 32
 ) (
   input clk,
-  input [AW-1:0] addr,
-  input [DW-1:0] din,
-  output [DW-1:0] dout,
-  input we
 );
 
 `ifdef GHOSTBUS_LIVE
@@ -20,14 +16,13 @@ module baz #(
 wire [DW-1:0] dout_bar0, dout_bar1; // Is this going to kill the whole concept dead?
 
 bar #(
-  .AW(AW),
+  .AW(AW-1),
   .DW(DW)
 ) bar_0 (
   .clk(clk),
-  .addr(addr),
-  .din(din),
-  .dout(dout_bar0),
-  .we(we)
+`ifdef GHOSTBUS_LIVE
+`GHOSTBUS_bar_0
+`endif
 );
 
 bar #(
@@ -35,10 +30,9 @@ bar #(
   .DW(DW)
 ) bar_1 (
   .clk(clk),
-  .addr(addr),
-  .din(din),
-  .dout(dout_bar1),
-  .we(we)
+`ifdef GHOSTBUS_LIVE
+`GHOSTBUS_bar_1
+`endif
 );
 
 endmodule

@@ -20,4 +20,18 @@ reg [7:0] bar_ram [0:63];                       // Host-accessible RAM with pre-
 `GHOSTBUS_MAGIC
 `endif
 
+bif #(
+  .AW(12),
+  .DW(8)
+) bif_0 (
+  .clk(clk)
+);
+
+bif #(
+  .AW(1),
+  .DW(4)
+) bif_1 (
+  .clk(clk)
+);
+
 endmodule
