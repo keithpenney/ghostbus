@@ -15,7 +15,7 @@ reg [3:0] foo_reg=0;                            // Non-host-accessible register
 reg [3:0] foo_ram [0:7];                        // Host-accessible RAM with pre-defined relative address (0x40)
 
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_MAGIC
+`GHOSTBUS_foo
 `endif
 
 baz #(
@@ -25,7 +25,7 @@ baz #(
   .clk(clk),
   .demo_sig(foo_reg[0])
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_baz_0
+`GHOSTBUS_foo_baz_0
 `endif
 );
 
@@ -36,7 +36,7 @@ bar #(
   .clk(clk),
   .demo_sig(foo_reg[1])
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_bar_0
+`GHOSTBUS_foo_bar_0
 `endif
 );
 

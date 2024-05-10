@@ -10,7 +10,7 @@ module baz #(
 );
 
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_MAGIC
+`GHOSTBUS_baz
 `endif
 
 wire [DW-1:0] dout_bar0, dout_bar1; // Is this going to kill the whole concept dead?
@@ -21,7 +21,7 @@ bar #(
 ) bar_0 (
   .clk(clk),
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_bar_0
+`GHOSTBUS_baz_bar_0
 `endif
 );
 
@@ -31,7 +31,7 @@ bar #(
 ) bar_1 (
   .clk(clk),
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_bar_1
+`GHOSTBUS_baz_bar_1
 `endif
 );
 

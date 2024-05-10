@@ -17,7 +17,7 @@ reg [3:0] bar_reg=1;                            // Non-host-accessible register
 reg [7:0] bar_ram [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
 
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_MAGIC
+`GHOSTBUS_bar
 `endif
 
 bif #(
