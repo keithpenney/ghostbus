@@ -469,6 +469,11 @@ class MemoryRegion():
         """Return the base address of the memory region"""
         return self._offset
 
+    def get_entries(self):
+        """Return a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
+        (e.g. a Python object reference, a string, None, etc)."""
+        return self.map.copy()
+
 
 class Addrspace():
     @staticmethod

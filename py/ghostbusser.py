@@ -159,7 +159,6 @@ class MemoryTree(WalkDict):
         # Transform whole structure into a MemoryTree
         for key, inst_dict in self._dd.items():
             #print(f"key, inst_dict = {key}, {inst_dict}")
-            print(f"key = {key}")
             inst_name = key[0]
             inst_hash = key[1]
             instances = inst_dict
@@ -198,7 +197,7 @@ class MemoryTree(WalkDict):
                 if node.memsize > 0:
                     node.memory.shrink()
                     if node._parent is not None:
-                        print("Adding {} to {}".format(node.label, node._parent.label))
+                        #print("Adding {} to {}".format(node.label, node._parent.label))
                         node._parent.memory.add_item(node.memory)
                 else:
                     print(f"Node {node.label} has memsize {node.memsize}")
@@ -328,25 +327,25 @@ class GhostBusser(VParser):
                             if attr.lower() == "ghostbus_addr":
                                 addr = int(val, 2)
                     if hit:
-                        source = net_dict['attributes']['src']
+                        source = mem_dict['attributes']['src']
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
-                        reg = MetaMemory(name=netname, dw=dw, aw=aw, meta=source)
+                        mem = MetaMemory(name=memname, dw=dw, aw=aw, meta=source)
                         if mr is None:
                             label = get_modname(mod_hash)
                             mr = MemoryRegion(label=label, hierarchy=(label,))
                             print("created mr label {}".format(mr.label))
-                        mr.add(width=aw, ref=reg, addr=addr)
+                        mr.add(width=aw, ref=mem, addr=addr)
             if mr is not None:
                 ghostmods[mod_hash] = mr
         self._top = top_mod
-        print_dict(modtree)
+        #print_dict(modtree)
         modtree = self.build_modtree(modtree)
-        print("===============================================")
-        print_dict(modtree)
+        #print("===============================================")
+        #print_dict(modtree)
         memtree = self.build_memory_tree(modtree, ghostmods)
-        print("***********************************************")
+        #print("***********************************************")
         mr = memtree.resolve()
         mr.print(4)
         return ghostmods
@@ -373,11 +372,11 @@ class GhostBusser(VParser):
     def build_memory_tree(self, modtree, ghostmods):
         # First build an empty dict of MemoryRegions
         # Start from leaf,
-        print("++++++++++++++++++++++++++++++++++++++++++++")
+        #print("++++++++++++++++++++++++++++++++++++++++++++")
         modtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
-        print("////////////////////////////////////////////")
+        #print("////////////////////////////////////////////")
         for key, val in modtree.walk():
-            print("{}: {}".format(key, val))
+            #print("{}: {}".format(key, val))
             if key is None:
                 break
             inst_label, inst_hash = key
@@ -401,6 +400,9 @@ class MetaRegister(Register):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rangeStr = None
+        self._depthstr = None
+        self.range = (None, None)
+        self.depth = ('0', '0')
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -410,8 +412,11 @@ class MetaRegister(Register):
         snippet, offset = self._getSnippet(self.meta)
         if snippet is not None:
             self._rangeStr = self._findRangeStr(snippet, offset)
-        print(f"MetaRegister self.name = {self.name}")
-        print(f"self._rangeStr = {self._rangeStr}")
+            split = self._rangeStr.split(':')
+            if len(split) > 1:
+                self.range = (split[0], split[1])
+            else:
+                return False
         return True
 
     @classmethod
@@ -478,6 +483,8 @@ class MetaMemory(Memory):
         super().__init__(*args, **kwargs)
         self._rangeStr = None
         self._depthStr = None
+        self.range = (None, None)
+        self.depth = (None, None)
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -485,13 +492,21 @@ class MetaMemory(Memory):
         if self.meta is None:
             return False
         snippet, offset = self._getSnippet(self.meta)
+        _pass = True
         if snippet is not None:
             self._rangeStr = self._findRangeStr(snippet, offset)
+            split = self._rangeStr.split(':')
+            if len(split) > 1:
+                self.range = (split[0], split[1])
+            else:
+                _pass = False
             self._depthStr = self._findDepthStr(snippet, offset)
-        print(f"MetaMemory self.name = {self.name}")
-        print(f"self._rangeStr = {self._rangeStr}")
-        print(f"self._depthStr = {self._depthStr}")
-        return True
+            split = self._depthStr.split(':')
+            if len(split) > 1:
+                self.depth = (split[0], split[1])
+            else:
+                _pass = False
+        return _pass
 
     @classmethod
     def _getSnippet(cls, yosrc):
@@ -518,7 +533,7 @@ class MetaMemory(Memory):
             elif char == ']':
                 grouplevel -= 1
                 if grouplevel == 0:
-                    depthstr = snippet[startix:n]
+                    depthstr = snippet[startix+1:n]
                     break
             elif char == ';':
                 break
@@ -565,15 +580,13 @@ def test():
     vp = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = vp.get_map()
     #print(f"len(mods) = {len(mods)}")
-    for key, mod in mods.items():
-        #print(mod)
-        #print("key = {}; type(mod) = {}".format(key, type(mod)))
-        for reg, _type in mod:
-            if _type == MemoryRegion.TYPE_MEM:
-                start, stop, reg = reg
-                #print(f"reg = {reg}; type(reg) = {type(reg)}")
-                if hasattr(reg, "_readRangeDepth"):
-                    print("_readRangeDepth() = {}".format(reg._readRangeDepth()))
+    for mod_hash, memoryregion in mods.items():
+        #print(type(memoryregion))
+        #print("mod_hash = {}; type(memoryregion) = {}".format(mod_hash, type(memoryregion)))
+        for start, stop, reg in memoryregion.get_entries():
+            if hasattr(reg, "_readRangeDepth"):
+                reg._readRangeDepth()
+                print(f"reg.range = {reg.range}; reg.depth = {reg.depth}")
     return True
 
 if __name__ == "__main__":

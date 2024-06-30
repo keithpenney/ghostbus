@@ -1,0 +1,58 @@
+GhostBus Parser Needs
+
+I need more from a parser than I'm currently able to get from the open-source tools that are in our
+standard development environment (verilator, yosys, iverilog).
+
+Goal: Get the unresolved range spec for ghostbus ha_regs where they are declared
+  The range could be specified in many ways. E.g.:
+    reg foo[3:0];
+    reg foo[aw-1:0];
+    reg foo[(2*aw)-dw-1:0];
+    reg foo[$clog2(DW-AW)-1:0];
+  Identical problem for the range of RAM depths.
+  With yosys, these are all resolved to integers before they are made available in any external format.
+  I need access to the token stream.
+  Verible can do this, but it's tedious (also that tool is on version 0.0)
+  It's probably more of a headache to introduce a new tool than a new python script.
+  Even if I wrote a flex lexer, it'd still be a binary which needs to be compiled to run the tool - painful.
+  Unfortunately, my efforts at generic Verilog parsing with pure Python have capsized on the rocky shores of
+  complexity again.
+  Maybe a more bespoke parsing?  I could use yosys to identify the registers as I currently do, then use the
+  file name & line number from the yosys tree to snatch the raw Verilog in string form and just parse the
+  portions I need.  This is probably the path of least resistance.
+
+    Interestingly, it looks like what yosys records is:
+      net_dict["attributes"]["src"] = FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
+      Where CHARSTART and CHAREND are the first and last+1 character of the identifier (the name) of a register,
+      not the entire declaration.
+      To be generic, I would need to walk the token stream *backward* from LINESTART.CHARSTART to get the range
+      of width (and *forward* to get the range of RAM depth).
+
+    Ok, well I just added a trivial attribute "meta" to the "Register" class which can be assigned via __init__
+    kwarg of the same name.  Now I at least have a way to access that Yosys source information after parsing.
+
+    I actually think I might be able to get away without understanding the contents of the rangespec, but just
+    copying the strings as they exist.
+      So to get the range, the operation is:
+        1. Open the FILEPATH
+        2. Seek to LINESTART.CHARSTART
+        3. Consume chars backward (odd, but probably doable). While 1:
+          3a. If ']', grouplevel++
+          3b. If '[', if (grouplevel-- == 0), break
+          3c. If keyword 'reg' is discovered, width = 1, rangestr = '0:0', break
+          3d. If grouplevel > 0: rangestr.append(char)
+
+      To get the depth, the operation is:
+        1. Open the FILEPATH
+        2. Seek to LINESTART.CHAREND
+        3. Consume chars forward. While 1:
+          3a. If ']', grouplevel++
+          3b. If '[', if (grouplevel-- == 0), break
+          3c. If semicolon, depth = 1, break
+          3d. If grouplevel > 0: depthstr.append(char)
+
+Ok, this seems like it's working fairly well.  Now, I need to figure out how to write the decoding logic
+in the generic way necessary to make this whole scheme work.
+  I should start by hand-writing the decoding logic and vetting it.  Then try to auto-generate the same
+  thing at first.  Then see how resilient it is to edits/changes/extensions.
+
