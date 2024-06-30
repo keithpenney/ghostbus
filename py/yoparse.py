@@ -5,6 +5,16 @@
 import os
 import subprocess
 import json
+import re
+
+def srcParse(s):
+    # FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
+    reYoSrc = "\A([^:]+):(\d+).(\d+)-(\d+).(\d+)"
+    _match = re.match(reYoSrc, s)
+    if not _match:
+        return None
+    filepath, linestart, charstart, lineend, charend = _match.groups()
+    return (filepath, int(linestart), int(charstart), int(lineend), int(charend))
 
 class VParser():
     # Helper values

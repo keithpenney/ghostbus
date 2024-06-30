@@ -67,6 +67,44 @@ endmodule
 
 ## Design considerations
 
+### Limitations of the Verilog Preprocessor
+Mayday. The verilog preprocessor is trying to sink this concept.  The notion that all macros are global in
+scope is one of the core issues.  I think I have a workaround, but it will require careful code generation
+and unfortunately a bit of an implementation gotcha.
+
+__hand-written__
+```verilog
+module foo #(
+  parameter AW
+) (
+  input d
+);
+
+`ifdef GHOSTBUS_LIVE
+`GHOSTBUS_foo
+// Could also just use `include "_ghostbus_foo.vh" instead
+`endif
+
+endmodule
+```
+
+__auto-generated__
+```verilog
+/* file "_gb_auto.vh" */
+`define GHOSTBUS_foo `include "_ghostbus_foo.vh"
+```
+
+```verilog
+/* file "_ghostbus_foo.vh" */
+// bus decoding logic implemented here
+```
+
+The other major issue is that the module-local memory map can be parameterized (i.e. depend on the value
+of parameters) and thus the decoding for each instance could differ.  Thus, if we had only one `_ghostbus_foo.vh`
+file and two different instances off `module foo` with different parameters, the bus decoding could be wrong
+in one or both instances.  So instead of resolving the parameter to a constant, we'll need to preseve parameter
+names in the decoding (much trickier, especially since the Yosys abstract model resolves parameters already).
+
 ### Magic ports
 I can't figure out a way to avoid magic ports in Verilog.  That was a big goal here, but I can't figure out
 a way to generically wire up a bus without pre-defining the memory map within the constraints of the language

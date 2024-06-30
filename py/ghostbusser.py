@@ -5,7 +5,7 @@
 import math
 import re
 
-from yoparse import VParser
+from yoparse import VParser, srcParse
 from memory_map import MemoryRegion, Register, Memory
 
 # When Yosys generates a JSON, it follows this structure:
@@ -306,8 +306,9 @@ class GhostBusser(VParser):
                             if attr.lower() == "ghostbus_addr":
                                 addr = int(val, 2)
                     if hit:
+                        source = net_dict['attributes']['src']
                         dw = len(net_dict['bits'])
-                        reg = Register(name=netname, dw=dw)
+                        reg = MetaRegister(name=netname, dw=dw, meta=source)
                         if mr is None:
                             label = get_modname(mod_hash)
                             mr = MemoryRegion(label=label, hierarchy=(label,))
@@ -327,10 +328,11 @@ class GhostBusser(VParser):
                             if attr.lower() == "ghostbus_addr":
                                 addr = int(val, 2)
                     if hit:
+                        source = net_dict['attributes']['src']
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
-                        reg = Memory(name=netname, dw=dw, aw=aw)
+                        reg = MetaMemory(name=netname, dw=dw, aw=aw, meta=source)
                         if mr is None:
                             label = get_modname(mod_hash)
                             mr = MemoryRegion(label=label, hierarchy=(label,))
@@ -392,6 +394,136 @@ class GhostBusser(VParser):
         # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
         return modtree
 
+class MetaRegister(Register):
+    """This class expands on the Register class by including not just its
+    resolved aw/dw, but also the unresolved strings used to declare aw/dw
+    in the source code."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rangeStr = None
+
+    def _readRangeDepth(self):
+        if self._rangeStr is not None:
+            return True
+        if self.meta is None:
+            return False
+        snippet, offset = self._getSnippet(self.meta)
+        if snippet is not None:
+            self._rangeStr = self._findRangeStr(snippet, offset)
+        print(f"MetaRegister self.name = {self.name}")
+        print(f"self._rangeStr = {self._rangeStr}")
+        return True
+
+    @classmethod
+    def _getSnippet(cls, yosrc):
+        groups = srcParse(yosrc)
+        if groups is None:
+            return False
+        filepath, linestart, charstart, lineend, charend = groups
+        snippet = None
+        offset = 0
+        try:
+            line = ""
+            with open(filepath, 'r') as fd:
+                for n in range(linestart):
+                    line = fd.readline()
+                # Rewind up to 512 chars before start of register name
+                tell = fd.tell()
+                # Set tell to the start of the identifier
+                tell -= 1+len(line)-charstart
+                fd.seek(max(0, tell-512))
+                # Read up to 1024 chars
+                snippet = fd.read(1024)
+                offset = tell
+                #namestr = snippet[offset:offset+charend-charstart]
+                #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
+                #    namestr, offset, len(snippet), rangeStr))
+        except OSError:
+            print("Cannot open file {}".format(filepath))
+            return None, None
+        return snippet, offset
+
+    @classmethod
+    def _findRangeStr(cls, snippet, offset):
+        """Start at char offset. Read backwards. Look for ']' to open a range.
+        If we find the keyword 'reg' before the ']', we'll break and decide the
+        reg is 1-bit."""
+        grouplevel = 0
+        endix = None
+        rangestr = None
+        for n in range(offset, -1, -1):
+            char = snippet[n]
+            slc = snippet[n:n+5].replace('\n', ' ').replace('.', ' ') # Room for whitespace+'r'+'e'+'g'+whitespace
+            if slc == " reg ":
+                rangestr = "0:0"
+                break
+            # Handle the oddball case where 'snippet' starts with the keyword 'reg'
+            elif (n == 0) and (slc[:4] == "reg "):
+                rangestr = "0:0"
+                break
+            elif char == ']': # walking backwards
+                if grouplevel == 0:
+                    endix = n
+                grouplevel += 1
+            elif char == '[':
+                grouplevel -= 1
+                if grouplevel == 0:
+                    rangestr = snippet[n+1:endix]
+                    break
+        return rangestr
+
+# TODO - Combine this class with MetaRegister
+class MetaMemory(Memory):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rangeStr = None
+        self._depthStr = None
+
+    def _readRangeDepth(self):
+        if self._rangeStr is not None:
+            return True
+        if self.meta is None:
+            return False
+        snippet, offset = self._getSnippet(self.meta)
+        if snippet is not None:
+            self._rangeStr = self._findRangeStr(snippet, offset)
+            self._depthStr = self._findDepthStr(snippet, offset)
+        print(f"MetaMemory self.name = {self.name}")
+        print(f"self._rangeStr = {self._rangeStr}")
+        print(f"self._depthStr = {self._depthStr}")
+        return True
+
+    @classmethod
+    def _getSnippet(cls, yosrc):
+        return MetaRegister._getSnippet(yosrc)
+
+    @classmethod
+    def _findRangeStr(cls, snippet, offset):
+        return MetaRegister._findRangeStr(snippet, offset)
+
+    @classmethod
+    def _findDepthStr(cls, snippet, offset):
+        """Start at char offset. Read forward. Look for '[' to open a range.
+        If we find a semicolon '[', we'll break and decide the depth is 1.
+        """
+        grouplevel = 0
+        startix = None
+        depthstr = None
+        for n in range(offset, len(snippet)):
+            char = snippet[n]
+            if char == '[':
+                if grouplevel == 0:
+                    startix = n
+                grouplevel += 1
+            elif char == ']':
+                grouplevel -= 1
+                if grouplevel == 0:
+                    depthstr = snippet[startix:n]
+                    break
+            elif char == ';':
+                break
+        return depthstr
+
 def testWalkDict():
     dd = {
         'F': {
@@ -432,9 +564,16 @@ def test():
     args = parser.parse_args()
     vp = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = vp.get_map()
-    print(f"len(mods) = {len(mods)}")
-    #for mod in mods:
-    #    print(mod)
+    #print(f"len(mods) = {len(mods)}")
+    for key, mod in mods.items():
+        #print(mod)
+        #print("key = {}; type(mod) = {}".format(key, type(mod)))
+        for reg, _type in mod:
+            if _type == MemoryRegion.TYPE_MEM:
+                start, stop, reg = reg
+                #print(f"reg = {reg}; type(reg) = {type(reg)}")
+                if hasattr(reg, "_readRangeDepth"):
+                    print("_readRangeDepth() = {}".format(reg._readRangeDepth()))
     return True
 
 if __name__ == "__main__":

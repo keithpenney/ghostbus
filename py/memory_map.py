@@ -19,12 +19,14 @@ def bits(v):
 
 
 class Register():
-    def __init__(self, name=None, dw=1, base=None):
+    def __init__(self, name=None, dw=1, base=None, meta=None):
         self._name = name
         self._size = 1
         self._data_width = int(dw)
         self._addr_width = 0
         self._base_addr = base
+        # A helpful bit of optional metadata
+        self.meta = meta
 
     @property
     def name(self):
@@ -54,8 +56,8 @@ class Register():
         return
 
 class Memory(Register):
-    def __init__(self, name=None, dw=1, aw=0, base=None):
-        super().__init__(name=name, dw=dw, base=base)
+    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None):
+        super().__init__(name=name, dw=dw, base=base, meta=meta)
         self._size = 1 << int(aw)
         self._addr_width = int(aw)
 
@@ -320,7 +322,7 @@ class MemoryRegion():
         fit_elem = None
         # First find whether 'addr' is within an occupied or vacant region
         for entry, _type in self: # Iterator magic
-            e_base, e_end, ref = entry
+            e_base, e_end, e_ref = entry
             if (base >= e_base) and (base < e_end):
                 # 'addr' is in this element
                 if _type != self.TYPE_VACANT:
