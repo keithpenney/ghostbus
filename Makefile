@@ -4,6 +4,11 @@ THIS_DIR=.
 VERILOG_DIR=$(THIS_DIR)/verilog
 VGHOST_DIR=$(VERILOG_DIR)/ghost
 PY_DIR=$(THIS_DIR)/py
+SCRIPTS_DIR=$(THIS_DIR)/scripts
+
+# Safe rm
+SAFERM_ROOT=$(THIS_DIR)
+RM=$(SCRIPTS_DIR)/saferm.sh $(SAFERM_ROOT) -rf
 
 PYTHON=python3
 VERILOG = iverilog$(ICARUS_SUFFIX) -Wall -Wno-macro-redefinition
@@ -24,18 +29,15 @@ VERILOG_SIM = cd `dirname $@` && $(VVP) `basename $<` $(VVP_FLAGS)
 	$(VERILOG_SIM) +vcd $(VCD_ARGS)
 
 TOP=foo
-TEST_SOURCES=$(VERILOG_DIR)/foo.v $(VERILOG_DIR)/bar.v $(VERILOG_DIR)/baz.v
-.PHONY: test
-test: $(TEST_SOURCES)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py $^ -t $(TOP)
 
 MAGIC_SOURCES=$(VGHOST_DIR)/foo.v $(VGHOST_DIR)/bar.v $(VGHOST_DIR)/baz.v $(VGHOST_DIR)/bif.v
-.PHONY: magic
-magic: $(MAGIC_SOURCES)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py $^ -t $(TOP)
 
 $(AUTOGEN_DIR)/defs.vh: $(MAGIC_SOURCES)
+	mkdir -p $(AUTOGEN_DIR)
 	$(PYTHON) $(PY_DIR)/ghostbusser.py $^ -t $(TOP)
+
+.PHONY: magic
+magic: $(AUTOGEN_DIR)/defs.vh
 
 #VFLAGS_foo_tb=-DMANUAL_TEST
 VFLAGS_foo_tb=-DGHOSTBUS_LIVE
@@ -44,3 +46,7 @@ foo_tb: $(AUTOGEN_DIR)/defs.vh $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
 
 foo.vcd: foo_tb
 	$(VERILOG_SIM) +vcd $(VCD_ARGS)
+
+.PHONY: clean
+clean:
+	$(RM) $(AUTOGEN_DIR) foo_tb foo.vcd
