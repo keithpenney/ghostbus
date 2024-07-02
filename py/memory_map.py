@@ -43,7 +43,17 @@ class Register():
         return self._addr_width
 
     @property
+    def aw(self):
+        """Alias for width"""
+        return self._addr_width
+
+    @property
     def datawidth(self):
+        return self._data_width
+
+    @property
+    def dw(self):
+        """Alias for datawidth"""
         return self._data_width
 
     @property
@@ -136,6 +146,7 @@ class MemoryRegion():
         hi_occupied = self.high_addr()
         min_aw = bits(hi_occupied-1)
         self._top = (1 << min_aw)
+        self._aw = min_aw
         # Also need to truncate the last entry in the "vacant" map
         vacant = (self.vacant[-1][0], self._top)
         if vacant[1] == vacant[0]:
@@ -162,6 +173,10 @@ class MemoryRegion():
         # Also need to extend the last entry in the "vacant" map
         self.vacant[-1] = (self.vacant[-1][0], self._top)
         return
+
+    @property
+    def aw(self):
+        return self._aw
 
     @property
     def hierarchy(self):
@@ -281,7 +296,7 @@ class MemoryRegion():
                 addr += offset
         if self.hierarchy is not None:
             if hasattr(item, 'hierarchy'):
-                item.hierarchy = (*self.hierarchy, item.label)
+                item.hierarchy = (*self.hierarchy, *item.hierarchy)
         return self.add(width=width, ref=item, addr=addr)
 
     def add(self, width=0, ref=None, addr=None):

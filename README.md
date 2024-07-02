@@ -19,10 +19,10 @@ automatically as well, though that competes with some of the goals below.
 2. Automatically generate each module's relative memory map.
 3. Working from the lowest-level (leaf) modules upward to the top, automatically generate
    the module-level memory map.
-4. Write out a complete memory map in a hierarchical JSON.
+4. (TODO) Write out a complete memory map in a hierarchical JSON.
 5. Generate a `.vh` file for every module which contains the bus decoding with the
-   global addresses computed in step 3.
-6. Also generate a top-level "mirror memory" decoder for readback of R/W (memory-like)
+   local addresses computed in step 3.
+6. (TODO) Also generate a top-level "mirror memory" decoder for readback of R/W (memory-like)
    registers.
 
 ## Comparison with Newad
@@ -37,35 +37,36 @@ automatically as well, though that competes with some of the goals below.
 
 ## Usage Example
 
-I'm just laying this out as a rough-sketch.
-
 ```verilog
-module mod_foo #( 
-  parameter AW = 24,
-  parameter DW = 32
-) (
-  input clk,
-  input [AW-1:0] addr,
-  input [DW-1:0] din,
-  output [DW-1:0] dout,
-  input we
-);
-
-reg [3:0] foo=0;                            // Non-host-accessible register
-
-(* ghostbus_ha *) reg [7:0] bar=8'h42;      // Host-accessible register (will be auto-decoded)
-
-(* ghostbus_ha, ghostbus_addr='h100 *)
-reg [7:0] baz [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
-
-`ifdef GHOSTBUS_LIVE
-`include "gb_mod_foo.vh"
-`endif
-
-endmodule
+// TODO
 ```
 
+## Status
+__240702__: I have a working demo which still uses some hard-coded values.  I still need the following:
+  1. Parse the testbench to grab the `(* ghostbus_port=... *)` attributes so we can auto-infer those port
+     names and widths.
+  2. Should the testbench be part of the memory map?  Or is that scanned separately?
+  3. Find a better way to populate the preprocessor definitions instead of mandating an `include "defs.vh"` line
+     The only alternative I can think of is to pass them directly to the tool.  Can I just make the tool process the
+     file as if it's source?  Verilog preprocessor macros are (for better or worse) global afterall.
+
 ## Design considerations
+
+### Decoding
+
+I'd like the decoding rules to be parameterized in the future.  For now, they're fixed.  These are the
+current decoding rules:
+1. Each module only sees its own address space on the bus.  Addresses passed to submodules always mask out the upper bits
+   to ensure this remains true.  This is the only portable solution (i.e. two instances at different parts of the memory
+   map must have the same decoding logic, so they must not be aware of the memory map beyond their own range).
+   The alignment of the memory map makes this trivial and resource-efficient.
+
+2. Local registers (CSRs and RAMs instantiated directly in a given module) are decoded with sequential (clocked) logic.
+   Bus decoding to submodules passes through with combinational logic (so that the transaction delay does not depend on
+   the hierarchy).
+
+3. Local registers should be packed as tightly as possible (i.e. try to avoid setting explicit addresses) to reduce the
+   LUT usage for address decoding.
 
 ### Limitations of the Verilog Preprocessor
 Mayday. The verilog preprocessor is trying to sink this concept.  The notion that all macros are global in
@@ -153,6 +154,8 @@ assign gb_we   = test_we;
 ```
 
 ### Pipeline and fanout
+(slightly out-dated by the __Decoding__ section above, but still contains important consideration)
+
 The behavior of the decoder should be parameterized.  In the simplest case, we can route the whole bus with
 combinational logic (pipeline depth of 0).  This should be sufficient for small designs, but will create
 high fanout and resource usage as the project grows.

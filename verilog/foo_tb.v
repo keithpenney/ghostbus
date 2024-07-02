@@ -38,6 +38,10 @@ localparam GB_DW = 32;
 (* ghostbus_port="din" *)  wire [GB_DW-1:0] gb_din;
 (* ghostbus_port="wen" *)  reg gb_we=1'b0;
 
+`ifdef GHOSTBUS_LIVE
+  `include "defs.vh"
+`endif
+
 foo #(
   .AW(AW),
   .DW(DW),
@@ -46,7 +50,13 @@ foo #(
 ) foo_i (
   .clk(clk) // input
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_foo_tb_foo_i
+//`GHOSTBUS_foo_tb_foo_i
+// TODO
+  ,.gb_clk(gb_clk)    // input
+  ,.gb_addr(gb_addr)  // input [11:0]
+  ,.gb_dout(gb_dout)  // input [31:0]
+  ,.gb_din(gb_din) // output [31:0]
+  ,.gb_we(gb_we) // input
 `else
   `ifdef MANUAL_TEST
   ,.gb_clk(gb_clk)    // input

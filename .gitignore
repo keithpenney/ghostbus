@@ -1,2 +1,5 @@
 .*.swp
 */.*.swp
+_auto
+*/__pycache__
+**/__pycache__

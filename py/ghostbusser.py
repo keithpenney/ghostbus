@@ -6,7 +6,7 @@ import math
 import re
 
 from yoparse import VParser, srcParse
-from memory_map import MemoryRegion, Register, Memory
+from memory_map import MemoryRegion, Register, Memory, bits
 
 # When Yosys generates a JSON, it follows this structure:
 #   modules: {
@@ -161,15 +161,20 @@ class MemoryTree(WalkDict):
             #print(f"key, inst_dict = {key}, {inst_dict}")
             inst_name = key[0]
             inst_hash = key[1]
-            instances = inst_dict
-            self._dd[key] = self.__class__(instances, parent=self, key=key, inst_hash=inst_hash)
+            hier = (inst_name,)
+            self._dd[key] = self.__class__(inst_dict, parent=self, key=key, inst_hash=inst_hash, hierarchy=hier)
             #if hasattr(val, "items"):
             #    self._dd[key] = self.__class__(val, parent=self, key=key)
         self._mark = False
-        self._mr = MemoryRegion(hierarchy=hierarchy)
+        if inst_hash is not None:
+            module_name = get_modname(inst_hash)
+        else:
+            module_name = None
+        self._mr = MemoryRegion(label=module_name, hierarchy=hierarchy)
         self._label = None
         if hierarchy is not None:
             self._label = hierarchy[0]
+        self._resolved = False
 
     def __str__(self):
         if self._mr._hierarchy is not None:
@@ -190,19 +195,20 @@ class MemoryTree(WalkDict):
         return self._label
 
     def resolve(self):
-        for key, node in self.walk():
-            if node is None:
-                print(f"WARNING! node is None! key = {key}")
-            if hasattr(node, "memsize"):
-                if node.memsize > 0:
-                    node.memory.shrink()
-                    if node._parent is not None:
-                        #print("Adding {} to {}".format(node.label, node._parent.label))
-                        node._parent.memory.add_item(node.memory)
-                else:
-                    print(f"Node {node.label} has memsize {node.memsize}")
-            if hasattr(node, "mark"):
-                node.mark()
+        if not self._resolved:
+            for key, node in self.walk():
+                if node is None:
+                    print(f"WARNING! node is None! key = {key}")
+                if hasattr(node, "memsize"):
+                    if node.memsize > 0:
+                        node.memory.shrink()
+                        if node._parent is not None:
+                            #print("Adding {} to {}".format(node.label, node._parent.label))
+                            node._parent.memory.add_item(node.memory)
+                    else:
+                        print(f"Node {node.label} has memsize {node.memsize}")
+                if hasattr(node, "mark"):
+                    node.mark()
         return self._mr
 
     @property
@@ -266,10 +272,16 @@ def get_modname(s):
         return modname
     return s
 
+def vhex(num, width):
+    #print("width = {}".format(width))
+    fmt = "{{:0{}x}}".format(width>>2)
+    #print("fmt = {}".format(fmt))
+    return "{}'h{}".format(width, fmt.format(num))
 
 class GhostBusser(VParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.memory_map = None
 
     def get_map(self):
         ghostmods = {}
@@ -309,8 +321,8 @@ class GhostBusser(VParser):
                         dw = len(net_dict['bits'])
                         reg = MetaRegister(name=netname, dw=dw, meta=source)
                         if mr is None:
-                            label = get_modname(mod_hash)
-                            mr = MemoryRegion(label=label, hierarchy=(label,))
+                            module_name = get_modname(mod_hash)
+                            mr = MemoryRegion(label=module_name, hierarchy=(module_name,))
                             print("created mr label {}".format(mr.label))
                         mr.add(width=0, ref=reg, addr=addr)
             # Check for RAMs
@@ -333,8 +345,8 @@ class GhostBusser(VParser):
                         aw = math.ceil(math.log2(size))
                         mem = MetaMemory(name=memname, dw=dw, aw=aw, meta=source)
                         if mr is None:
-                            label = get_modname(mod_hash)
-                            mr = MemoryRegion(label=label, hierarchy=(label,))
+                            module_name = get_modname(mod_hash)
+                            mr = MemoryRegion(label=module_name, hierarchy=(module_name,))
                             print("created mr label {}".format(mr.label))
                         mr.add(width=aw, ref=mem, addr=addr)
             if mr is not None:
@@ -346,8 +358,9 @@ class GhostBusser(VParser):
         #print_dict(modtree)
         memtree = self.build_memory_tree(modtree, ghostmods)
         #print("***********************************************")
-        mr = memtree.resolve()
-        mr.print(4)
+        self.memory_map = memtree.resolve()
+        self.memory_map.shrink()
+        self.memory_map.print(4)
         return ghostmods
 
     def build_modtree(self, dd):
@@ -379,17 +392,18 @@ class GhostBusser(VParser):
             #print("{}: {}".format(key, val))
             if key is None:
                 break
-            inst_label, inst_hash = key
+            inst_name, inst_hash = key
+            module_name = get_modname(inst_hash)
             mr = ghostmods.get(inst_hash, None)
-            hier = (inst_label,)
+            hier = (inst_name,)
             if mr is not None and hasattr(val, "memory"):
                 mrcopy = mr.copy()
-                mrcopy.label = inst_label
+                mrcopy.label = module_name
                 mrcopy.hierarchy = hier
                 val.memory = mrcopy
             else:
                 print(f"no {key} in ghostmods")
-                val.memory = MemoryRegion(label=inst_label, hierarchy=hier)
+                val.memory = MemoryRegion(label=module_name, hierarchy=hier)
         # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
         return modtree
 
@@ -439,7 +453,7 @@ class MetaRegister(Register):
                 fd.seek(max(0, tell-512))
                 # Read up to 1024 chars
                 snippet = fd.read(1024)
-                offset = tell
+                offset = min(tell, 512)
                 #namestr = snippet[offset:offset+charend-charstart]
                 #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
                 #    namestr, offset, len(snippet), rangeStr))
@@ -476,6 +490,10 @@ class MetaRegister(Register):
                     rangestr = snippet[n+1:endix]
                     break
         return rangestr
+
+    def getInitStr(self, bus):
+        # Ghostbus registers are already initialized
+        return ""
 
 # TODO - Combine this class with MetaRegister
 class MetaMemory(Memory):
@@ -539,6 +557,316 @@ class MetaMemory(Memory):
                 break
         return depthstr
 
+    def getInitStr(self, bus, local_aw=None):
+        # localparam FOO_RAM_AW = $clog2(RD);
+        # wire en_foo_ram = gb_addr[8:3] == 6'b001000;
+        if local_aw is None:
+            local_aw = bus['aw']
+        divwidth = local_aw - self.aw
+        ss = (
+            f"localparam {self.name.upper()}_AW = $clog2({self.depth[1]}+1);",
+            f"wire en_{self.name} = {bus['addr']}[{local_aw-1}:{self.aw}] == {vhex(self.base>>self.aw, divwidth)};",
+        )
+        return "\n".join(ss)
+
+class Decoder():
+    def __init__(self, memregion, bus):
+        self.mod = memregion
+        self.bus = bus
+        self.aw = self.mod.aw
+        self.inst = self.mod.hierarchy[-1]
+        self.name = self.mod.label
+        self.base = self.mod.base
+        self.submods = []
+        self.rams = []
+        self.csrs = []
+        self.max_local = 0
+        for start, stop, ref in memregion.get_entries():
+            if isinstance(ref, MetaRegister):
+                ref._readRangeDepth()
+                self.csrs.append(ref)
+            elif isinstance(ref, MetaMemory):
+                ref._readRangeDepth()
+                self.rams.append(ref)
+            elif isinstance(ref, MemoryRegion):
+                self.submods.append((start, Decoder(ref, self.bus)))
+            if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
+                if stop > self.max_local:
+                    self.max_local = stop
+        if self.max_local == 0:
+            self.no_local = True
+        else:
+            self.no_local = False
+        self.local_aw = bits(self.max_local)
+        print(f"{self.mod.name}: self.local_aw = {self.local_aw}")
+        self._def_file = "defs.vh"
+
+    def _clearDef(self, dest_dir):
+        """Start with empty macro definitions file"""
+        import os
+        fd = open(os.path.join(dest_dir, self._def_file), "w")
+        fd.close()
+        return
+
+    def _addDef(self, dest_dir, macrostr, macrodef):
+        import os
+        defstr = f"`define {macrostr} {macrodef}\n"
+        with open(os.path.join(dest_dir, self._def_file), "a") as fd:
+            fd.write(defstr)
+        return
+
+    def _addGhostbusDef(self, dest_dir, suffix):
+        macrostr = f"GHOSTBUS_{suffix}"
+        macrodef = f"`include \"ghostbus_{suffix}.vh\""
+        return self._addDef(dest_dir, macrostr, macrodef)
+
+    def GhostbusMagic(self, dest_dir="_auto"):
+        """Generate the automatic files for this project and write to
+        output directory 'dest_dir'."""
+        import os
+        self._clearDef(dest_dir)
+        gbports = self.GhostbusPorts()
+        fname = "ghostbus_ports.vh"
+        with open(os.path.join(dest_dir, fname), "w") as fd:
+            fd.write(gbports)
+            print(f"Wrote to {fname}")
+        self._addGhostbusDef(dest_dir, "ports")
+        self._GhostbusDoSubmods(dest_dir)
+
+    def _GhostbusDoSubmods(self, dest_dir):
+        import os
+        decode = self.GhostbusDecoding()
+        fname = f"ghostbus_{self.name}.vh"
+        with open(os.path.join(dest_dir, fname), "w") as fd:
+            fd.write(decode)
+            print(f"Wrote to {fname}")
+        self._addGhostbusDef(dest_dir, self.name)
+        for base, submod in self.submods:
+            fname = f"ghostbus_{self.name}_{submod.inst}.vh"
+            ss = submod.GhostbusSubmodMap()
+            with open(os.path.join(dest_dir, fname), "w") as fd:
+                fd.write(ss)
+                print(f"Wrote to {fname}")
+            self._addGhostbusDef(dest_dir, f"{self.name}_{submod.inst}")
+            submod._GhostbusDoSubmods(dest_dir)
+        return
+
+    def GhostbusDecoding(self):
+        """Generate the bus decoding logic for this instance."""
+        ss = []
+        ss.append(self.localInit())
+        ss.append(self.submodsTopInit())
+        ss.append(self.dinRouting())
+        ss.append(self.busDecoding())
+        return "\n".join(ss)
+
+    def GhostbusPorts(self):
+        """Generate the necessary ghostbus Verilog port declaration"""
+        ss = (
+            "// Ghostbus ports",
+            f",input  {self.bus['clk']}",
+            f",input  [{self.bus['aw']-1}:0] {self.bus['addr']}",
+            f",input  [{self.bus['dw']-1}:0] {self.bus['dout']}",
+            f",output [{self.bus['dw']-1}:0] {self.bus['din']}",
+            f",input  {self.bus['we']}",
+        )
+        return "\n".join(ss)
+
+    def GhostbusSubmodMap(self):
+        """Generate the necessary ghostbus Verilog port map for this instance
+        within its parent module."""
+        clk = self.bus['clk']
+        addr = self.bus['addr']
+        dout = self.bus['dout']
+        din = self.bus['din']
+        we = self.bus['we']
+        ss = (
+            f",.{clk}({clk})    // input",
+            f",.{addr}({addr}_{self.inst})  // input [{self.bus['aw']-1}:0]",
+            f",.{dout}({dout})  // input [{self.bus['dw']-1}:0]",
+            f",.{din}({din}_{self.inst}) // output [{self.bus['dw']-1}:0]",
+            f",.{we}({we}_{self.inst}) // input",
+        )
+        return "\n".join(ss)
+
+    def localInit(self):
+        # wire en_local = gb_addr[11:9] == 3'b000; // 0x000-0x1ff
+        # reg  [31:0] local_din=0;
+        if self.no_local:
+            return ""
+        busaw = self.bus['aw']
+        divwidth = busaw - self.local_aw
+        ss = [
+            f"// local init",
+            f"wire en_local = {self.bus['addr']}[{self.bus['aw']-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw:x}",
+            f"reg  [{self.bus['dw']-1}:0] local_din=0;",
+        ]
+        if len(self.rams) > 0:
+            ss.append("// local rams")
+            for n in range(len(self.rams)):
+                ss.append(self.rams[n].getInitStr(self.bus, self.local_aw))
+        return "\n".join(ss)
+
+    def submodsTopInit(self):
+        ss = []
+        for base, submod in self.submods:
+            ss.append(submod.submodInitStr(base))
+        return "\n".join(ss)
+
+    def submodInitStr(self, base_rel):
+        #e.g.
+        # // submodule bar_0
+        # wire [31:0] gb_din_bar_0;
+        # wire en_bar_0 = gb_addr[11:9] == 3'b001; // 0x200-0x3ff
+        # wire [11:0] gb_addr_bar_0 = {3'b000, gb_addr[8:0]}; // address relative to own base (0x0)
+        # wire gb_we_bar_0=gb_we & en_bar_0;
+        busaw = self.bus['aw']
+        divwidth = busaw - self.aw
+        end = base_rel + (1<<self.aw) - 1
+        ss = (
+            f"// submodule {self.inst}",
+            f"wire [{self.bus['dw']-1}:0] {self.bus['din']}_{self.inst};",
+            f"wire en_{self.inst} = {self.bus['addr']}[{busaw-1}:{self.aw}] == {vhex(base_rel>>self.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}",
+            f"wire [{busaw-1}:0] {self.bus['addr']}_{self.inst} = {{{vhex(0, divwidth)}, {self.bus['addr']}[{self.aw-1}:0]}}; // address relative to own base (0x0)",
+            f"wire {self.bus['we']}_{self.inst}={self.bus['we']} & en_{self.inst};",
+        )
+        return "\n".join(ss)
+
+    def dinRouting(self):
+        # assign gb_din = en_baz_0 ? gb_din_baz_0 :
+        #                 en_bar_0 ? gb_din_bar_0 :
+        #                 en_local ? local_din :
+        #                 32'h00000000;
+        ss = [
+            "// din routing",
+        ]
+        if not self.no_local:
+            ss.append(f"assign {self.bus['din']} = en_local ? local_din :")
+        else:
+            ss.append(f"assign {self.bus['din']} = ")
+        for n in range(len(self.submods)):
+            base, submod = self.submods[n]
+            inst = submod.inst
+            if n == 0 and self.no_local:
+                ss[-1] = ss[-1] + f"en_{inst} ? {self.bus['din']}_{inst} :"
+            else:
+                ss.append(f"              en_{inst} ? {self.bus['din']}_{inst} :")
+        ss.append(f"              {vhex(0, self.bus['dw'])};")
+        return "\n".join(ss)
+
+    def busDecoding(self):
+        _ramwrites = self.ramWrites()
+        if len(_ramwrites) == 0:
+            ramwrites = "// No rams"
+        else:
+            ramwrites = _ramwrites
+        _csrwrites = self.csrWrites()
+        if len(_csrwrites) == 0:
+            csrwrites = "// No CSRs"
+        else:
+            csrwrites = _csrwrites
+        _ramreads = self.ramReads()
+        crindent = 4*" "
+        extraend = ""
+        midend = ""
+        if len(_ramreads) == 0:
+            crindent = 6*" "
+            extraend = "  end // ram reads"
+            ramreads = "// No rams"
+        else:
+            ramreads = _ramreads
+        _csrreads = self.csrReads()
+        if len(_csrreads) == 0:
+            if len(_ramreads) > 0:
+                midend = " else begin"
+            csrreads = "// No CSRs"
+        else:
+            csrreads = _csrreads
+        ss = []
+        hasclk = False
+        if len(_ramwrites) > 0 or len(_csrwrites) > 0:
+            ss.append(f"always @(posedge {self.bus['clk']}) begin")
+            ss.append("  // local writes")
+            ss.append(f"  if (en_local & {self.bus['we']}) begin")
+            ss.append("    " + ramwrites.replace("\n", "\n    "))
+            ss.append("    " + csrwrites.replace("\n", "\n    "))
+            ss.append(f"  end // if (en_local & {self.bus['we']})")
+            hasclk = True
+        if len(_ramreads) > 0 or len(_csrreads) > 0:
+            if not hasclk:
+                ss.append(f"always @(posedge {self.bus['clk']}) begin")
+            ss.append("  // local reads")
+            ss.append(f"  if (en_local & ~{self.bus['we']}) begin")
+            ss.append("    " + ramreads.replace("\n", "\n    ") + midend)
+            ss.append(crindent + csrreads.replace("\n", "\n"+crindent))
+            ss.append(extraend)
+            ss.append(f"  end // if (en_local & ~{self.bus['we']})")
+        if hasclk:
+            ss.append(f"end // always @(posedge {self.bus['clk']})")
+        return "\n".join(ss)
+
+    def csrWrites(self):
+        if len(self.csrs) == 0:
+            return ""
+        ss = [
+            "// CSR writes",
+            f"casez ({self.bus['addr']}[{self.local_aw-1}:0])",
+        ]
+        for n in range(len(self.csrs)):
+            csr = self.csrs[n]
+            ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {self.bus['dout']}[{csr.range[0]}:0];")
+        ss.append("endcase")
+        return "\n".join(ss)
+
+    def csrReads(self):
+        if len(self.csrs) == 0:
+            return ""
+        ss = [
+            "// CSR reads",
+            f"casez ({self.bus['addr']}[{self.local_aw-1}:0])",
+        ]
+        for n in range(len(self.csrs)):
+            csr = self.csrs[n]
+            ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.bus['dw']}-{csr.range[0]}+1{{1'b0}}}}, {csr.name}}};")
+        ss.append("endcase")
+        return "\n".join(ss)
+
+    def ramWrites(self):
+        if len(self.rams) == 0:
+            return ""
+        ss = [
+            "// RAM writes",
+            "",
+        ]
+        for n in range(len(self.rams)):
+            ram = self.rams[n]
+            s0 = f"if (en_{ram.name}) begin"
+            if n > 0:
+                s0 = " else " + s0
+            ss[-1] = ss[-1] + s0
+            ss.append(f"  {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.bus['dout']}[{ram.range[0]}:{ram.range[1]}];")
+            ss.append("end")
+        return "\n".join(ss)
+
+    def ramReads(self):
+        if len(self.rams) == 0:
+            return ""
+        ss = [
+            "// RAM reads",
+            "",
+        ]
+        for n in range(len(self.rams)):
+            ram = self.rams[n]
+            s0 = f"if (en_{ram.name}) begin"
+            if n > 0:
+                s0 = " else " + s0
+            ss[-1] = ss[-1] + s0
+            #ss.append(f"  {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.bus['dout']}[{ram.range[0]}:{ram.range[1]}];")
+            ss.append(f"  local_din <= {{{{{self.bus['dw']}-{ram.range[0]}+1{{1'b0}}}}, {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]]}};")
+            ss.append("end")
+        return "\n".join(ss)
+
+
 def testWalkDict():
     dd = {
         'F': {
@@ -580,13 +908,27 @@ def test():
     vp = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = vp.get_map()
     #print(f"len(mods) = {len(mods)}")
-    for mod_hash, memoryregion in mods.items():
-        #print(type(memoryregion))
-        #print("mod_hash = {}; type(memoryregion) = {}".format(mod_hash, type(memoryregion)))
-        for start, stop, reg in memoryregion.get_entries():
-            if hasattr(reg, "_readRangeDepth"):
-                reg._readRangeDepth()
-                print(f"reg.range = {reg.range}; reg.depth = {reg.depth}")
+    if False:
+        for mod_hash, memoryregion in mods.items():
+            print(type(memoryregion))
+            #print("mod_hash = {}; type(memoryregion) = {}".format(mod_hash, type(memoryregion)))
+            for start, stop, reg in memoryregion.get_entries():
+                if hasattr(reg, "_readRangeDepth"):
+                    reg._readRangeDepth()
+                    print(f"reg.range = {reg.range}; reg.depth = {reg.depth}")
+    bus = {
+        'clk': 'gb_clk',
+        'addr': 'gb_addr',
+        'data': 'gb_data',
+        'din': 'gb_din',
+        'dout': 'gb_dout',
+        'we': 'gb_we',
+        'aw': 12,
+        'dw': 32,
+    }
+    dec = Decoder(vp.memory_map, bus)
+    #print(dec.GhostbusDecoding())
+    dec.GhostbusMagic(dest_dir="_auto")
     return True
 
 if __name__ == "__main__":
