@@ -42,6 +42,16 @@ automatically as well, though that competes with some of the goals below.
 ```
 
 ## Status
+__240705__: Eliminated some hard-coding in the working demo.
+  * Parsing of `(* ghostbus_port=... *)` attributes implemented (not mandated until `getBusDict()`)
+
+__TODO__:
+  0. Develop a testbench that will automatically check the memory map (i.e. write and readback)
+  1. Handle strobes
+  2. Handle associated strobes
+  3. Handle read-only registers
+  4. Work out how to manually hook up to the ghostbus
+
 __240702__: I have a working demo which still uses some hard-coded values.  I still need the following:
   1. Parse the testbench to grab the `(* ghostbus_port=... *)` attributes so we can auto-infer those port
      names and widths.
@@ -189,14 +199,21 @@ the time a read is asserted and when the value is latched by the read pipeline.
 
 The flat memory map (no hierarchy) of Newad-enabled projects makes the mirror memory concept easier.  With hierarchy,
 it becomes necessary to alias addresses in the mirror memory region.  So for any host-accessible register placed in
-the mirror memory address space, there will be two addresses associated with it: a write address and a read address.
-The write address will be used for the write decoding and will propagate to the local decoding within its module.
-The read address will be the arbitrarily-assigned index into the mirror memory which will be used for both writes
+the mirror memory address space, there would be two addresses associated with it: a write address and a read address.
+The write address would be used for the write decoding and would propagate to the local decoding within its module.
+The read address would be the arbitrarily-assigned index into the mirror memory which would be used for both writes
 (need to store the data if you want to read it back) and reads.
 
-The decoding for the mirror memory will not be distributed the same way the normal bus decoding is.  A natural place
-for this to live is either at the top level or at the same level as the bus controller since it functions purely as
-RAM attached to the bus.
+Unless the system-wide memory map is very carefully constructed, the extra logic required for the memory aliasing
+probably eliminates any savings that the mirror memory concept provides.  This is a tough nut to crack in a generic
+way.  If CSR addresses are assigned automatically, they will be packed as densely as possible and the aliasing logic
+could be simple bit-shifting.  But if manual address assignment is used, it could easily create a sparsely-packed
+memory map which would require either an excessively large mirror RAM or expensive address offsetting.
+
+The final question would be where the simple mirror memory RAM decoding logic goes. A natural place for this to live
+is either at the top level or at the same level as the bus controller since it functions purely as RAM attached to
+the bus.  As of writing, these two are sort of required to be the same place (there's currently no provision for
+auto-routing the bus "upwards" from a submodule bus controller to the top-level.
 
 ### Passthrough modules
 

@@ -282,6 +282,15 @@ class GhostBusser(VParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.memory_map = None
+        self._bus = {
+            'clk': None,
+            'addr': None,
+            'din': None,
+            'dout': None,
+            'we': None,
+            'aw': None,
+            'dw': None,
+        }
 
     def get_map(self):
         ghostmods = {}
@@ -308,16 +317,19 @@ class GhostBusser(VParser):
             if netnames is not None:
                 for netname, net_dict in netnames.items():
                     attr_dict = net_dict["attributes"]
+                    source = attr_dict.get('src', None)
                     hit = False
                     addr = None
                     for attr, val in attr_dict.items():
-                        if attr.lower().startswith("ghostbus"):
+                        if attr.lower() in ("ghostbus_addr", "ghostbus_ha", "ghostbus_csr", "ghostbus_ram"):
                             # Found a hit
                             hit = True
                             if attr.lower() == "ghostbus_addr":
                                 addr = int(val, 2)
+                        elif attr.lower() in ("ghostbus_port",):
+                            dw = len(net_dict['bits'])
+                            self._handleBus(netname, val, dw, source)
                     if hit:
-                        source = net_dict['attributes']['src']
                         dw = len(net_dict['bits'])
                         reg = MetaRegister(name=netname, dw=dw, meta=source)
                         if mr is None:
@@ -351,6 +363,7 @@ class GhostBusser(VParser):
                         mr.add(width=aw, ref=mem, addr=addr)
             if mr is not None:
                 ghostmods[mod_hash] = mr
+        self._validateBus()
         self._top = top_mod
         #print_dict(modtree)
         modtree = self.build_modtree(modtree)
@@ -362,6 +375,73 @@ class GhostBusser(VParser):
         self.memory_map.shrink()
         self.memory_map.print(4)
         return ghostmods
+
+    def _handleBus(self, netname, val, dw, source):
+        val = val.strip().lower()
+        val_map = {
+            # Acceptable name, dict key
+            "clk": "clk",
+            "addr": "addr",
+            "din": "din",
+            "dout": "dout",
+            "we": "we",
+            "wen": "we", # alias
+        }
+        if val not in [key for key in val_map.keys()]:
+            err = "Invalid value ({}) for attribute 'ghostbus_port'.".format(val) + \
+                  "  Valid values are {}".format([key for key in self._bus.keys()])
+            raise Exception(err)
+        busval = self._bus[val]
+        if busval is None:
+            self._bus[val] = (netname, source)
+            # Get width of addr/data
+            if val in ("addr", "din", "dout"):
+                widthint = dw
+                widthstr = self._getWidth(source)
+                if val == "addr":
+                    self._bus["aw"] = (widthint, None)
+                    self._bus["aw_str"] = (widthstr, None)
+                else:
+                    existing_dw = self._bus["dw"]
+                    if existing_dw is not None and existing_dw[0] != widthint:
+                        raise Exception("Unsupported ghostbus din and dout are not the same width!")
+                    self._bus["dw"] = (widthint, None)
+                    self._bus["dw_str"] = (widthstr, None)
+        else:
+            raise Exception("'ghostbus_port={}' already defined at {}".format(val.strip().lower(), busval[1]))
+        return
+
+    def _validateBus(self):
+        if None in [v for v in self._bus.values()]:
+            self._busValid = False
+        else:
+            self._busValid = True
+        return self._busValid
+
+    def getBusDict(self):
+        if not self._busValid:
+            serr = ["Incomplete bus definition"]
+            for key, val in self._bus.items():
+                if val is None:
+                    serr.append("  Missing: {}".format(key))
+            raise Exception("\n".join(serr))
+        dd = {}
+        for key, val in self._bus.items():
+            dd[key] = val[0] # Discarding the "source" part
+        return dd
+
+    @classmethod
+    def _getWidth(cls, source):
+        snippet, offset = MetaRegister._getSnippet(source)
+        if snippet is not None:
+            _rangeStr = MetaRegister._findRangeStr(snippet, offset)
+            split = _rangeStr.split(':')
+            if len(split) > 1:
+                _range = (split[0], split[1])
+            else:
+                return None
+        # Assume _range[1] is always '0'
+        return "{}+1".format(_range[0])
 
     def build_modtree(self, dd):
         top = self._top
@@ -916,16 +996,18 @@ def test():
                 if hasattr(reg, "_readRangeDepth"):
                     reg._readRangeDepth()
                     print(f"reg.range = {reg.range}; reg.depth = {reg.depth}")
-    bus = {
-        'clk': 'gb_clk',
-        'addr': 'gb_addr',
-        'data': 'gb_data',
-        'din': 'gb_din',
-        'dout': 'gb_dout',
-        'we': 'gb_we',
-        'aw': 12,
-        'dw': 32,
-    }
+    if False:
+        bus = {
+            'clk': 'gb_clk',
+            'addr': 'gb_addr',
+            'din': 'gb_din',
+            'dout': 'gb_dout',
+            'we': 'gb_we',
+            'aw': 12,
+            'dw': 32,
+        }
+    else:
+        bus = vp.getBusDict()
     dec = Decoder(vp.memory_map, bus)
     #print(dec.GhostbusDecoding())
     dec.GhostbusMagic(dest_dir="_auto")

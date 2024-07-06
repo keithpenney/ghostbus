@@ -32,7 +32,7 @@ class VParser():
         self._dict = None
         for filename in self._filelist:
             if not os.path.exists(filename):
-                print(f"File {filename} not found")
+                raise Exception(f"File {filename} not found")
                 return False
         #ycmd = f'yosys -q -p "proc -noopt read_verilog {self._filename}" -p write_json'
         #ycmd = f'yosys -q -p "read_verilog {self._filename}" -p write_json'
@@ -41,12 +41,10 @@ class VParser():
             topstr = f"\nhierarchy -top {self._top}"
         else:
             topstr = ""
-        ycmd = f'yosys -q -p "read_verilog {filestr}{topstr}\nproc" -p write_json'
-        try:
-            jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
-        except subprocess.CalledProcessError as e:
-            print(e)
-            return False
+        ycmd = f'yosys -q -p "verilog_defines -DYOSYS\nread_verilog {filestr}{topstr}\nproc" -p write_json'
+        #try:
+        jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
+        #except subprocess.CalledProcessError as e:
         self._dict = json.loads(jsfile)
         # Separate attributes for this module
         mod = self._dict.get("modules", None)

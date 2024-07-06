@@ -148,11 +148,12 @@ class MemoryRegion():
         self._top = (1 << min_aw)
         self._aw = min_aw
         # Also need to truncate the last entry in the "vacant" map
-        vacant = (self.vacant[-1][0], self._top)
-        if vacant[1] == vacant[0]:
-            self.vacant.pop()
-        else:
-            self.vacant[-1] = (self.vacant[-1][0], self._top)
+        if len(self.vacant) > 0:
+            vacant = (self.vacant[-1][0], self._top)
+            if vacant[1] == vacant[0]:
+                self.vacant.pop()
+            else:
+                self.vacant[-1] = (self.vacant[-1][0], self._top)
         return
 
     def grow(self, high, absolute=False):

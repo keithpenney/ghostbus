@@ -7,6 +7,7 @@ localparam TICK = 2*CLK_HALFPERIOD;
 reg clk=1'b0;
 always #CLK_HALFPERIOD clk <= ~clk;
 
+`ifndef YOSYS
 // VCD dump file for gtkwave
 initial begin
   if ($test$plusargs("vcd")) begin
@@ -14,6 +15,7 @@ initial begin
     $dumpvars();
   end
 end
+`endif
 
 localparam TOW = 12;
 localparam TOSET = {TOW{1'b1}};
@@ -36,7 +38,7 @@ localparam GB_DW = 32;
 (* ghostbus_port="addr" *) reg [GB_AW-1:0] gb_addr=0;
 (* ghostbus_port="dout" *) reg [GB_DW-1:0] gb_dout=0;
 (* ghostbus_port="din" *)  wire [GB_DW-1:0] gb_din;
-(* ghostbus_port="wen" *)  reg gb_we=1'b0;
+(* ghostbus_port="we" *)  reg gb_we=1'b0;
 
 `ifdef GHOSTBUS_LIVE
   `include "defs.vh"
@@ -73,7 +75,11 @@ task GB_WRITE (input [11:0] addr, input [31:0] data);
     gb_addr = addr;
     gb_dout = data;
     gb_we = 1'b1;
+`ifndef YOSYS
     #TICK $display("Wrote to addr 0x%x: 0x%x", addr, data);
+`else
+    #TICK;
+`endif
   end
 endtask
 
@@ -83,7 +89,11 @@ task GB_READ (input [11:0] addr);
     gb_addr = addr;
     gb_dout = 32'h00000000;
     gb_we = 1'b0;
+`ifndef YOSYS
     #(RDDELAY*TICK) $display("Read from addr 0x%x: 0x%x", addr, gb_din);
+`else
+    #(RDDELAY*TICK);
+`endif
   end
 endtask
 
@@ -101,6 +111,7 @@ localparam [11:0] SIZE_bar_ram = 12'h040; // relative to BASE
 localparam [11:0] BASE_foo_baz_0_bar_1  = 12'h400;
 localparam [11:0] BASE_foo_baz_0_bar_0  = 12'h600;
 
+`ifndef YOSYS
 // =========== Stimulus =============
 localparam [0:0] skip_ram=1'b1;
 integer N;
@@ -186,5 +197,6 @@ initial begin
   $display("Done");
   $finish(0);
 end
+`endif // YOSYS
 
 endmodule
