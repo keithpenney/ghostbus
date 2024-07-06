@@ -19,7 +19,12 @@ def bits(v):
 
 
 class Register():
-    def __init__(self, name=None, dw=1, base=None, meta=None):
+    READ = 1
+    WRITE = 2
+    RW = READ | WRITE
+    _accessMask = RW
+
+    def __init__(self, name=None, dw=1, base=None, meta=None, access=RW):
         self._name = name
         self._size = 1
         self._data_width = int(dw)
@@ -27,6 +32,11 @@ class Register():
         self._base_addr = base
         # A helpful bit of optional metadata
         self.meta = meta
+        self.access = int(access) & self._accessMask
+
+    def copy(self):
+        return self.__class__(name=self._name, dw=self._data_width, base=self._base_addr,
+                              meta=self.meta, access=self.access)
 
     @property
     def name(self):
@@ -65,11 +75,17 @@ class Register():
         self._base_addr = value
         return
 
+
 class Memory(Register):
-    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None):
-        super().__init__(name=name, dw=dw, base=base, meta=meta)
+    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None, access=Register.RW):
+        super().__init__(name=name, dw=dw, base=base, meta=meta, access=access)
         self._size = 1 << int(aw)
         self._addr_width = int(aw)
+
+    def copy(self):
+        return self.__class__(name=self._name, dw=self._data_width, aw=self._addr_width,
+                              base=self._base_addr, meta=self.meta, access=self.access)
+
 
 class MemoryRegion():
     """A memory allocator.

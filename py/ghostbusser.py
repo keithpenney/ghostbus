@@ -678,7 +678,6 @@ class Decoder():
         else:
             self.no_local = False
         self.local_aw = bits(self.max_local)
-        print(f"{self.mod.name}: self.local_aw = {self.local_aw}")
         self._def_file = "defs.vh"
 
     def _clearDef(self, dest_dir):
@@ -700,6 +699,119 @@ class Decoder():
         macrodef = f"`include \"ghostbus_{suffix}.vh\""
         return self._addDef(dest_dir, macrostr, macrodef)
 
+    def ExtraVerilogMemoryMap(self, filename, bus):
+        """An extra (non-core functionality) feature.  Generate a memory
+        map in Verilog syntax which can be used for automatic testbench
+        decoder validation.
+        Generates:
+            localparam nCSRs = X;
+            localparam nRAMs = Y;
+            // For CSRs
+            reg [aw-1:0] GHOSTBUS_ADDRS [0:nCSRs-1];
+            reg [dw-1:0] GHOSTBUS_INITVALS [0:nCSRs-1];
+            reg [dw-1:0] GHOSTBUS_RANDVALS [0:nCSRs-1];
+            reg [nCSRs-1:0] GHOSTBUS_WRITABLE;
+            // For RAMs
+            reg [aw-1:0] GHOSTBUS_RAM_BASES [0:nRAMs-1];
+            reg [dw-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];
+            reg [dw-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];
+            reg [nRAMs-1:0]GHOSTBUS_RAM_WRITABLE;
+        """
+        import random
+        def flatten_bits(ll):
+            v = 0
+            for n in range(len(ll)):
+                if ll[n]:
+                    v |= (1<<n)
+            return v
+
+        csrs = []
+        rams = []
+        self._collectCSRs(csrs)
+        self._collectRAMs(rams)
+        # TODO - Find and remove any prefix common to all CSRs
+        print("CSRs:")
+        csr_writeable = []
+        cw = flatten_bits(csr_writeable)
+        for csr in csrs:
+            print("{}.{}: 0x{:x}".format(csr._domain[1], csr.name, csr._domain[0] + csr.base))
+            wa = 1 if (csr.access & Register.WRITE) > 0 else 0
+            csr_writeable.append(wa)
+        print("RAMs:")
+        ram_writeable = []
+        rw = flatten_bits(ram_writeable)
+        for ram in rams:
+            print("{}.{}: 0x{:x}".format(ram._domain[1], ram.name, ram._domain[0] + ram.base))
+            wa = 1 if (ram.access & Register.WRITE) > 0 else 0
+            ram_writeable.append(wa)
+        aw = bus["aw"]
+        dw = bus["dw"]
+        nCSRs = len(csrs)
+        nRAMs = len(rams)
+        # Define the structures
+        ss = [
+            "// Auto-generated with ghostbusser",
+            f"localparam nCSRs = {len(csrs)};",
+            f"localparam nRAMs = {len(rams)};",
+            "// For CSRs",
+            f"reg [{aw}-1:0] GHOSTBUS_ADDRS [0:nCSRs-1];",
+            f"reg [{dw}-1:0] GHOSTBUS_INITVALS [0:nCSRs-1];",
+            f"reg [{dw}-1:0] GHOSTBUS_RANDVALS [0:nCSRs-1];",
+            f"reg [nCSRs-1:0] GHOSTBUS_WRITABLE = {vhex(cw, nCSRs)};",
+            "// For RAMs",
+            f"reg [{aw}-1:0] GHOSTBUS_RAM_BASES [0:nRAMs-1];",
+            f"reg [{dw}-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];",
+            f"reg [{aw}-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];",
+            f"reg [nRAMs-1:0] GHOSTBUS_RAM_WRITABLE = {vhex(rw, nRAMs)};",
+            "// Initialization",
+            "integer N;",
+            "initial begin",
+            "  for (N=0; N<nCSRs; N=N+1) begin: CSR_Init",
+        ]
+        # Initialize CSR info
+        for csr in csrs:
+            ss.append(f"    GHOSTBUS_ADDRS[N] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.name}")
+            ss.append(f"    GHOSTBUS_INITVALS[N] = 0; // TODO!") # TODO
+            randval = random.randint(0, (1<<csr.dw)-1) # Random number within the range of the CSR's width
+            ss.append(f"    GHOSTBUS_RANDVALS[N] = {vhex(randval, dw)}; // 0 <= x <= 0x{(1<<csr.dw) - 1:x}")
+        ss.append("  end;")
+        # Initialize RAM info
+        ss.append("  for (N=0; N<nRAMs; N=N+1) begin: RAM_Init")
+        for ram in rams:
+            ss.append(f"    GHOSTBUS_RAM_BASES[N] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.name}")
+            ss.append(f"    GHOSTBUS_RAM_WIDTHS[N] = {vhex(ram.dw, dw)}; // TODO - may not be accurate due to parameterization...")
+            ss.append(f"    GHOSTBUS_RAM_DEPTHS[N] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
+        ss.append("  end;")
+        ss.append("end;")
+        if False:
+            print("\n".join(ss))
+            return
+        with open(filename, 'w') as fd:
+            fd.write("\n".join(ss))
+        return
+
+    def _collectCSRs(self, csrlist):
+        for csr in self.csrs:
+            # Adding attribute!
+            # Need to copy because multiple module instances actually reference the same "Register" instances
+            copy = csr.copy()
+            copy._domain = (self.base, self.mod.name)
+            csrlist.append(copy)
+        for base, submod in self.submods:
+            submod._collectCSRs(csrlist)
+        return csrlist
+
+    def _collectRAMs(self, ramlist):
+        for ram in self.rams:
+            # Need to copy because multiple module instances actually reference the same "Register" instances
+            copy = ram.copy()
+            # Adding attribute!
+            copy._domain = (self.base, self.mod.name)
+            ramlist.append(copy)
+        for base, submod in self.submods:
+            submod._collectRAMs(ramlist)
+        return ramlist
+
     def GhostbusMagic(self, dest_dir="_auto"):
         """Generate the automatic files for this project and write to
         output directory 'dest_dir'."""
@@ -712,6 +824,7 @@ class Decoder():
             print(f"Wrote to {fname}")
         self._addGhostbusDef(dest_dir, "ports")
         self._GhostbusDoSubmods(dest_dir)
+        return
 
     def _GhostbusDoSubmods(self, dest_dir):
         import os
@@ -1013,6 +1126,19 @@ def test():
     dec.GhostbusMagic(dest_dir="_auto")
     return True
 
+def testExtras():
+    import argparse
+    parser = argparse.ArgumentParser("Ghostbus Verilog router")
+    parser.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
+    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    args = parser.parse_args()
+    gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
+    mods = gb.get_map()
+    bus = gb.getBusDict()
+    dec = Decoder(gb.memory_map, bus)
+    dec.ExtraVerilogMemoryMap("test.vh", bus)
+
 if __name__ == "__main__":
-    test()
+    #test()
     #testWalkDict()
+    testExtras()
