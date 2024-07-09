@@ -278,6 +278,13 @@ def vhex(num, width):
     #print("fmt = {}".format(fmt))
     return "{}'h{}".format(width, fmt.format(num))
 
+def get_value(bitlist):
+    val = 0
+    for n in range(len(bitlist)):
+        if bitlist[n] == '1':
+            val |= 1 << n
+    return val
+
 class GhostBusser(VParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -331,7 +338,10 @@ class GhostBusser(VParser):
                             self._handleBus(netname, val, dw, source)
                     if hit:
                         dw = len(net_dict['bits'])
+                        initval = get_value(net_dict['bits'])
                         reg = MetaRegister(name=netname, dw=dw, meta=source)
+                        reg.initval = initval
+                        print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
                             module_name = get_modname(mod_hash)
                             mr = MemoryRegion(label=module_name, hierarchy=(module_name,))
@@ -497,6 +507,12 @@ class MetaRegister(Register):
         self._depthstr = None
         self.range = (None, None)
         self.depth = ('0', '0')
+        self.initval = 0
+
+    def copy(self):
+        ref = super().copy()
+        ref.initval = self.initval
+        return ref
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -732,18 +748,18 @@ class Decoder():
         # TODO - Find and remove any prefix common to all CSRs
         print("CSRs:")
         csr_writeable = []
-        cw = flatten_bits(csr_writeable)
         for csr in csrs:
             print("{}.{}: 0x{:x}".format(csr._domain[1], csr.name, csr._domain[0] + csr.base))
             wa = 1 if (csr.access & Register.WRITE) > 0 else 0
             csr_writeable.append(wa)
+        cw = flatten_bits(csr_writeable)
         print("RAMs:")
         ram_writeable = []
-        rw = flatten_bits(ram_writeable)
         for ram in rams:
             print("{}.{}: 0x{:x}".format(ram._domain[1], ram.name, ram._domain[0] + ram.base))
             wa = 1 if (ram.access & Register.WRITE) > 0 else 0
             ram_writeable.append(wa)
+        rw = flatten_bits(ram_writeable)
         aw = bus["aw"]
         dw = bus["dw"]
         nCSRs = len(csrs)
@@ -764,30 +780,112 @@ class Decoder():
             f"reg [{aw}-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];",
             f"reg [nRAMs-1:0] GHOSTBUS_RAM_WRITABLE = {vhex(rw, nRAMs)};",
             "// Initialization",
-            "integer N;",
+            #"integer N;",
             "initial begin",
-            "  for (N=0; N<nCSRs; N=N+1) begin: CSR_Init",
+            #"  for (N=0; N<nCSRs; N=N+1) begin: CSR_Init",
         ]
         # Initialize CSR info
-        for csr in csrs:
-            ss.append(f"    GHOSTBUS_ADDRS[N] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.name}")
-            ss.append(f"    GHOSTBUS_INITVALS[N] = 0; // TODO!") # TODO
+        for n in range(len(csrs)):
+            csr = csrs[n]
+            ss.append(f"  GHOSTBUS_ADDRS[{n}] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.name}")
+            ss.append(f"  GHOSTBUS_INITVALS[{n}] = {vhex(csr.initval, dw)};")
             randval = random.randint(0, (1<<csr.dw)-1) # Random number within the range of the CSR's width
-            ss.append(f"    GHOSTBUS_RANDVALS[N] = {vhex(randval, dw)}; // 0 <= x <= 0x{(1<<csr.dw) - 1:x}")
-        ss.append("  end;")
+            ss.append(f"  GHOSTBUS_RANDVALS[{n}] = {vhex(randval, dw)}; // 0 <= x <= 0x{(1<<csr.dw) - 1:x}")
+        #ss.append("  end")
         # Initialize RAM info
-        ss.append("  for (N=0; N<nRAMs; N=N+1) begin: RAM_Init")
-        for ram in rams:
-            ss.append(f"    GHOSTBUS_RAM_BASES[N] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.name}")
-            ss.append(f"    GHOSTBUS_RAM_WIDTHS[N] = {vhex(ram.dw, dw)}; // TODO - may not be accurate due to parameterization...")
-            ss.append(f"    GHOSTBUS_RAM_DEPTHS[N] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
-        ss.append("  end;")
-        ss.append("end;")
-        if False:
+        #ss.append("  for (N=0; N<nRAMs; N=N+1) begin: RAM_Init")
+        for n in range(len(rams)):
+            ram = rams[n]
+            ss.append(f"  GHOSTBUS_RAM_BASES[{n}] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.name}")
+            ss.append(f"  GHOSTBUS_RAM_WIDTHS[{n}] = {vhex(ram.dw, dw)}; // TODO - may not be accurate due to parameterization...")
+            ss.append(f"  GHOSTBUS_RAM_DEPTHS[{n}] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
+        #ss.append("  end")
+        ss.append("end")
+        # GB tasks
+        tasks = (
+            "// Bus transaction tasks",
+            "reg test_pass=1'b1;",
+            "`ifndef TICK",
+            "  `define TICK 10",
+            "`endif",
+            f"task GB_WRITE (input [{aw-1}:0] addr, input [{dw-1}:0] data);",
+            "  begin",
+            f"    {bus['addr']} = addr;",
+            f"    {bus['dout']} = data;",
+            f"    {bus['we']} = 1'b1;",
+            "`ifndef YOSYS",
+            "    #TICK $display(\"Wrote to addr 0x%x: 0x%x\", addr, data);",
+            "`else",
+            "    #TICK;",
+            "`endif",
+            "  end",
+            "endtask",
+
+            "localparam RDDELAY = 2;",  # TODO parameterize somehow
+            f"task GB_READ_CHECK (input [{aw-1}:0] addr, input [{dw-1}:0] checkval);",
+            "  begin",
+            f"    {bus['addr']} = addr;",
+            f"    {bus['dout']} = {vhex(0, dw)};",
+            f"    {bus['we']} = 1'b0;",
+            "    #(RDDELAY*TICK);",
+            f"    if ({bus['din']} != checkval) begin",
+            "       test_pass = 1'b0;",
+            "`ifndef YOSYS",
+            f"       $display(\"ERROR: Read from addr 0x%x. Expected 0x%x, got 0x%x\", addr, checkval, {bus['din']});",
+            "`endif",
+            "    end",
+            "  end",
+            "endtask",
+        )
+        ss.extend(tasks)
+        stimulus = (
+            "// Stimulus",
+            "integer LOOPN;",
+            "initial begin",
+            "  #TICK;",
+            "  `ifdef GHOSTBUS_TEST_CSRS",
+            "  $display(\"Reading init values.\");",
+            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
+            "    #TICK GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_INITVALS[LOOPN]);",
+            "  end",
+            "  if (test_pass) $display(\"PASS\");",
+            "  else $display(\"FAIL\");",
+            "  #TICK test_pass = 1'b1;",
+            "  $display(\"Writing CSRs with random values.\");",
+            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
+            "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
+            "      #TICK GB_WRITE(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
+            "    end",
+            "  end",
+            "  $display(\"Reading back written values.\");",
+            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
+            "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
+            "      #TICK GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
+            "    end",
+            "  end",
+            "  if (test_pass) $display(\"PASS\");",
+            "  else $display(\"FAIL\");",
+            "  #TICK test_pass = 1'b1;",
+            "  `endif // GHOSTBUS_TEST_CSRS",
+            "  `ifdef GHOSTBUS_TEST_RAMS",
+            "  // TODO", # TODO
+            "  `endif // GHOSTBUS_TEST_RAMS",
+            "  if (test_pass) begin",
+            "    $display(\"PASS\");",
+            "    $finish(0);",
+            "  end else begin",
+            "    $display(\"FAIL\");",
+            "    $stop(0);",
+            "  end",
+            "end",
+        )
+        ss.extend(stimulus)
+        if filename is None:
             print("\n".join(ss))
             return
-        with open(filename, 'w') as fd:
-            fd.write("\n".join(ss))
+        else:
+            with open(filename, 'w') as fd:
+                fd.write("\n".join(ss))
         return
 
     def _collectCSRs(self, csrlist):
@@ -1092,12 +1190,7 @@ def testWalkDict():
     print()
     return
 
-def test():
-    import argparse
-    parser = argparse.ArgumentParser("Ghostbus Verilog router")
-    parser.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
-    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
-    args = parser.parse_args()
+def doSubcommandLive(args):
     vp = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = vp.get_map()
     #print(f"len(mods) = {len(mods)}")
@@ -1124,21 +1217,34 @@ def test():
     dec = Decoder(vp.memory_map, bus)
     #print(dec.GhostbusDecoding())
     dec.GhostbusMagic(dest_dir="_auto")
-    return True
+    return 0
 
-def testExtras():
-    import argparse
-    parser = argparse.ArgumentParser("Ghostbus Verilog router")
-    parser.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
-    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
-    args = parser.parse_args()
+def doSubcommandMap(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = gb.get_map()
     bus = gb.getBusDict()
     dec = Decoder(gb.memory_map, bus)
-    dec.ExtraVerilogMemoryMap("test.vh", bus)
+    dec.ExtraVerilogMemoryMap(args.out_file, bus)
+    return 0
+
+def doGhostbus():
+    import argparse
+    parser = argparse.ArgumentParser("Ghostbus Verilog router")
+    parser.set_defaults(handler=lambda args: 1)
+    subparsers = parser.add_subparsers(help="Subcommands")
+    parserLive = subparsers.add_parser("live", help="Generate the Ghostbus decoder logic.")
+    parserLive.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
+    parserLive.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parserLive.set_defaults(handler=doSubcommandLive)
+    parserMap = subparsers.add_parser("map", help="Generate a memory map in Verilog form for testing.")
+    # TODO - How do I make this less redundant with the "subcommands" usage
+    parserMap.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
+    parserMap.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parserMap.add_argument("-o", "--out_file", default=None, help="The filepath for Verilog memory map output.")
+    parserMap.set_defaults(handler=doSubcommandMap)
+    args = parser.parse_args()
+    return args.handler(args)
 
 if __name__ == "__main__":
-    #test()
     #testWalkDict()
-    testExtras()
+    exit(doGhostbus())

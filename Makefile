@@ -34,14 +34,18 @@ MAGIC_SOURCES=$(VGHOST_DIR)/foo.v $(VGHOST_DIR)/bar.v $(VGHOST_DIR)/baz.v $(VGHO
 
 $(AUTOGEN_DIR)/defs.vh: $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py $^ -t $(TOP)
+	$(PYTHON) $(PY_DIR)/ghostbusser.py live $^ -t $(TOP)
+
+$(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
+	mkdir -p $(AUTOGEN_DIR)
+	$(PYTHON) $(PY_DIR)/ghostbusser.py map $^ -t $(TOP) -o $@
 
 .PHONY: magic
 magic: $(AUTOGEN_DIR)/defs.vh
 
 #VFLAGS_foo_tb=-DMANUAL_TEST
 VFLAGS_foo_tb=-DGHOSTBUS_LIVE
-foo_tb: $(AUTOGEN_DIR)/defs.vh $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
+foo_tb: $(AUTOGEN_DIR)/mmap.vh $(AUTOGEN_DIR)/defs.vh $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
 	$(VERILOG_TB)
 
 foo.vcd: foo_tb
