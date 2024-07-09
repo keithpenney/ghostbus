@@ -24,6 +24,7 @@ module foo #(
 reg [3:0] foo_reg=0;                            // Non-host-accessible register
 
 (* ghostbus_ha *) reg [GW-1:0] foo_ha_reg=8'h42;  // Host-accessible register (will be auto-decoded)
+(* ghostbus_as="foo_ha_reg" *) reg foo_ha_reg_strobe;  // Associated write-strobe; will strobe high when foo_ha_reg is written to
 
 (* ghostbus_addr='h40 *)
 reg [3:0] foo_ram [0:RD-1];                        // Host-accessible RAM with pre-defined relative address (0x40)

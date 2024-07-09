@@ -22,6 +22,9 @@ module baz #(
 `endif
 );
 
+// Interesting demo: Enabling this doubles the size of the memory map!
+//(* ghostbus_ha *) reg [7:0] baz_reg=100;
+
 `ifdef GHOSTBUS_LIVE
 `GHOSTBUS_baz
 `else

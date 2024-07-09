@@ -45,7 +45,7 @@ magic: $(AUTOGEN_DIR)/defs.vh
 
 #VFLAGS_foo_tb=-DMANUAL_TEST
 VFLAGS_foo_tb=-DGHOSTBUS_LIVE
-foo_tb: $(AUTOGEN_DIR)/mmap.vh $(AUTOGEN_DIR)/defs.vh $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
+foo_tb:  $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES) $(AUTOGEN_DIR)/mmap.vh $(AUTOGEN_DIR)/defs.vh
 	$(VERILOG_TB)
 
 foo.vcd: foo_tb

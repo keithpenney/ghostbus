@@ -42,15 +42,18 @@ automatically as well, though that competes with some of the goals below.
 ```
 
 ## Status
+__TODO__:
+  1. Work out how to manually hook up to the ghostbus
+  2. Support associated _read_ strobes (pulse high on read of a register)
+
+__240709__: Knocked some stuff off the TODO list
+  DONE: Develop a testbench that will automatically check the memory map (i.e. write and readback)
+  DONE: Handle strobes
+  DONE: Handle associated (write) strobes
+  DONE: Handle read-only registers
+
 __240705__: Eliminated some hard-coding in the working demo.
   * Parsing of `(* ghostbus_port=... *)` attributes implemented (not mandated until `getBusDict()`)
-
-__TODO__:
-  0. Develop a testbench that will automatically check the memory map (i.e. write and readback)
-  1. Handle strobes
-  2. Handle associated strobes
-  3. Handle read-only registers
-  4. Work out how to manually hook up to the ghostbus
 
 __240702__: I have a working demo which still uses some hard-coded values.  I still need the following:
   1. Parse the testbench to grab the `(* ghostbus_port=... *)` attributes so we can auto-infer those port
