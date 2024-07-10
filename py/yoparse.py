@@ -147,16 +147,13 @@ def _findRangeStr(snippet, offset):
     grouplevel = 0
     endix = None
     rangestr = None
+    keywords = ('reg', 'wire', 'input', 'output', 'inout')
+    maxlen = max([len(kw) for kw in keywords])
     for n in range(offset, -1, -1):
         char = snippet[n]
         # Room for whitespace+'r'+'e'+'g'+whitespace
-        slc = snippet[n:n+5].replace('\n', ' ').replace('.', ' ')
-        if slc in (" reg ", " wire "):
-            rangestr = "0:0"
-            break
-        # Handle the oddball case where 'snippet' starts with the keyword
-        # 'reg' or 'wire'
-        elif (n == 0) and (slc[:4] in ("reg ", "wire ")):
+        slc = snippet[n:n+maxlen].replace('\n', ' ').replace('.', ' ')
+        if slc.strip() in keywords:
             rangestr = "0:0"
             break
         elif char == ']': # walking backwards
@@ -225,40 +222,94 @@ class VParser():
         self._dict = json.loads(jsfile)
         # Separate attributes for this module
         mod = self._dict.get("modules", None)
+        self.params = {}
         if mod is not None:
             # Get first (should be only) module
             name,mdict = [x for x in mod.items()][0]
             self.modname = name
+            self.elaboratePorts()
             self.ports = mdict.get('ports', None)
+            paramdict = mdict.get("parameter_default_values", None)
+            if paramdict is not None:
+                dd = {}
+                for paramname, paramstr in paramdict.items():
+                    try:
+                        pval = int(paramstr, 2)
+                    except ValueError:
+                        # Handle the oddball value where the paramstr is literally '""'
+                        if len(paramstr.strip()) == 0:
+                            paramstr = '""'
+                        pval = paramstr
+                    dd[paramname] = pval
+                self.params[name] = dd
         else:
             self.modname = None
-            self.ports = []
+            self.ports = {}
         return True
 
-    def getPorts(self):
+    def elaboratePorts(self):
+        """Capture the unparsed range string for all ports of all modules"""
+        mod = self._dict.get("modules", None)
+        if mod is not None:
+            for name, mdict in mod.items():
+                ports = mdict.get("ports", None)
+                nets = mdict.get("netnames", None)
+                for portname in ports.keys():
+                    _range = None
+                    net_dict = nets[portname]
+                    if net_dict is not None:
+                        attr_dict = net_dict.get("attributes", None)
+                        if attr_dict is not None:
+                            src = attr_dict.get("src", None)
+                            if src is not None:
+                                _range = getUnparsedWidthRange(src)
+                    ports[portname]['range'] = _range
+        return
+
+    def getPorts(self, parsed=True):
         """Return list of (0, name, dirstr, rangeStart, rangeEnd), one for
         each port in the parsed module. The first '0' in the list is for compatibility
         with the non-Yosys parser which captures inline macros as well.  These need to
         be inserted at the proper location so they are included in the ports list (with
         non-zero as the first entry).  The Yosys parser acts on the preprocessed source
-        so all macros are already resolved."""
+        so all macros are already resolved.
+        If 'parsed', rangeStart and rangeEnd are integers (resolved expressions).
+        Otherwise, they are unparsed strings (directly copied from the source code)."""
         ports = []
         for portname,vdict in self.ports.items():
             portdir = vdict.get('direction', 'unknown')
             pbits = vdict.get('bits', [0])
-            pw = len(pbits)
-            if len(pbits) > 1:
-                rangeStart = len(pbits)-1
-                rangeEnd = 0
+            if parsed:
+                pw = len(pbits)
+                if len(pbits) > 1:
+                    rangeStart = len(pbits)-1
+                    rangeEnd = 0
+                else:
+                    rangeStart = None
+                    rangeEnd = None
             else:
-                rangeStart = None
-                rangeEnd = None
+                _range = vdict['range']
+                if _range is None:
+                    print(f"{portname} _range is None!")
+                    rangeStart = None
+                    rangeEnd = None
+                else:
+                    if _range[0] == '0' and _range[1] == '0':
+                        rangeStart, rangeEnd = (None, None)
+                    else:
+                        rangeStart, rangeEnd = _range[:2]
             ports.append((self.LINETYPE_PORT, portname, portdir, rangeStart, rangeEnd))
         return ports
 
-    def getParams(self):
-        """Yosys parser does not preserve parameters - seems to resolve them to literals."""
-        return None
+    def getParams(self, module=None):
+        """Returns {param_name: default_value, ...}"""
+        if len(self.params) == 0:
+            return {}
+        if module is None:
+            # Just get the first module
+            module = [key for key in self.params.keys()][0]
+        mdict = self.params[module]
+        return mdict
 
     def getDict(self):
         return self._dict
