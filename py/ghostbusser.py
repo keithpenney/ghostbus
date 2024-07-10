@@ -43,7 +43,8 @@ class GhostbusInterface():
         "ADDR",
         "PORT",
         "STROBE",
-        "STROBE_ASC",
+        "STROBE_W",
+        "STROBE_R",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -54,8 +55,10 @@ class GhostbusInterface():
         "ghostbus_port":    tokens.PORT,
         "ghostbus_addr":    tokens.ADDR,
         "ghostbus_strobe":  tokens.STROBE,
-        "ghostbus_associated_strobe": tokens.STROBE_ASC,
-        "ghostbus_as":      tokens.STROBE_ASC,
+        "ghostbus_write_strobe": tokens.STROBE_W,
+        "ghostbus_ws":      tokens.STROBE_W,
+        "ghostbus_read_strobe": tokens.STROBE_R,
+        "ghostbus_rs": tokens.STROBE_R,
     }
     @staticmethod
     def handle_token_ha(val):
@@ -86,7 +89,8 @@ class GhostbusInterface():
         tokens.ADDR: lambda x: int(x, 2),
         tokens.PORT: lambda x: str(x),
         tokens.STROBE: lambda x: True,
-        tokens.STROBE_ASC: lambda x: str(x),
+        tokens.STROBE_W: lambda x: str(x),
+        tokens.STROBE_R: lambda x: str(x),
     }
 
     @classmethod
@@ -101,8 +105,11 @@ class GhostbusInterface():
             if token is not None:
                 rvals[token] = cls._val_decoders[token](attrval)
                 # Some attributes are implied
-                if token in (cls.tokens.ADDR, cls.tokens.STROBE):
+                if token in (cls.tokens.ADDR, ):
                     rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA](1)
+                elif token in (cls.tokens.STROBE, ):
+                    # Strobes are write-only
+                    rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA]("w")
         return rvals
 
 
@@ -415,11 +422,15 @@ class GhostBusser(VParser):
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
-                    associated_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_ASC, None)
-                    if associated_strobe is not None:
-                        print("                            associated_strobe: {} => {}".format(netname, associated_strobe))
+                    write_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
+                    read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
+                    if write_strobe is not None:
+                        print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
-                        associated_strobes[netname] = associated_strobe
+                        associated_strobes[netname] = (write_strobe, False)
+                    elif read_strobe is not None:
+                        print("                            read_strobe: {} => {}".format(netname, read_strobe))
+                        associated_strobes[netname] = (read_strobe, True)
                     elif access is not None:
                         dw = len(net_dict['bits'])
                         initval = get_value(net_dict['bits'])
@@ -458,12 +469,16 @@ class GhostBusser(VParser):
                             print("created mr label {}".format(mr.label))
                         mr.add(width=aw, ref=mem, addr=addr)
             if mr is not None:
-                for strobe_name, associated_reg in associated_strobes.items():
+                for strobe_name, reg_type in associated_strobes.items():
+                    associated_reg, _read = reg_type
                     # find the "MetaRegister" named 'associated_reg'
                     # Add the strobe as an associated strobe by net name
                     for start, end, register in mr.get_entries():
                         if register.name == associated_reg:
-                            register.associated_strobes.append(strobe_name)
+                            if _read:
+                                register.read_strobes.append(strobe_name)
+                            else:
+                                register.write_strobes.append(strobe_name)
                 ghostmods[mod_hash] = mr
         self._validateBus()
         self._top = top_mod
@@ -601,13 +616,15 @@ class MetaRegister(Register):
         self.depth = ('0', '0')
         self.initval = 0
         self.strobe = False
-        self.associated_strobes = []
+        self.write_strobes = []
+        self.read_strobes = []
 
     def copy(self):
         ref = super().copy()
         ref.initval = self.initval
         ref.strobe = self.strobe
-        ref.associated_strobes = self.associated_strobes
+        ref.write_strobes = self.write_strobes
+        ref.read_strobes = self.read_strobes
         return ref
 
     def _readRangeDepth(self):
@@ -846,7 +863,7 @@ class Decoder():
         csr_writeable = []
         for csr in csrs:
             print("{}.{}: 0x{:x}".format(csr._domain[1], csr.name, csr._domain[0] + csr.base))
-            wa = 1 if (csr.access & Register.WRITE) > 0 else 0
+            wa = 1 if (((csr.access & Register.WRITE) > 0) and not csr.strobe) else 0
             csr_writeable.append(wa)
         cw = flatten_bits(csr_writeable)
         print("RAMs:")
@@ -1145,7 +1162,8 @@ class Decoder():
             ramwrites = "// No rams"
         else:
             ramwrites = _ramwrites
-        _csrwrites, csrdefaults = self.csrWrites()
+        csrdefaults = []
+        _csrwrites, wdefaults = self.csrWrites()
         if len(_csrwrites) == 0:
             csrwrites = "// No CSRs"
         else:
@@ -1160,7 +1178,7 @@ class Decoder():
             ramreads = "// No rams"
         else:
             ramreads = _ramreads
-        _csrreads = self.csrReads()
+        _csrreads, rdefaults = self.csrReads()
         if len(_csrreads) == 0:
             if len(_ramreads) > 0:
                 midend = " else begin"
@@ -1169,6 +1187,8 @@ class Decoder():
             csrreads = _csrreads
         ss = []
         hasclk = False
+        csrdefaults.extend(wdefaults)
+        csrdefaults.extend(rdefaults)
         if len(_ramwrites) > 0 or len(_csrwrites) > 0:
             ss.append(f"always @(posedge {self.bus['clk']}) begin")
             if len(csrdefaults) > 0:
@@ -1205,10 +1225,12 @@ class Decoder():
         for csr in self.csrs:
             if csr.strobe:
                 defaults.append(csr)
-            if len(csr.associated_strobes) > 0:
-                defaults.extend(csr.associated_strobes)
-        ss = ["// CSR writes"]
-        ss.append(f"casez ({self.bus['addr']}[{self.local_aw-1}:0])")
+            if len(csr.write_strobes) > 0:
+                defaults.extend(csr.write_strobes)
+        ss = [
+            "// CSR writes",
+            f"casez ({self.bus['addr']}[{self.local_aw-1}:0])",
+        ]
         writes = 0
         for n in range(len(self.csrs)):
             csr = self.csrs[n]
@@ -1216,9 +1238,9 @@ class Decoder():
                 # Skip read-only registers
                 continue
             writes += 1
-            if len(csr.associated_strobes) == 0:
+            if len(csr.write_strobes) == 0:
                 if csr.strobe:
-                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {vhex(0, strobe.dw)};")
+                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {vhex(1, csr.dw)};")
                 else:
                     ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {self.bus['dout']}[{csr.range[0]}:0];")
             else:
@@ -1227,7 +1249,7 @@ class Decoder():
                     ss.append(f"    {csr.name} <= {vhex(0, strobe.dw)};")
                 else:
                     ss.append(f"    {csr.name} <= {self.bus['dout']}[{csr.range[0]}:0];")
-                for strobe_name in csr.associated_strobes:
+                for strobe_name in csr.write_strobes:
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
         ss.append("endcase")
@@ -1237,7 +1259,12 @@ class Decoder():
 
     def csrReads(self):
         if len(self.csrs) == 0:
-            return ""
+            return ("", [])
+        # Default-assign any strobes
+        defaults = []
+        for csr in self.csrs:
+            if len(csr.read_strobes) > 0:
+                defaults.extend(csr.read_strobes)
         ss = [
             "// CSR reads",
             f"casez ({self.bus['addr']}[{self.local_aw-1}:0])",
@@ -1248,12 +1275,20 @@ class Decoder():
             if (csr.access & Register.READ) == 0:
                 # Skip write-only registers
                 continue
+            if len(csr.read_strobes) == 0:
+                ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.bus['dw']}-{csr.range[0]}+1{{1'b0}}}}, {csr.name}}};")
+            else:
+                ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
+                ss.append(f"    local_din <= {{{{{self.bus['dw']}-{csr.range[0]}+1{{1'b0}}}}, {csr.name}}};")
+                for strobe_name in csr.read_strobes:
+                    ss.append(f"    {strobe_name} <= 1'b1;")
+                ss.append(f"  end")
             reads += 1
-            ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.bus['dw']}-{csr.range[0]}+1{{1'b0}}}}, {csr.name}}};")
+        ss.append(f"  default: local_din <= {vhex(0, self.bus['dw'])};")
         ss.append("endcase")
         if reads == 0:
-            return ""
-        return "\n".join(ss)
+            return ("", [])
+        return ("\n".join(ss), defaults)
 
     def ramWrites(self):
         if len(self.rams) == 0:

@@ -44,13 +44,13 @@ automatically as well, though that competes with some of the goals below.
 ## Status
 __TODO__:
   1. Work out how to manually hook up to the ghostbus
-  2. Support associated _read_ strobes (pulse high on read of a register)
 
 __240709__: Knocked some stuff off the TODO list
   DONE: Develop a testbench that will automatically check the memory map (i.e. write and readback)
   DONE: Handle strobes
   DONE: Handle associated (write) strobes
   DONE: Handle read-only registers
+  DONE: Support associated _read_ strobes (pulse high on read of a register)
 
 __240705__: Eliminated some hard-coding in the working demo.
   * Parsing of `(* ghostbus_port=... *)` attributes implemented (not mandated until `getBusDict()`)
