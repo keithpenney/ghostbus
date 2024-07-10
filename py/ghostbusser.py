@@ -87,10 +87,17 @@ class GhostbusInterface():
                     access |= Register.READ
         return access
 
+    @staticmethod
+    def split_strs(val):
+        if hasattr(val, 'split'):
+            if ',' in val:
+                return [x.strip() for x in val.split(',')]
+        return (val,)
+
     _val_decoders = {
         tokens.HA: handle_token_ha,
         tokens.ADDR: lambda x: int(x, 2),
-        tokens.PORT: lambda x: str(x),
+        tokens.PORT: split_strs,
         tokens.STROBE: lambda x: True,
         tokens.STROBE_W: lambda x: str(x),
         tokens.STROBE_R: lambda x: str(x),
@@ -401,8 +408,8 @@ class GhostBusser(VParser):
                 for netname, net_dict in netnames.items():
                     attr_dict = net_dict["attributes"]
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                    for token, val in token_dict.items():
-                        print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
+                    # for token, val in token_dict.items():
+                    #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
@@ -422,24 +429,24 @@ class GhostBusser(VParser):
                         reg = MetaRegister(name=netname, dw=dw, meta=source, access=access)
                         reg.initval = initval
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
-                        print("{} gets initval 0x{:x}".format(netname, initval))
+                        # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
                             module_name = get_modname(mod_hash)
                             mr = MemoryRegion(label=module_name, hierarchy=(module_name,))
-                            print("created mr label {}".format(mr.label))
+                            # print("created mr label {}".format(mr.label))
                         mr.add(width=0, ref=reg, addr=addr)
-                    port = token_dict.get(GhostbusInterface.tokens.PORT, None)
-                    if port is not None:
+                    ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
+                    if ports is not None:
                         dw = len(net_dict['bits'])
-                        self._handleBus(netname, port, dw, source)
+                        self._handleBus(netname, ports, dw, source)
             # Check for RAMs
             memories = mod_dict.get("memories")
             if memories is not None:
                 for memname, mem_dict in memories.items():
                     attr_dict = mem_dict["attributes"]
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                    for token, val in token_dict.items():
-                        print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
+                    # for token, val in token_dict.items():
+                    #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
                     if access is not None:
@@ -478,7 +485,12 @@ class GhostBusser(VParser):
         self.memory_map.print(4)
         return ghostmods
 
-    def _handleBus(self, netname, val, dw, source):
+    def _handleBus(self, netname, vals, dw, source):
+        for val in vals:
+            self._handleBusVal(netname, val, dw, source)
+        return
+
+    def _handleBusVal(self, netname, val, dw, source):
         val = val.strip().lower()
         val_map = {}
         for key, data in self._bus_info.items():
@@ -684,6 +696,47 @@ class Decoder():
             self.no_local = False
         self.local_aw = bits(self.max_local)
         self._def_file = "defs.vh"
+        self.check_bus()
+
+    def check_bus(self):
+        """If any strobes exist, verify the bus has the appropriate strobe signal
+        defined."""
+        for csr in self.csrs:
+            if csr.strobe or (len(csr.write_strobes) > 0):
+                if self.bus["wstb"] is None:
+                    if csr.strobe:
+                        strobe_name = csr.name
+                    else:
+                        strobe_name = csr.write_strobes[0]
+                    serr = f"\n{strobe_name} requires a 'wstb' signal in the ghostbus. " + \
+                            "Please define it with the other bus signals, e.g.:\n" + \
+                            "  (* ghostbus_port='wstb' *) wire wstb;\n" + \
+                            "If your write-enable signal is also a strobe (1-cycle long), " + \
+                            "you can define it to also be the 'wstb' as in e.g.:\n" + \
+                            "  (* ghostbus_port='wstb, we' *) wire wen;"
+                    raise Exception(serr)
+            if len(csr.read_strobes) > 0:
+                if self.bus["rstb"] is None:
+                    strobe_name = csr.read_strobes[0]
+                    serr = f"\n{strobe_name} requires a 'rstb' signal in the ghostbus. " + \
+                            "Please define it with the other bus signals, e.g.:\n" + \
+                            "  (* ghostbus_port='rstb' *) wire rstb;\n" + \
+                            "If your read-enable signal is also a strobe (1-cycle long), " + \
+                            "you can define it to also be the 'rstb' as in e.g.:\n" + \
+                            "  (* ghostbus_port='rstb, re' *) wire ren;"
+                    raise Exception(serr)
+        # Make some decoding definitions here to save checks later
+        if (self.bus['wstb'] is None) or (self.bus['we'] == self.bus['wstb']):
+            self._bus_we = self.bus['we']
+        else:
+            self._bus_we = f"{self.bus['we']} & {self.bus['wstb']}"
+        if self.bus['re'] is not None:
+            self._asynch_read = False
+            self._bus_re = self.bus['re']
+        else:
+            self._bus_re = f"~{self.bus['we']}"
+            self._asynch_read = True
+        return
 
     def _clearDef(self, dest_dir):
         """Start with empty macro definitions file"""
@@ -791,6 +844,7 @@ class Decoder():
         #ss.append("  end")
         ss.append("end")
         # GB tasks
+        # TODO - Do it right depending on what bus signals are defined
         tasks = (
             "// Bus transaction tasks",
             "reg test_pass=1'b1;",
@@ -799,10 +853,12 @@ class Decoder():
             "`endif",
             f"task GB_WRITE (input [{aw-1}:0] addr, input [{dw-1}:0] data);",
             "  begin",
-            f"    {bus['addr']} = addr;",
+            f"    @(posedge {bus['clk']}) {bus['addr']} = addr;",
             f"    {bus['dout']} = data;",
             f"    {bus['we']} = 1'b1;",
-            "    #TICK;",
+            f"    {bus['wstb']} = 1'b1;" if (bus['wstb'] is not None and bus['wstb'] != bus['we']) else "",
+            f"    @(posedge {bus['clk']}) {bus['we']} = 1'b0;",
+            f"    {bus['wstb']} = 1'b0;" if (bus['wstb'] is not None and bus['wstb'] != bus['we']) else "",
             "  end",
             "endtask",
 
@@ -811,10 +867,15 @@ class Decoder():
             "`endif",
             f"task GB_READ_CHECK (input [{aw-1}:0] addr, input [{dw-1}:0] checkval);",
             "  begin",
-            f"    {bus['addr']} = addr;",
+            f"    @(posedge {bus['clk']}) {bus['addr']} = addr;",
             f"    {bus['dout']} = {vhex(0, dw)};",
             f"    {bus['we']} = 1'b0;",
+            f"    {bus['re']} = 1'b1;" if bus['re'] is not None else "",
             "    #(`RDDELAY*TICK);",
+            f"    @(posedge {bus['clk']});",
+            f"    {bus['rstb']} = 1'b1;" if bus['rstb'] is not None else "",
+            f"    @(posedge {bus['clk']}) {bus['rstb']} = 1'b0;" if bus['rstb'] is not None else "",
+            f"    {bus['re']} = 1'b0;" if bus['re'] is not None else "",
             f"    if ({bus['din']} != checkval) begin",
             "       test_pass = 1'b0;",
             "`ifndef YOSYS",
@@ -867,12 +928,13 @@ class Decoder():
             "end",
         )
         ss.extend(stimulus)
+        outs = "\n".join(ss).replace('\n\n', '\n')
         if filename is None:
-            print("\n".join(ss))
+            print("\n".join(outs))
             return
         else:
             with open(filename, 'w') as fd:
-                fd.write("\n".join(ss))
+                fd.write(outs)
         return
 
     def _collectCSRs(self, csrlist):
@@ -940,14 +1002,22 @@ class Decoder():
 
     def GhostbusPorts(self):
         """Generate the necessary ghostbus Verilog port declaration"""
-        ss = (
+        ss = [
+            # Mandatory ports
             "// Ghostbus ports",
             f",input  {self.bus['clk']}",
             f",input  [{self.bus['aw']-1}:0] {self.bus['addr']}",
             f",input  [{self.bus['dw']-1}:0] {self.bus['dout']}",
             f",output [{self.bus['dw']-1}:0] {self.bus['din']}",
             f",input  {self.bus['we']}",
-        )
+        ]
+        # Optional ports
+        if self.bus['wstb'] is not None and self.bus['wstb'] != self.bus['we']:
+            ss.append(f",input  {self.bus['wstb']}")
+        if self.bus['re'] is not None:
+            ss.append(f",input  {self.bus['re']}")
+        if self.bus['rstb'] is not None and self.bus['rstb'] != self.bus['re']:
+            ss.append(f",input  {self.bus['rstb']}")
         return "\n".join(ss)
 
     def GhostbusSubmodMap(self):
@@ -958,13 +1028,24 @@ class Decoder():
         dout = self.bus['dout']
         din = self.bus['din']
         we = self.bus['we']
-        ss = (
+        wstb = self.bus['wstb']
+        re = self.bus['re']
+        rstb = self.bus['rstb']
+        ss = [
+            # Mandatory ports
             f",.{clk}({clk})    // input",
             f",.{addr}({addr}_{self.inst})  // input [{self.bus['aw']-1}:0]",
             f",.{dout}({dout})  // input [{self.bus['dw']-1}:0]",
             f",.{din}({din}_{self.inst}) // output [{self.bus['dw']-1}:0]",
             f",.{we}({we}_{self.inst}) // input",
-        )
+        ]
+        # Optional ports
+        if wstb is not None and wstb != we:
+            ss.append(f",.{wstb}({wstb}_{self.inst}) // input")
+        if re is not None:
+            ss.append(f",.{re}({re}_{self.inst}) // input")
+        if rstb is not None and rstb != re:
+            ss.append(f",.{rstb}({rstb}_{self.inst}) // input")
         return "\n".join(ss)
 
     def localInit(self):
@@ -1001,13 +1082,21 @@ class Decoder():
         busaw = self.bus['aw']
         divwidth = busaw - self.aw
         end = base_rel + (1<<self.aw) - 1
-        ss = (
+        ss = [
+            # Mandatory ports
             f"// submodule {self.inst}",
             f"wire [{self.bus['dw']-1}:0] {self.bus['din']}_{self.inst};",
             f"wire en_{self.inst} = {self.bus['addr']}[{busaw-1}:{self.aw}] == {vhex(base_rel>>self.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}",
             f"wire [{busaw-1}:0] {self.bus['addr']}_{self.inst} = {{{vhex(0, divwidth)}, {self.bus['addr']}[{self.aw-1}:0]}}; // address relative to own base (0x0)",
             f"wire {self.bus['we']}_{self.inst}={self.bus['we']} & en_{self.inst};",
-        )
+        ]
+        # Optional ports
+        if self.bus['wstb'] is not None and self.bus['wstb'] != self.bus['we']:
+            ss.append(f"wire {self.bus['wstb']}_{self.inst}={self.bus['wstb']} & en_{self.inst};")
+        if self.bus['re'] is not None:
+            ss.append(f"wire {self.bus['re']}_{self.inst}={self.bus['re']} & en_{self.inst};")
+        if self.bus['rstb'] is not None and self.bus['rstb'] != self.bus['re']:
+            ss.append(f"wire {self.bus['rstb']}_{self.inst}={self.bus['rstb']} & en_{self.inst};")
         return "\n".join(ss)
 
     def dinRouting(self):
@@ -1075,20 +1164,20 @@ class Decoder():
                 else:
                     ss.append(f"  {strobe} <= {vhex(0, 1)};")
             ss.append("  // local writes")
-            ss.append(f"  if (en_local & {self.bus['we']}) begin")
+            ss.append(f"  if (en_local & {self._bus_we}) begin")
             ss.append("    " + ramwrites.replace("\n", "\n    "))
             ss.append("    " + csrwrites.replace("\n", "\n    "))
-            ss.append(f"  end // if (en_local & {self.bus['we']})")
+            ss.append(f"  end // if (en_local & {self._bus_we})")
             hasclk = True
         if len(_ramreads) > 0 or len(_csrreads) > 0:
             if not hasclk:
                 ss.append(f"always @(posedge {self.bus['clk']}) begin")
             ss.append("  // local reads")
-            ss.append(f"  if (en_local & ~{self.bus['we']}) begin")
+            ss.append(f"  if (en_local & {self._bus_re}) begin")
             ss.append("    " + ramreads.replace("\n", "\n    ") + midend)
             ss.append(crindent + csrreads.replace("\n", "\n"+crindent))
             ss.append(extraend)
-            ss.append(f"  end // if (en_local & ~{self.bus['we']})")
+            ss.append(f"  end // if (en_local & {self._bus_re})")
         if hasclk:
             ss.append(f"end // always @(posedge {self.bus['clk']})")
         return "\n".join(ss)
@@ -1237,38 +1326,26 @@ def testWalkDict():
 def doSubcommandLive(args):
     vp = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = vp.get_map()
-    #print(f"len(mods) = {len(mods)}")
-    if False:
-        for mod_hash, memoryregion in mods.items():
-            print(type(memoryregion))
-            #print("mod_hash = {}; type(memoryregion) = {}".format(mod_hash, type(memoryregion)))
-            for start, stop, reg in memoryregion.get_entries():
-                if hasattr(reg, "_readRangeDepth"):
-                    reg._readRangeDepth()
-                    print(f"reg.range = {reg.range}; reg.depth = {reg.depth}")
-    if False:
-        bus = {
-            'clk': 'gb_clk',
-            'addr': 'gb_addr',
-            'din': 'gb_din',
-            'dout': 'gb_dout',
-            'we': 'gb_we',
-            'aw': 12,
-            'dw': 32,
-        }
-    else:
-        bus = vp.getBusDict()
-    dec = Decoder(vp.memory_map, bus)
-    #print(dec.GhostbusDecoding())
-    dec.GhostbusMagic(dest_dir="_auto")
+    bus = vp.getBusDict()
+    try:
+        dec = Decoder(vp.memory_map, bus)
+        #print(dec.GhostbusDecoding())
+        dec.GhostbusMagic(dest_dir="_auto")
+    except Exception as e:
+        print(e)
+        return 1
     return 0
 
 def doSubcommandMap(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = gb.get_map()
     bus = gb.getBusDict()
+    #try:
     dec = Decoder(gb.memory_map, bus)
     dec.ExtraVerilogMemoryMap(args.out_file, bus)
+    #except Exception as e:
+    #    print(e)
+    #    return 1
     return 0
 
 def doGhostbus():
