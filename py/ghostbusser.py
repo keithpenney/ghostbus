@@ -5,7 +5,9 @@
 import math
 import re
 
-from yoparse import VParser, srcParse
+from yoparse import VParser, srcParse, ismodule, get_modname, get_value, \
+                    getUnparsedWidthRange, getUnparsedDepthRange, \
+                    getUnparsedWidthAndDepthRange, getUnparsedWidth
 from memory_map import MemoryRegion, Register, Memory, bits
 
 # When Yosys generates a JSON, it follows this structure:
@@ -24,6 +26,7 @@ from memory_map import MemoryRegion, Register, Memory, bits
 # generating the memory map.
 
 class enum():
+    """A slightly fancy enum"""
     def __init__(self, names, base=0):
         self._strs = {}
         for n in range(len(names)):
@@ -36,8 +39,8 @@ class enum():
     def str(self, val):
         return self._strs[val]
 
+
 class GhostbusInterface():
-    # A fake enum
     _tokens = [
         "HA",
         "ADDR",
@@ -48,17 +51,17 @@ class GhostbusInterface():
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
-        "ghostbus":         tokens.HA,
-        "ghostbus_ha":      tokens.HA,
-        "ghostbus_csr":     tokens.HA,
-        "ghostbus_ram":     tokens.HA,
-        "ghostbus_port":    tokens.PORT,
-        "ghostbus_addr":    tokens.ADDR,
-        "ghostbus_strobe":  tokens.STROBE,
+        "ghostbus":             tokens.HA,
+        "ghostbus_ha":          tokens.HA,
+        "ghostbus_csr":         tokens.HA,
+        "ghostbus_ram":         tokens.HA,
+        "ghostbus_port":        tokens.PORT,
+        "ghostbus_addr":        tokens.ADDR,
+        "ghostbus_strobe":      tokens.STROBE,
         "ghostbus_write_strobe": tokens.STROBE_W,
-        "ghostbus_ws":      tokens.STROBE_W,
+        "ghostbus_ws":          tokens.STROBE_W,
         "ghostbus_read_strobe": tokens.STROBE_R,
-        "ghostbus_rs": tokens.STROBE_R,
+        "ghostbus_rs":          tokens.STROBE_R,
     }
     @staticmethod
     def handle_token_ha(val):
@@ -135,6 +138,7 @@ class ModuleInstance():
     def __setitem__(self, key, value):
         self.instances[key] = value
         return
+
 
 class WalkDict():
     def __init__(self, dd, parent=None, key=None, verbose=False):
@@ -340,54 +344,35 @@ def strDict(_dict, depth=-1):
     return '\n'.join(l)
 
 
-def ismodule(s):
-    restr = "^\$(\w+)\$"
-    _match = re.search(restr, s)
-    if _match:
-        yotype = _match.groups()[0]
-        if yotype == "paramod":
-            # all other yosys magic should be ignored
-            return True
-    else:
-        # If it gets here, it's probably a module
-        return True
-    return False
-
-
-def get_modname(s):
-    restr = r"^\$(\w+)\$([0-9a-fA-F]+)\\(\w+)"
-    _match = re.search(restr, s)
-    if _match:
-        modname = _match.groups()[2]
-        return modname
-    return s
-
 def vhex(num, width):
-    #print("width = {}".format(width))
+    """Verilog hex constant generator"""
     fmt = "{{:0{}x}}".format(width>>2)
-    #print("fmt = {}".format(fmt))
     return "{}'h{}".format(width, fmt.format(num))
 
-def get_value(bitlist):
-    val = 0
-    for n in range(len(bitlist)):
-        if bitlist[n] == '1':
-            val |= 1 << n
-    return val
 
 class GhostBusser(VParser):
+    # Boolean aliases for clarity
+    mandatory = True
+    optional = False
+    _bus_info = {
+        # dict key: ((acceptable names), mandatory?)
+        "clk":      (("clk",),  mandatory),
+        "addr":     (("addr",), mandatory),
+        "din":      (("din",),  mandatory),
+        "dout":     (("dout",), mandatory),
+        "we":       (("we", "wen"), mandatory),
+        "re":       (("re", "ren"), optional),
+        "wstb":     (("wstb", "write_strobe"), optional),
+        "rstb":     (("rstb", "read_strobe"), optional),
+    }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.memory_map = None
-        self._bus = {
-            'clk': None,
-            'addr': None,
-            'din': None,
-            'dout': None,
-            'we': None,
-            'aw': None,
-            'dw': None,
-        }
+        self._bus = {}
+        for key, data in self._bus_info.items():
+            self._bus[key] = None
+        self._bus['aw'] = None
+        self._bus['dw'] = None
 
     def get_map(self):
         ghostmods = {}
@@ -495,15 +480,10 @@ class GhostBusser(VParser):
 
     def _handleBus(self, netname, val, dw, source):
         val = val.strip().lower()
-        val_map = {
-            # Acceptable name, dict key
-            "clk": "clk",
-            "addr": "addr",
-            "din": "din",
-            "dout": "dout",
-            "we": "we",
-            "wen": "we", # alias
-        }
+        val_map = {}
+        for key, data in self._bus_info.items():
+            for alias in data[0]:
+                val_map[alias] = key
         if val not in [key for key in val_map.keys()]:
             err = "Invalid value ({}) for attribute 'ghostbus_port'.".format(val) + \
                   "  Valid values are {}".format([key for key in self._bus.keys()])
@@ -514,7 +494,7 @@ class GhostBusser(VParser):
             # Get width of addr/data
             if val in ("addr", "din", "dout"):
                 widthint = dw
-                widthstr = self._getWidth(source)
+                widthstr = getUnparsedWidth(source)
                 if val == "addr":
                     self._bus["aw"] = (widthint, None)
                     self._bus["aw_str"] = (widthstr, None)
@@ -529,11 +509,13 @@ class GhostBusser(VParser):
         return
 
     def _validateBus(self):
-        if None in [v for v in self._bus.values()]:
-            self._busValid = False
-        else:
-            self._busValid = True
-        return self._busValid
+        _busValid = True
+        for key, data in self._bus_info.items():
+            mandatory = data[1]
+            if mandatory and self._bus[key] is None:
+                _busValid = False
+        self._busValid = _busValid
+        return _busValid
 
     def getBusDict(self):
         if not self._busValid:
@@ -544,21 +526,11 @@ class GhostBusser(VParser):
             raise Exception("\n".join(serr))
         dd = {}
         for key, val in self._bus.items():
-            dd[key] = val[0] # Discarding the "source" part
-        return dd
-
-    @classmethod
-    def _getWidth(cls, source):
-        snippet, offset = MetaRegister._getSnippet(source)
-        if snippet is not None:
-            _rangeStr = MetaRegister._findRangeStr(snippet, offset)
-            split = _rangeStr.split(':')
-            if len(split) > 1:
-                _range = (split[0], split[1])
+            if val is not None:
+                dd[key] = val[0] # Discarding the "source" part
             else:
-                return None
-        # Assume _range[1] is always '0'
-        return "{}+1".format(_range[0])
+                dd[key] = None
+        return dd
 
     def build_modtree(self, dd):
         top = self._top
@@ -604,6 +576,7 @@ class GhostBusser(VParser):
         # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
         return modtree
 
+
 class MetaRegister(Register):
     """This class expands on the Register class by including not just its
     resolved aw/dw, but also the unresolved strings used to declare aw/dw
@@ -632,73 +605,12 @@ class MetaRegister(Register):
             return True
         if self.meta is None:
             return False
-        snippet, offset = self._getSnippet(self.meta)
-        if snippet is not None:
-            self._rangeStr = self._findRangeStr(snippet, offset)
-            split = self._rangeStr.split(':')
-            if len(split) > 1:
-                self.range = (split[0], split[1])
-            else:
-                return False
-        return True
-
-    @classmethod
-    def _getSnippet(cls, yosrc):
-        groups = srcParse(yosrc)
-        if groups is None:
+        _range = getUnparsedWidthRange(self.meta)
+        if _range is not None:
+            self.range = _range
+        else:
             return False
-        filepath, linestart, charstart, lineend, charend = groups
-        snippet = None
-        offset = 0
-        try:
-            line = ""
-            with open(filepath, 'r') as fd:
-                for n in range(linestart):
-                    line = fd.readline()
-                # Rewind up to 512 chars before start of register name
-                tell = fd.tell()
-                # Set tell to the start of the identifier
-                tell -= 1+len(line)-charstart
-                fd.seek(max(0, tell-512))
-                # Read up to 1024 chars
-                snippet = fd.read(1024)
-                offset = min(tell, 512)
-                #namestr = snippet[offset:offset+charend-charstart]
-                #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
-                #    namestr, offset, len(snippet), rangeStr))
-        except OSError:
-            print("Cannot open file {}".format(filepath))
-            return None, None
-        return snippet, offset
-
-    @classmethod
-    def _findRangeStr(cls, snippet, offset):
-        """Start at char offset. Read backwards. Look for ']' to open a range.
-        If we find the keyword 'reg' before the ']', we'll break and decide the
-        reg is 1-bit."""
-        grouplevel = 0
-        endix = None
-        rangestr = None
-        for n in range(offset, -1, -1):
-            char = snippet[n]
-            slc = snippet[n:n+5].replace('\n', ' ').replace('.', ' ') # Room for whitespace+'r'+'e'+'g'+whitespace
-            if slc == " reg ":
-                rangestr = "0:0"
-                break
-            # Handle the oddball case where 'snippet' starts with the keyword 'reg'
-            elif (n == 0) and (slc[:4] == "reg "):
-                rangestr = "0:0"
-                break
-            elif char == ']': # walking backwards
-                if grouplevel == 0:
-                    endix = n
-                grouplevel += 1
-            elif char == '[':
-                grouplevel -= 1
-                if grouplevel == 0:
-                    rangestr = snippet[n+1:endix]
-                    break
-        return rangestr
+        return True
 
     def getInitStr(self, bus):
         # Ghostbus registers are already initialized
@@ -718,53 +630,17 @@ class MetaMemory(Memory):
             return True
         if self.meta is None:
             return False
-        snippet, offset = self._getSnippet(self.meta)
         _pass = True
-        if snippet is not None:
-            self._rangeStr = self._findRangeStr(snippet, offset)
-            split = self._rangeStr.split(':')
-            if len(split) > 1:
-                self.range = (split[0], split[1])
-            else:
-                _pass = False
-            self._depthStr = self._findDepthStr(snippet, offset)
-            split = self._depthStr.split(':')
-            if len(split) > 1:
-                self.depth = (split[0], split[1])
-            else:
-                _pass = False
+        _range, _depth = getUnparsedWidthAndDepthRange(self.meta)
+        if _range is not None:
+            self.range = _range
+        else:
+            _pass = False
+        if _depth is not None:
+            self.depth = _depth
+        else:
+            _pass = False
         return _pass
-
-    @classmethod
-    def _getSnippet(cls, yosrc):
-        return MetaRegister._getSnippet(yosrc)
-
-    @classmethod
-    def _findRangeStr(cls, snippet, offset):
-        return MetaRegister._findRangeStr(snippet, offset)
-
-    @classmethod
-    def _findDepthStr(cls, snippet, offset):
-        """Start at char offset. Read forward. Look for '[' to open a range.
-        If we find a semicolon '[', we'll break and decide the depth is 1.
-        """
-        grouplevel = 0
-        startix = None
-        depthstr = None
-        for n in range(offset, len(snippet)):
-            char = snippet[n]
-            if char == '[':
-                if grouplevel == 0:
-                    startix = n
-                grouplevel += 1
-            elif char == ']':
-                grouplevel -= 1
-                if grouplevel == 0:
-                    depthstr = snippet[startix+1:n]
-                    break
-            elif char == ';':
-                break
-        return depthstr
 
     def getInitStr(self, bus, local_aw=None):
         # localparam FOO_RAM_AW = $clog2(RD);

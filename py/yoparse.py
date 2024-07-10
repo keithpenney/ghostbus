@@ -16,6 +16,184 @@ def srcParse(s):
     filepath, linestart, charstart, lineend, charend = _match.groups()
     return (filepath, int(linestart), int(charstart), int(lineend), int(charend))
 
+
+def ismodule(s):
+    restr = "^\$(\w+)\$"
+    _match = re.search(restr, s)
+    if _match:
+        yotype = _match.groups()[0]
+        if yotype == "paramod":
+            # all other yosys magic should be ignored
+            return True
+    else:
+        # If it gets here, it's probably a module
+        return True
+    return False
+
+
+def get_modname(s):
+    restr = r"^\$(\w+)\$([0-9a-fA-F]+)\\(\w+)"
+    _match = re.search(restr, s)
+    if _match:
+        modname = _match.groups()[2]
+        return modname
+    return s
+
+
+def get_value(bitlist):
+    val = 0
+    for n in range(len(bitlist)):
+        if bitlist[n] == '1':
+            val |= 1 << n
+    return val
+
+
+def getUnparsedWidth(source):
+    """Get the width of a net as a unparsed string (i.e. however it is declared in source)
+    The 'source' arg should come directly from the 'src' attribute of a given net
+    and describes the location in the source code where the net is defined."""
+    _range = getUnparsedWidthRange(source)
+    if _range is not None:
+        # Assume _range[1] is always '0'
+        return "{}+1".format(_range[0])
+    return None
+
+
+def getUnparsedWidthAndDepthRange(source):
+    """A convenience method to do both getUnparsedWidthRange() and
+    getUnparsedDepthRange() with a single file access.
+    Returns (getUnparsedWidthRange(), getUnparsedDepthRange())"""
+    snippet, offset = _getSourceSnippet(source)
+    _ww = _getUnparsedWidthRange(snippet, offset)
+    _dd = _getUnparsedDepthRange(snippet, offset)
+    return (_ww, _dd)
+
+
+def getUnparsedWidthRange(source):
+    """Get the range of a net (wire/reg) as an unparsed string (i.e. however it is
+    declared in source).
+    Returns ('0', '0') if keyword 'wire' or 'reg' is encountered (walking backward)
+    before a range spec, otherwise returns (str range_high, str range_low)."""
+    snippet, offset = _getSourceSnippet(source)
+    return _getUnparsedWidthRange(snippet, offset)
+
+
+def _getUnparsedWidthRange(snippet, offset):
+    _range = None
+    if snippet is not None:
+        _rangeStr = _findRangeStr(snippet, offset)
+        split = _rangeStr.split(':')
+        if len(split) > 1:
+            _range = (split[0], split[1])
+    return _range
+
+
+def getUnparsedDepthRange(source):
+    """Get the depth of a memory (RAM) as an unparsed string (i.e. however it is
+    declared in source).
+    Returns ('0', '0') if a ';' is encountered before a depth spec, otherwise
+    returns (str start, str end)."""
+    snippet, offset = _getSourceSnippet(source)
+    return _getUnparsedDepthRange(snippet, offset)
+
+
+def _getUnparsedDepthRange(snippet, offset):
+    _depth = None
+    if snippet is not None:
+        _depthStr = _findDepthStr(snippet, offset)
+        split = _depthStr.split(':')
+        if len(split) > 1:
+            _depth = (split[0], split[1])
+    return _depth
+
+
+def _getSourceSnippet(yosrc, size=1024):
+    """Get a snippet (string) of source code surrounding a line defined
+    by the Yosys 'src' attribute 'yosrc' of a given net.
+    Returns (str snippet, int offset) where the net name begins 'offset'
+    characters into the string 'snippet'"""
+    groups = srcParse(yosrc)
+    if groups is None:
+        return False
+    filepath, linestart, charstart, lineend, charend = groups
+    snippet = None
+    offset = 0
+    try:
+        line = ""
+        with open(filepath, 'r') as fd:
+            for n in range(linestart):
+                line = fd.readline()
+            # Rewind up to 512 chars before start of register name
+            tell = fd.tell()
+            # Set tell to the start of the identifier
+            tell -= 1+len(line)-charstart
+            fd.seek(max(0, tell-512))
+            # Read up to 1024 chars
+            snippet = fd.read(1024)
+            offset = min(tell, 512)
+            #namestr = snippet[offset:offset+charend-charstart]
+            #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
+            #    namestr, offset, len(snippet), rangeStr))
+    except OSError:
+        print("Cannot open file {}".format(filepath))
+        return None, None
+    return snippet, offset
+
+
+def _findRangeStr(snippet, offset):
+    """Start at char offset. Read backwards. Look for ']' to open a range.
+    If we find either keyword 'reg' or 'wire' before the ']', we'll break and
+    decide the reg is 1-bit."""
+    grouplevel = 0
+    endix = None
+    rangestr = None
+    for n in range(offset, -1, -1):
+        char = snippet[n]
+        # Room for whitespace+'r'+'e'+'g'+whitespace
+        slc = snippet[n:n+5].replace('\n', ' ').replace('.', ' ')
+        if slc in (" reg ", " wire "):
+            rangestr = "0:0"
+            break
+        # Handle the oddball case where 'snippet' starts with the keyword
+        # 'reg' or 'wire'
+        elif (n == 0) and (slc[:4] in ("reg ", "wire ")):
+            rangestr = "0:0"
+            break
+        elif char == ']': # walking backwards
+            if grouplevel == 0:
+                endix = n
+            grouplevel += 1
+        elif char == '[':
+            grouplevel -= 1
+            if grouplevel == 0:
+                rangestr = snippet[n+1:endix]
+                break
+    return rangestr
+
+
+def _findDepthStr(snippet, offset):
+    """Start at char offset. Read forward. Look for '[' to open a range.
+    If we find a semicolon '[', we'll break and decide the depth is 1.
+    """
+    grouplevel = 0
+    startix = None
+    depthstr = None
+    for n in range(offset, len(snippet)):
+        char = snippet[n]
+        if char == '[':
+            if grouplevel == 0:
+                startix = n
+            grouplevel += 1
+        elif char == ']':
+            grouplevel -= 1
+            if grouplevel == 0:
+                depthstr = snippet[startix+1:n]
+                break
+        elif char == ';':
+            break
+    return depthstr
+
+
 class VParser():
     # Helper values
     LINETYPE_PARAM = 0
