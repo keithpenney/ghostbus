@@ -104,6 +104,7 @@ class GhostbusInterface():
         tokens.STROBE: lambda x: True,
         tokens.STROBE_W: lambda x: str(x),
         tokens.STROBE_R: lambda x: str(x),
+        tokens.EXTERNAL: split_strs,
     }
 
     @classmethod
@@ -372,7 +373,7 @@ class GhostBusser(VParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._empty_bus = {}
-        for key, data in self._bus_info.keys():
+        for key, data in self._bus_info.items():
             self._empty_bus[key] = None
         self.memory_map = None
         self._bus = self._empty_bus.copy()
@@ -385,9 +386,11 @@ class GhostBusser(VParser):
         modtree = {}
         top_mod = None
         top_dict = self._dict["modules"]
+        handledExtModules = []
         for module, mod_dict in top_dict.items():
             associated_strobes = {}
             mod_hash = module
+            module_name = get_modname(mod_hash)
             if not hasattr(mod_dict, "items"):
                 continue
             for attr in mod_dict["attributes"]:
@@ -431,12 +434,13 @@ class GhostBusser(VParser):
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
-                            module_name = get_modname(mod_hash)
                             mr = MemoryRegion(label=module_name, hierarchy=(module_name,))
                             # print("created mr label {}".format(mr.label))
                         mr.add(width=0, ref=reg, addr=addr)
                     elif exts is not None:
-                        self._handleExt(module, netname, exts, dw, source)
+                        dw = len(net_dict['bits'])
+                        if module_name not in handledExtModules:
+                            self._handleExt(module_name, netname, exts, dw, source)
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
                     if ports is not None:
                         dw = len(net_dict['bits'])
@@ -474,8 +478,10 @@ class GhostBusser(VParser):
                             else:
                                 register.write_strobes.append(strobe_name)
                 ghostmods[mod_hash] = mr
-        self._bus_valid = self._validateBus(self._bus)
+            handledExtModules.append(module_name)
+        self._busValid = self._validateBus(self._bus)
         self._top = top_mod
+        self._resolveExt(ghostmods)
         #print_dict(modtree)
         modtree = self.build_modtree(modtree)
         #print("===============================================")
@@ -527,72 +533,106 @@ class GhostBusser(VParser):
             self._ext_dict[module] = []
         portnames = []
         instnames = []
-        if ',' in vals:
-            portinst = [x.strip() for x in vals.split(',')]
-            for val in portinst:
+        allowed_ports = [key for key in self._bus_info.keys()]
+        if len(vals) > 1:
+            for val in vals:
                 if val in self._bus_info.keys():
                     portnames.append(val)
                 else:
-                    instnames.append(val)
+                    if val not in instnames:
+                        instnames.append(val)
         else:
-            val = vals
-            if val in self._bus_info.keys():
+            val = vals[0]
+            if val in allowed_ports:
                 # It's a port name
                 portnames.append(val)
             else:
                 # Assume it's an inst name
-                instnames.append(val)
-        if len(instnames) > 0:
+                if val not in instnames:
+                    instnames.append(val)
+        if len(instnames) > 1:
             if 'dout' in portnames:
                 serr = "The 'dout' vector cannot be shared between multiple instances " + \
                       f"({instnames}). See: {source}"
-                raise Exception()
+                raise Exception(serr)
+        # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
         self._ext_dict[module].append((netname, dw, portnames, instnames, source))
         return
 
-    def _resolveExt(self):
-        self._ext_modules = {}
-        for module, data in self._ext_dict:
-            busses = = self._resolveExtModule(module, data)
-            self._ext_modules[module] = []
+    def _getRefByAttr(self, name, attr):
+        for start, stop, ref in self.memory_map.get_entries():
+            if hasattr(ref, attr):
+                item = getattr(ref, attr)
+                if name == getattr(ref, attr):
+                    return ref
+        return None
+
+    def _getRefByName(self, name):
+        return self._getRefByAttr(name, 'name')
+
+    def _getRefByLabel(self, label):
+        return self._getRefByAttr(label, 'label')
+
+    def _resolveExt(self, ghostmods):
+        #self._ext_modules = {}
+        ghostbus = self.getBusDict()
+        for module, data in self._ext_dict.items():
+            busses = self._resolveExtModule(module, data)
+            #self._ext_modules[module] = []
             for instname, bus in busses.items():
-                extinst = ExternalModule(instname, ghostbus=self._bus, extbus=bus)
-                self._ext_modules[module].append(extinst)
+                extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
+                #self._ext_modules[module].append(extinst)
+                # TODO Now I need to find the MemoryRegion object associated
+                # with the module then add this to the region
+                added = False
+                for mod_hash, mr in ghostmods.items():
+                    if mr.label == module:
+                        mr.add(width=bus['aw'], ref=extinst, addr=None)
+                        added = True
+                if not added:
+                    serr = f"Ext module somehow references a non-existant module {module}?"
+                    raise Exception(serr)
         return
 
     def _resolveExtModule(self, module, data):
         ext_advice = "If there's only a " + \
                     "single external instance in this module, you must label at " + \
                     "least one net with the instance name, e.g.:\n" + \
-                    '  (* ghostbus_ext="inst_name, clk" *) wire ext_clk;' + \
+                    '  (* ghostbus_ext="inst_name, clk" *) wire ext_clk;\n' + \
                     "If there is more than one external instance in this module, " + \
                     "you need to include the instance in the attribute value for " + \
                     "each net in the bus (e.g. 'clk', 'addr', 'din', 'dout', 'we')."
         module_instnames = []
         for datum in data:
             netname, dw, portnames, instnames, source = datum
-            module_instnames.extend(instnames)
+            for instname in instnames:
+                if instname not in module_instnames:
+                    module_instnames.append(instname)
         inst_err = False
         busses = {}
+        universal_inst = None
+        if len(module_instnames) == 1:
+            universal_inst = module_instnames[0]
         if len(module_instnames) == 0:
             inst_err = True
-        elif len(module_instnames) == 1:
-            instname = module_instnames[0]
-            bus = self._empty_bus.copy()
-            # Every net gets the same instname
-            for datum in data:
-                netname, dw, portnames, instnames, source = datum
-                for portname in portnames:
-                    bus[portname] = (netname, dw, source)
-            busses[instname] = bus
         else:
+            # print(f"len(module_instnames) = {len(module_instnames)}")
             for instname in module_instnames:
-                bus = self._empty_bus.copy()
+                bus = busses.get(instname, None)
+                if bus is None:
+                    bus = self._empty_bus.copy()
+                    bus['aw'] = None
+                    bus['dw'] = None
+                # print(f"len(data) = {len(data)}")
                 for datum in data:
+                    # print(f"datum = {datum}")
                     netname, dw, portnames, instnames, source = datum
+                    if len(instnames) == 0 and universal_inst is not None:
+                        instnames.append(universal_inst)
                     for net_instname in instnames:
                         if net_instname == instname:
                             for portname in portnames:
+                                # print(f"FLARK instname = {instname}, netname = {netname}, portname = {portname}")
                                 if bus[portname] is not None:
                                     inst_err = True
                                     existing_source = bus[portname][2]
@@ -601,7 +641,7 @@ class GhostBusser(VParser):
                                            f"second at {source}.\n" + ext_advice
                                     raise Exception(serr)
                                 else:
-                                    bus[portname] = (netname, dw, source)
+                                    bus[portname] = (netname, source)
                                 if portname in ('din', 'dout'):
                                     if bus['dw'] is not None and bus['dw'] != dw:
                                         if portname == 'din':
@@ -615,9 +655,13 @@ class GhostBusser(VParser):
                                                f" associated with inst {instname} " +\
                                                f"of module {module}"
                                         raise Exception(serr)
+                                    # Get the 'dw_str' as well
+                                    bus['dw_str'] = getUnparsedWidthRange(source)
                                     bus['dw'] = dw
                                 elif portname == 'addr':
-                                    bus['aw'] = aw
+                                    # Get the 'aw_str' as well
+                                    bus['aw_str'] = getUnparsedWidthRange(source)
+                                    bus['aw'] = dw
                 busses[instname] = bus
         if inst_err:
             serr = "No instance referenced for external bus." + ext_advice
@@ -631,7 +675,7 @@ class GhostBusser(VParser):
                         required_nets.append(key)
                 serr = f"The external bus for instance {instname} in module " + \
                        f"{module} is not fully specified. Please instantiate " + \
-                       f"all nets of the bus: {required_nets}." + 
+                       f"all nets of the bus: {required_nets}." + ext_advice
                 raise Exception(serr)
         return busses
 
@@ -784,10 +828,56 @@ class MetaMemory(Memory):
 
 class ExternalModule():
     def __init__(self, name, ghostbus, extbus):
-        print("Next external module: {name}")
+        print(f"New external module: {name}")
+        if extbus['aw'] > ghostbus['aw']:
+            serr = f"{name} external bus has greater address width {extbus['aw']}" + \
+                   f" than the ghostbus {ghostbus['aw']}"
+            raise Exception(serr)
+        if extbus['dw'] > ghostbus['dw']:
+            serr = f"{name} external bus has greater data width {extbus['dw']}" + \
+                   f" than the ghostbus {ghostbus['dw']}"
+            raise Exception(serr)
         self.name = name
         self.ghostbus = ghostbus
         self.extbus = extbus
+
+    def getDoutPort(self):
+        return self.extbus['dout'][0]
+
+    @property
+    def dw(self):
+        return self.extbus['dw']
+
+    @property
+    def aw(self):
+        return self.extbus['aw']
+
+    def initStr(self, base_rel):
+        gbaw = self.ghostbus['aw']
+        divwidth = gbaw - self.aw
+        end = base_rel + (1<<self.aw) - 1
+        return f"wire en_{self.name} = {self.ghostbus['addr']}[{gbaw-1}:{self.aw}] == {vhex(base_rel>>self.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
+
+    def getAssignment(self):
+        # TODO - This is localbus-specific
+        ss = []
+        for portname, data in self.extbus.items():
+            if portname in ('aw', 'dw', 'aw_str', 'dw_str', 'dout'):
+                # Skipping 'dout' as well since that maps to the din mux
+                continue
+            if data is None:
+                continue
+            gb_port = self.ghostbus[portname]
+            ext_port = data[0]
+            if portname == 'din':
+                _s, _e = self.extbus['dw_str']
+                ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+            elif portname == 'addr':
+                _s, _e = self.extbus['aw_str']
+                ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+            else:
+                ss.append(f"assign {ext_port} = {gb_port};")
+        return "\n".join(ss)
 
 
 def testWalkDict():
@@ -827,7 +917,7 @@ def doSubcommandLive(args):
     mods = gb.get_map()
     bus = gb.getBusDict()
     #try:
-    dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory)
+    dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
     #print(dec.GhostbusDecoding())
     dec.GhostbusMagic(dest_dir="_auto")
     #except Exception as e:
@@ -840,7 +930,7 @@ def doSubcommandMap(args):
     mods = gb.get_map()
     bus = gb.getBusDict()
     #try:
-    dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory)
+    dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
     dec.ExtraVerilogMemoryMap(args.out_file, bus)
     #except Exception as e:
     #    print(e)

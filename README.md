@@ -43,7 +43,9 @@ automatically as well, though that competes with some of the goals below.
 
 ## Status
 __TODO__:
-  1. Work out how to manually hook up to the ghostbus
+  1. Build a proper test case and test on hardware
+
+__240711__: Got a system for hooking up an external module to the ghostbus.  Need to find a way to test it.
 
 __240709__: Knocked some stuff off the TODO list
   DONE: Develop a testbench that will automatically check the memory map (i.e. write and readback)
