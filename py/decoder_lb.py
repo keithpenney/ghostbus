@@ -1,11 +1,193 @@
 # Ghostbus localbus-style decoder logic
 
 from memory_map import Register, MemoryRegion, bits
+from gbexception import GhostbusException
+
+def strDict(_dict, depth=-1):
+    def _strToDepth(_dict, depth=0, indent=0):
+        """RECURSIVE"""
+        if depth == 0:
+            return []
+        l = []
+        sindent = " "*indent
+        for key, val in _dict.items():
+            if hasattr(val, 'keys'):
+                l.append(f"{sindent}{key} : dict size {len(val)}")
+                l.extend(_strToDepth(val, depth-1, indent+2))
+            else:
+                l.append(f"{sindent}{key} : {val}")
+        return l
+    l = []
+    l.extend(_strToDepth(_dict, depth, indent=2))
+    return '\n'.join(l)
+
 
 def vhex(num, width):
     """Verilog hex constant generator"""
     fmt = "{{:0{}x}}".format(width>>2)
     return "{}'h{}".format(width, fmt.format(num))
+
+class BusLB():
+    # Boolean aliases for clarity
+    mandatory = True
+    optional = False
+    # Directions (host-centric)
+    _input = 0
+    _output = 1
+    _inout = 2
+    _clk = 3
+    _bus_info = {
+        # dict key: ((alternate names), mandatory?, port direction)
+        "clk":      ((),  mandatory, _clk),
+        "addr":     ((), mandatory, _output),
+        "din":      (("rdata",),  mandatory, _input),
+        "dout":     (("wdata",), mandatory, _output),
+        "we":       (("wen",), mandatory, _output),
+        "re":       (("ren",), optional, _output),
+        "wstb":     (("write_strobe",), optional, _output),
+        "rstb":     (("read_strobe",), optional, _output),
+    }
+    # Make a map of alias-to-value
+    _alias_map = {}
+    for key, data in _bus_info.items():
+        # Include the 'default' keys (non-alias)
+        _alias_map[key] = key
+        for alias in data[0]:
+            # Add the alias keys as well
+            _alias_map[alias] = key
+    # A list of aliases for convenience
+    _alias_keys = [key for key in _alias_map.keys()]
+    # Derived parameters
+    _derived = {
+        # Parameter: ports that need to agree
+        'aw': ("addr",),
+        'dw': ("din", "dout"),
+    }
+
+    def __init__(self):
+        self._bus = {}
+        for key, data in self._bus_info.items():
+            self._bus[key] = None
+        # Add derived parameters
+        for key in self._derived.keys():
+            self._bus[key] = None
+        # A few more bespoke parameters (see self._set_width)
+        self._bus['aw_str'] = None
+        self._bus['dw_str'] = None
+        # Is this a fully-defined bus? See self.validate
+        self._valid = False
+
+    def _get_by_direction(self, _dirs):
+        dd = {}
+        for key, data in self._bus_info.items():
+            if data[2] in _dirs:
+                if self._bus[key] is not None:
+                    dd[key] = self._bus[key][0]
+                else:
+                    dd[key] = None
+        return dd
+
+    def inputs(self):
+        return self._get_by_direction((self._input,))
+
+    def outputs(self):
+        return self._get_by_direction((self._output,))
+
+    def outputs_and_clock(self):
+        return self._get_by_direction((self._output, self._clk))
+
+    def get_range(self, portname):
+        for key, value in self._derived.items():
+            if portname in value:
+                _range = self._bus.get(key+"_range", None)
+                if _range is not None:
+                    return _range[0]
+        return None
+
+    def get_width(self, portname):
+        for key, value in self._derived.items():
+            if portname in value and hasattr(self, key+"_str"):
+                return getattr(self, key+"_str")
+        return None
+
+    def __getitem__(self, key):
+        return self._bus.__getitem__(key)[0]
+
+    def get_source(self, key):
+        return self._bus.__getitem__(key)[1]
+
+    @property
+    def aw(self):
+        _aw = self._bus['aw']
+        if _aw is not None:
+            return _aw[0]
+        return None
+
+    @property
+    def dw(self):
+        _dw = self._bus['dw']
+        if _dw is not None:
+            return _dw[0]
+        return None
+
+    def _validate_portname(self, name):
+        if name not in self._alias_keys:
+            err = "Invalid value ({}) for attribute 'ghostbus_port'.".format(name) + \
+                  "  Valid values are {}".format(self._alias_keys)
+            raise GhostbusException(err)
+        return self._alias_map[name]
+
+    def set_port(self, portname, netname, portwidth=1, rangestr=None, source=None):
+        portname = self._validate_portname(portname)
+        busval = self._bus[portname]
+        if busval is None:
+            self._bus[portname] = (netname, source)
+            # Get width of addr/data
+            self._set_width(portname, width=portwidth, rangestr=rangestr)
+        else:
+            raise GhostbusException("'ghostbus_port={}' already defined at {}".format(val.strip().lower(), busval[1]))
+        return
+
+    def _set_width(self, name, width=1, rangestr=None):
+        for wparam, ports in self._derived.items():
+            if name in ports:
+                existing = self._bus[wparam]
+                if existing is not None and existing[0] != width:
+                    raise GhostbusException(f"Ghostbus ports ({ports}) must all be the same width.")
+                self._bus[wparam] = (width, None)
+                self._bus[wparam+"_range"] = (rangestr, None)
+                self._bus[wparam+"_str"] = (rangestr[0] + "+1", None)
+        return
+
+    def validate(self):
+        _valid = True
+        for key, data in self._bus_info.items():
+            mandatory = data[1]
+            if mandatory and self._bus[key] is None:
+                _valid = False
+        self._valid = _valid
+        return _valid
+
+    def get(self):
+        """Get a copy of the bus dict without the 'source' references"""
+        if not self._valid:
+            serr = ["Incomplete bus definition"]
+            missing = False
+            for key, data in self._bus_info.items():
+                mandatory = data[1]
+                if mandatory and self._bus[key] is None:
+                    serr.append("  Missing: {}".format(key))
+                    missing = True
+            if not missing:
+                raise GhostbusException("Invalid bus not missing anything? bus = {}".format(strDict(self._bus)))
+            raise GhostbusException("\n".join(serr))
+        dd = {}
+        for key, val in self._bus.items():
+            if val is not None:
+                dd[key] = val[0] # Discarding the "source" part
+            else:
+                dd[key] = None
+        return dd
 
 
 class DecoderLB():

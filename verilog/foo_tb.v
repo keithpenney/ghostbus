@@ -27,8 +27,8 @@ localparam GB_AW = 13;
 localparam GB_DW = 32;
 (* ghostbus_port="clk" *)       wire gb_clk=clk;
 (* ghostbus_port="addr" *)      reg [GB_AW-1:0] gb_addr=0;
-(* ghostbus_port="dout" *)      reg [GB_DW-1:0] gb_dout=0;
-(* ghostbus_port="din" *)       wire [GB_DW-1:0] gb_din;
+(* ghostbus_port="wdata" *)     reg [GB_DW-1:0] gb_dout=0;
+(* ghostbus_port="rdata" *)     wire [GB_DW-1:0] gb_din;
 (* ghostbus_port="we, wstb" *)  reg gb_we=1'b0;
 (* ghostbus_port="rstb" *)      reg gb_rstb=1'b0; // optional
 

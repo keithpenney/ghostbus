@@ -47,8 +47,8 @@ localparam ext_dw = 8;
 
 (* ghostbus_ext="ext_i, clk" *) wire bus_clk;
 (* ghostbus_ext="ext_i, addr" *) wire [ext_aw-1:0] ext_addr;
-(* ghostbus_ext="ext_i, din" *) wire [ext_dw-1:0] ext_din;
-(* ghostbus_ext="ext_i, dout" *) wire [ext_dw-1:0] ext_dout;
+(* ghostbus_ext="ext_i, wdata" *) wire [ext_dw-1:0] ext_wdata;
+(* ghostbus_ext="ext_i, rdata" *) wire [ext_dw-1:0] ext_rdata;
 (* ghostbus_ext="ext_i, we" *) wire ext_we;
 
 ext #(
@@ -57,8 +57,8 @@ ext #(
 ) ext_i (
   .clk(bus_clk), // input
   .addr(ext_addr), // input [aw-1:0]
-  .din(ext_din), // input [dw-1:0]
-  .dout(ext_dout), // output [dw-1:0]
+  .din(ext_wdata), // input [dw-1:0]
+  .dout(ext_rdata), // output [dw-1:0]
   .we(ext_we) // input
 );
 

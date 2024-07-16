@@ -9,7 +9,8 @@ from yoparse import VParser, srcParse, ismodule, get_modname, get_value, \
                     getUnparsedWidthRange, getUnparsedDepthRange, \
                     getUnparsedWidthAndDepthRange, getUnparsedWidth
 from memory_map import MemoryRegion, Register, Memory, bits
-from decoder_lb import DecoderLB, vhex
+from decoder_lb import DecoderLB, BusLB, vhex
+from gbexception import GhostbusException
 
 # When Yosys generates a JSON, it follows this structure:
 #   modules: {
@@ -323,7 +324,7 @@ class MemoryTree(WalkDict):
     @memory.setter
     def memory(self, value):
         if not isinstance(value, MemoryRegion):
-            raise Exception("MemoryTree can only accept MemoryRegon instances as memory")
+            raise GhostbusException("MemoryTree can only accept MemoryRegon instances as memory")
         self._mr = value
         return
 
@@ -354,7 +355,6 @@ def strDict(_dict, depth=-1):
     l.extend(_strToDepth(_dict, depth, indent=2))
     return '\n'.join(l)
 
-
 class GhostBusser(VParser):
     # Boolean aliases for clarity
     mandatory = True
@@ -363,8 +363,8 @@ class GhostBusser(VParser):
         # dict key: ((acceptable names), mandatory?)
         "clk":      (("clk",),  mandatory),
         "addr":     (("addr",), mandatory),
-        "din":      (("din",),  mandatory),
-        "dout":     (("dout",), mandatory),
+        "din":      (("din", "rdata"),  mandatory),
+        "dout":     (("dout", "wdata"), mandatory),
         "we":       (("we", "wen"), mandatory),
         "re":       (("re", "ren"), optional),
         "wstb":     (("wstb", "write_strobe"), optional),
@@ -376,9 +376,7 @@ class GhostBusser(VParser):
         for key, data in self._bus_info.items():
             self._empty_bus[key] = None
         self.memory_map = None
-        self._bus = self._empty_bus.copy()
-        self._bus['aw'] = None
-        self._bus['dw'] = None
+        self._top_bus = BusLB()
         self._ext_dict = {}
 
     def get_map(self):
@@ -479,7 +477,7 @@ class GhostBusser(VParser):
                                 register.write_strobes.append(strobe_name)
                 ghostmods[mod_hash] = mr
             handledExtModules.append(module_name)
-        self._busValid = self._validateBus(self._bus)
+        self._busValid = self._top_bus.validate()
         self._top = top_mod
         self._resolveExt(ghostmods)
         #print_dict(modtree)
@@ -494,38 +492,9 @@ class GhostBusser(VParser):
         return ghostmods
 
     def _handleBus(self, netname, vals, dw, source):
+        rangestr = getUnparsedWidthRange(source)
         for val in vals:
-            self._handleBusVal(netname, val, dw, source)
-        return
-
-    def _handleBusVal(self, netname, val, dw, source):
-        val = val.strip().lower()
-        val_map = {}
-        for key, data in self._bus_info.items():
-            for alias in data[0]:
-                val_map[alias] = key
-        if val not in [key for key in val_map.keys()]:
-            err = "Invalid value ({}) for attribute 'ghostbus_port'.".format(val) + \
-                  "  Valid values are {}".format([key for key in self._bus.keys()])
-            raise Exception(err)
-        busval = self._bus[val]
-        if busval is None:
-            self._bus[val] = (netname, source)
-            # Get width of addr/data
-            if val in ("addr", "din", "dout"):
-                widthint = dw
-                widthstr = getUnparsedWidth(source)
-                if val == "addr":
-                    self._bus["aw"] = (widthint, None)
-                    self._bus["aw_str"] = (widthstr, None)
-                else:
-                    existing_dw = self._bus["dw"]
-                    if existing_dw is not None and existing_dw[0] != widthint:
-                        raise Exception("Unsupported ghostbus din and dout are not the same width!")
-                    self._bus["dw"] = (widthint, None)
-                    self._bus["dw_str"] = (widthstr, None)
-        else:
-            raise Exception("'ghostbus_port={}' already defined at {}".format(val.strip().lower(), busval[1]))
+            self._top_bus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
         return
 
     def _handleExt(self, module, netname, vals, dw, source):
@@ -533,10 +502,10 @@ class GhostBusser(VParser):
             self._ext_dict[module] = []
         portnames = []
         instnames = []
-        allowed_ports = [key for key in self._bus_info.keys()]
+        allowed_ports = BusLB._alias_keys
         if len(vals) > 1:
             for val in vals:
-                if val in self._bus_info.keys():
+                if val in allowed_ports:
                     portnames.append(val)
                 else:
                     if val not in instnames:
@@ -554,7 +523,7 @@ class GhostBusser(VParser):
             if 'dout' in portnames:
                 serr = "The 'dout' vector cannot be shared between multiple instances " + \
                       f"({instnames}). See: {source}"
-                raise Exception(serr)
+                raise GhostbusException(serr)
         # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
         self._ext_dict[module].append((netname, dw, portnames, instnames, source))
         return
@@ -575,15 +544,12 @@ class GhostBusser(VParser):
 
     def _resolveExt(self, ghostmods):
         #self._ext_modules = {}
-        ghostbus = self.getBusDict()
+        ghostbus = self._top_bus
         for module, data in self._ext_dict.items():
             busses = self._resolveExtModule(module, data)
             #self._ext_modules[module] = []
             for instname, bus in busses.items():
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
-                #self._ext_modules[module].append(extinst)
-                # TODO Now I need to find the MemoryRegion object associated
-                # with the module then add this to the region
                 added = False
                 for mod_hash, mr in ghostmods.items():
                     if mr.label == module:
@@ -591,7 +557,7 @@ class GhostBusser(VParser):
                         added = True
                 if not added:
                     serr = f"Ext module somehow references a non-existant module {module}?"
-                    raise Exception(serr)
+                    raise GhostbusException(serr)
         return
 
     def _resolveExtModule(self, module, data):
@@ -620,63 +586,27 @@ class GhostBusser(VParser):
             for instname in module_instnames:
                 bus = busses.get(instname, None)
                 if bus is None:
-                    bus = self._empty_bus.copy()
-                    bus['aw'] = None
-                    bus['dw'] = None
+                    bus = BusLB()
                 # print(f"len(data) = {len(data)}")
                 for datum in data:
                     # print(f"datum = {datum}")
                     netname, dw, portnames, instnames, source = datum
+                    rangestr = getUnparsedWidthRange(source)
                     if len(instnames) == 0 and universal_inst is not None:
                         instnames.append(universal_inst)
                     for net_instname in instnames:
                         if net_instname == instname:
                             for portname in portnames:
                                 # print(f"FLARK instname = {instname}, netname = {netname}, portname = {portname}")
-                                if bus[portname] is not None:
-                                    inst_err = True
-                                    existing_source = bus[portname][2]
-                                    serr = f"Multiple nets labeled as: {instname}, " + \
-                                           f"{portname}. First at {existing_source}, " + \
-                                           f"second at {source}.\n" + ext_advice
-                                    raise Exception(serr)
-                                else:
-                                    bus[portname] = (netname, source)
-                                if portname in ('din', 'dout'):
-                                    if bus['dw'] is not None and bus['dw'] != dw:
-                                        if portname == 'din':
-                                            othernet = 'dout'
-                                        else:
-                                            othernet = 'din'
-                                        o_net = bus[othernet]
-                                        serr = f"Conflicting widths of nets " + \
-                                               f"{netname} (width {dw}) and " + \
-                                               f"{o_net} (width {bus['dw']}) both" + \
-                                               f" associated with inst {instname} " +\
-                                               f"of module {module}"
-                                        raise Exception(serr)
-                                    # Get the 'dw_str' as well
-                                    bus['dw_str'] = getUnparsedWidthRange(source)
-                                    bus['dw'] = dw
-                                elif portname == 'addr':
-                                    # Get the 'aw_str' as well
-                                    bus['aw_str'] = getUnparsedWidthRange(source)
-                                    bus['aw'] = dw
+                                bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
                 busses[instname] = bus
         if inst_err:
             serr = "No instance referenced for external bus." + ext_advice
-            raise Exception(serr)
+            raise GhostbusException(serr)
         for instname, bus in busses.items():
-            if not self._validateBus(bus):
-                required_nets = []
-                for key, data in self._bus_info.items():
-                    required = data[1]
-                    if required:
-                        required_nets.append(key)
-                serr = f"The external bus for instance {instname} in module " + \
-                       f"{module} is not fully specified. Please instantiate " + \
-                       f"all nets of the bus: {required_nets}." + ext_advice
-                raise Exception(serr)
+            valid = bus.validate()
+            busses[instname] = bus
+            #print_dict(busses[instname])
         return busses
 
     @classmethod
@@ -689,30 +619,18 @@ class GhostBusser(VParser):
         return _busValid
 
     def getBusDict(self):
-        if not self._busValid:
-            serr = ["Incomplete bus definition"]
-            for key, val in self._bus.items():
-                if val is None:
-                    serr.append("  Missing: {}".format(key))
-            raise Exception("\n".join(serr))
-        dd = {}
-        for key, val in self._bus.items():
-            if val is not None:
-                dd[key] = val[0] # Discarding the "source" part
-            else:
-                dd[key] = None
-        return dd
+        return self._top_bus.get()
 
     def build_modtree(self, dd):
         top = self._top
         if top is None:
-            raise Exception("I don't know how to do this without top specified")
+            raise GhostbusException("I don't know how to do this without top specified")
         modtree = {}
         for module, mod_dict in dd.items():
             if module == top:
                 modtree[module] = {}
         if len(modtree) == 0:
-            raise Exception("Could not find top: {}".format(top))
+            raise GhostbusException("Could not find top: {}".format(top))
         for module, instances_dict in dd.items():
             new_mod_dict = {}
             for inst_name, inst_key in instances_dict.items():
@@ -829,31 +747,31 @@ class MetaMemory(Memory):
 class ExternalModule():
     def __init__(self, name, ghostbus, extbus):
         print(f"New external module: {name}")
-        if extbus['aw'] > ghostbus['aw']:
+        if extbus.aw > ghostbus.aw:
             serr = f"{name} external bus has greater address width {extbus['aw']}" + \
                    f" than the ghostbus {ghostbus['aw']}"
-            raise Exception(serr)
-        if extbus['dw'] > ghostbus['dw']:
+            raise GhostbusException(serr)
+        if extbus.dw > ghostbus.dw:
             serr = f"{name} external bus has greater data width {extbus['dw']}" + \
                    f" than the ghostbus {ghostbus['dw']}"
-            raise Exception(serr)
+            raise GhostbusException(serr)
         self.name = name
         self.ghostbus = ghostbus
         self.extbus = extbus
 
     def getDoutPort(self):
-        return self.extbus['dout'][0]
+        return self.extbus['dout']
 
     @property
     def dw(self):
-        return self.extbus['dw']
+        return self.extbus.dw
 
     @property
     def aw(self):
-        return self.extbus['aw']
+        return self.extbus.aw
 
     def initStr(self, base_rel):
-        gbaw = self.ghostbus['aw']
+        gbaw = self.ghostbus.aw
         divwidth = gbaw - self.aw
         end = base_rel + (1<<self.aw) - 1
         return f"wire en_{self.name} = {self.ghostbus['addr']}[{gbaw-1}:{self.aw}] == {vhex(base_rel>>self.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
@@ -861,19 +779,14 @@ class ExternalModule():
     def getAssignment(self):
         # TODO - This is localbus-specific
         ss = []
-        for portname, data in self.extbus.items():
-            if portname in ('aw', 'dw', 'aw_str', 'dw_str', 'dout'):
-                # Skipping 'dout' as well since that maps to the din mux
-                continue
-            if data is None:
+        for portname, ext_port in self.extbus.outputs_and_clock().items():
+            if ext_port is None:
                 continue
             gb_port = self.ghostbus[portname]
-            ext_port = data[0]
-            if portname == 'din':
-                _s, _e = self.extbus['dw_str']
-                ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
-            elif portname == 'addr':
-                _s, _e = self.extbus['aw_str']
+            #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
+            _range = self.extbus.get_range(portname)
+            if _range is not None:
+                _s, _e = _range
                 ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
             else:
                 ss.append(f"assign {ext_port} = {gb_port};")
@@ -916,25 +829,27 @@ def doSubcommandLive(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = gb.get_map()
     bus = gb.getBusDict()
-    #try:
-    dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
-    #print(dec.GhostbusDecoding())
-    dec.GhostbusMagic(dest_dir="_auto")
-    #except Exception as e:
-    #    print(e)
-    #    return 1
+    print("=========================== BUS!")
+    print_dict(bus)
+    try:
+        dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
+        #print(dec.GhostbusDecoding())
+        dec.GhostbusMagic(dest_dir="_auto")
+    except GhostbusException as e:
+        print(e)
+        return 1
     return 0
 
 def doSubcommandMap(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = gb.get_map()
     bus = gb.getBusDict()
-    #try:
-    dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
-    dec.ExtraVerilogMemoryMap(args.out_file, bus)
-    #except Exception as e:
-    #    print(e)
-    #    return 1
+    try:
+        dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
+        dec.ExtraVerilogMemoryMap(args.out_file, bus)
+    except GhostbusException as e:
+        print(e)
+        return 1
     return 0
 
 def doGhostbus():
