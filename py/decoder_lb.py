@@ -2,30 +2,14 @@
 
 from memory_map import Register, MemoryRegion, bits
 from gbexception import GhostbusException
-
-def strDict(_dict, depth=-1):
-    def _strToDepth(_dict, depth=0, indent=0):
-        """RECURSIVE"""
-        if depth == 0:
-            return []
-        l = []
-        sindent = " "*indent
-        for key, val in _dict.items():
-            if hasattr(val, 'keys'):
-                l.append(f"{sindent}{key} : dict size {len(val)}")
-                l.extend(_strToDepth(val, depth-1, indent+2))
-            else:
-                l.append(f"{sindent}{key} : {val}")
-        return l
-    l = []
-    l.extend(_strToDepth(_dict, depth, indent=2))
-    return '\n'.join(l)
+from util import enum, strDict, print_dict
 
 
 def vhex(num, width):
     """Verilog hex constant generator"""
     fmt = "{{:0{}x}}".format(width>>2)
     return "{}'h{}".format(width, fmt.format(num))
+
 
 class BusLB():
     # Boolean aliases for clarity
@@ -193,7 +177,8 @@ class BusLB():
 class DecoderLB():
     def __init__(self, memregion, bus, csr_class, ram_class, ext_class):
         self.mod = memregion
-        self.bus = bus
+        self.bus = bus # TODO deleteme; replace with self.ghostbus
+        self.ghostbus = bus
         self.aw = self.mod.aw
         self.inst = self.mod.hierarchy[-1]
         self.name = self.mod.label
@@ -590,7 +575,7 @@ class DecoderLB():
         if len(self.rams) > 0:
             ss.append("// local rams")
             for n in range(len(self.rams)):
-                ss.append(self.rams[n].getInitStr(self.bus, self.local_aw))
+                ss.append(self._ramInit(self.rams[n], self.bus, self.local_aw))
         return "\n".join(ss)
 
     def submodsTopInit(self):
@@ -599,9 +584,47 @@ class DecoderLB():
             ss.append(submod.submodInitStr(base))
         for base_rel, ext in self.exts:
             ss.append(f"// External Module Instance {ext.name}")
-            ss.append(ext.initStr(base_rel))
-            ss.append(ext.getAssignment())
+            ss.append(self._addrHit(base_rel, ext))
+            ss.append(self.busHookup(ext))
         return "\n".join(ss)
+
+    @classmethod
+    def _ramInit(cls, mod, bus, local_aw=None):
+        # localparam FOO_RAM_AW = $clog2(RD);
+        # wire en_foo_ram = gb_addr[8:3] == 6'b001000;
+        if local_aw is None:
+            local_aw = bus['aw']
+        divwidth = local_aw - mod.aw
+        ss = (
+            f"localparam {mod.name.upper()}_AW = $clog2({mod.depth[1]}+1);",
+            f"wire en_{mod.name} = {bus['addr']}[{local_aw-1}:{mod.aw}] == {vhex(mod.base>>mod.aw, divwidth)};",
+        )
+        return "\n".join(ss)
+
+
+    @classmethod
+    def _addrHit(cls, base_rel, mod):
+        bus = mod.ghostbus
+        busaw = bus['aw']
+        divwidth = busaw - mod.aw
+        end = base_rel + (1<<mod.aw) - 1
+        return f"wire en_{mod.inst} = {bus['addr']}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
+
+    @classmethod
+    def _addrMask(cls, mod):
+        bus = mod.ghostbus
+        busaw = bus['aw']
+        divwidth = busaw - mod.aw
+        return f"wire [{busaw-1}:0] {bus['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {bus['addr']}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
+
+    @classmethod
+    def _wen(cls, mod):
+        return cls._andPort(mod, "we")
+
+    @staticmethod
+    def _andPort(mod, portname):
+        signal = mod.ghostbus[portname]
+        return f"wire {signal}_{mod.inst}={signal} & en_{mod.inst};"
 
     def submodInitStr(self, base_rel):
         #e.g.
@@ -613,21 +636,24 @@ class DecoderLB():
         busaw = self.bus['aw']
         divwidth = busaw - self.aw
         end = base_rel + (1<<self.aw) - 1
+        addrHit = self._addrHit(base_rel, self)
+        addrMask = self._addrMask(self)
+        wen = self._wen(self)
         ss = [
             # Mandatory ports
             f"// submodule {self.inst}",
             f"wire [{self.bus['dw']-1}:0] {self.bus['din']}_{self.inst};",
-            f"wire en_{self.inst} = {self.bus['addr']}[{busaw-1}:{self.aw}] == {vhex(base_rel>>self.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}",
-            f"wire [{busaw-1}:0] {self.bus['addr']}_{self.inst} = {{{vhex(0, divwidth)}, {self.bus['addr']}[{self.aw-1}:0]}}; // address relative to own base (0x0)",
-            f"wire {self.bus['we']}_{self.inst}={self.bus['we']} & en_{self.inst};",
+            addrHit,
+            addrMask,
+            wen,
         ]
         # Optional ports
         if self.bus['wstb'] is not None and self.bus['wstb'] != self.bus['we']:
-            ss.append(f"wire {self.bus['wstb']}_{self.inst}={self.bus['wstb']} & en_{self.inst};")
+            ss.append(self._andPort(self, "wstb"))
         if self.bus['re'] is not None:
-            ss.append(f"wire {self.bus['re']}_{self.inst}={self.bus['re']} & en_{self.inst};")
+            ss.append(self._andPort(self, "re"))
         if self.bus['rstb'] is not None and self.bus['rstb'] != self.bus['re']:
-            ss.append(f"wire {self.bus['rstb']}_{self.inst}={self.bus['rstb']} & en_{self.inst};")
+            ss.append(self._andPort(self, "rstb"))
         return "\n".join(ss)
 
     def dinRouting(self):
@@ -828,3 +854,20 @@ class DecoderLB():
             ss.append(f"  local_din <= {{{{{self.bus['dw']}-{ram.range[0]}+1{{1'b0}}}}, {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]]}};")
             ss.append("end")
         return "\n".join(ss)
+
+    @classmethod
+    def busHookup(cls, extmod):
+        ss = []
+        for portname, ext_port in extmod.extbus.outputs_and_clock().items():
+            if ext_port is None:
+                continue
+            gb_port = extmod.ghostbus[portname]
+            #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
+            _range = extmod.extbus.get_range(portname)
+            if _range is not None:
+                _s, _e = _range
+                ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+            else:
+                ss.append(f"assign {ext_port} = {gb_port};")
+        return "\n".join(ss)
+

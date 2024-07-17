@@ -11,6 +11,7 @@ from yoparse import VParser, srcParse, ismodule, get_modname, get_value, \
 from memory_map import MemoryRegion, Register, Memory, bits
 from decoder_lb import DecoderLB, BusLB, vhex
 from gbexception import GhostbusException
+from util import enum, strDict, print_dict
 
 # When Yosys generates a JSON, it follows this structure:
 #   modules: {
@@ -26,21 +27,6 @@ from gbexception import GhostbusException
 # I'll need to keep these unique identifiers internally, but replace the hash stuff
 # with the hierarchy of the particular instance (which is also unique) before
 # generating the memory map.
-
-class enum():
-    """A slightly fancy enum"""
-    def __init__(self, names, base=0):
-        self._strs = {}
-        for n in range(len(names)):
-            setattr(self, names[n], base+n)
-            self._strs[base+n] = names[n]
-
-    def __getitem__(self, item):
-        return getattr(self, item)
-
-    def str(self, val):
-        return self._strs[val]
-
 
 class GhostbusInterface():
     _tokens = [
@@ -332,28 +318,6 @@ class MemoryTree(WalkDict):
     def memsize(self):
         return self._mr.size
 
-
-def print_dict(dd, depth=-1):
-    print(strDict(dd, depth=depth))
-
-
-def strDict(_dict, depth=-1):
-    def _strToDepth(_dict, depth=0, indent=0):
-        """RECURSIVE"""
-        if depth == 0:
-            return []
-        l = []
-        sindent = " "*indent
-        for key, val in _dict.items():
-            if hasattr(val, 'keys'):
-                l.append(f"{sindent}{key} : dict size {len(val)}")
-                l.extend(_strToDepth(val, depth-1, indent+2))
-            else:
-                l.append(f"{sindent}{key} : {val}")
-        return l
-    l = []
-    l.extend(_strToDepth(_dict, depth, indent=2))
-    return '\n'.join(l)
 
 class GhostBusser(VParser):
     # Boolean aliases for clarity
@@ -701,10 +665,6 @@ class MetaRegister(Register):
             return False
         return True
 
-    def getInitStr(self, bus):
-        # Ghostbus registers are already initialized
-        return ""
-
 # TODO - Combine this class with MetaRegister
 class MetaMemory(Memory):
     def __init__(self, *args, **kwargs):
@@ -731,18 +691,6 @@ class MetaMemory(Memory):
             _pass = False
         return _pass
 
-    def getInitStr(self, bus, local_aw=None):
-        # localparam FOO_RAM_AW = $clog2(RD);
-        # wire en_foo_ram = gb_addr[8:3] == 6'b001000;
-        if local_aw is None:
-            local_aw = bus['aw']
-        divwidth = local_aw - self.aw
-        ss = (
-            f"localparam {self.name.upper()}_AW = $clog2({self.depth[1]}+1);",
-            f"wire en_{self.name} = {bus['addr']}[{local_aw-1}:{self.aw}] == {vhex(self.base>>self.aw, divwidth)};",
-        )
-        return "\n".join(ss)
-
 
 class ExternalModule():
     def __init__(self, name, ghostbus, extbus):
@@ -756,6 +704,7 @@ class ExternalModule():
                    f" than the ghostbus {ghostbus['dw']}"
             raise GhostbusException(serr)
         self.name = name
+        self.inst = name # alias
         self.ghostbus = ghostbus
         self.extbus = extbus
 
@@ -769,28 +718,6 @@ class ExternalModule():
     @property
     def aw(self):
         return self.extbus.aw
-
-    def initStr(self, base_rel):
-        gbaw = self.ghostbus.aw
-        divwidth = gbaw - self.aw
-        end = base_rel + (1<<self.aw) - 1
-        return f"wire en_{self.name} = {self.ghostbus['addr']}[{gbaw-1}:{self.aw}] == {vhex(base_rel>>self.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
-
-    def getAssignment(self):
-        # TODO - This is localbus-specific
-        ss = []
-        for portname, ext_port in self.extbus.outputs_and_clock().items():
-            if ext_port is None:
-                continue
-            gb_port = self.ghostbus[portname]
-            #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
-            _range = self.extbus.get_range(portname)
-            if _range is not None:
-                _s, _e = _range
-                ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
-            else:
-                ss.append(f"assign {ext_port} = {gb_port};")
-        return "\n".join(ss)
 
 
 def testWalkDict():

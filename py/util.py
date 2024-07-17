@@ -1,0 +1,38 @@
+# Some utility functions/classes for use throughout the codebase
+
+def strDict(_dict, depth=-1):
+    def _strToDepth(_dict, depth=0, indent=0):
+        """RECURSIVE"""
+        if depth == 0:
+            return []
+        l = []
+        sindent = " "*indent
+        for key, val in _dict.items():
+            if hasattr(val, 'keys'):
+                l.append(f"{sindent}{key} : dict size {len(val)}")
+                l.extend(_strToDepth(val, depth-1, indent+2))
+            else:
+                l.append(f"{sindent}{key} : {val}")
+        return l
+    l = []
+    l.extend(_strToDepth(_dict, depth, indent=2))
+    return '\n'.join(l)
+
+
+def print_dict(dd, depth=-1):
+    print(strDict(dd, depth=depth))
+
+
+class enum():
+    """A slightly fancy enum"""
+    def __init__(self, names, base=0):
+        self._strs = {}
+        for n in range(len(names)):
+            setattr(self, names[n], base+n)
+            self._strs[base+n] = names[n]
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def str(self, val):
+        return self._strs[val]
