@@ -1,0 +1,14 @@
+.*.swp
+.*.swo
+*/.*.swp
+*/.*.swo
+**/.*.swp
+**/.*.swo
+_auto
+_xilinx
+*/__pycache__
+**/__pycache__
+*.bit
+*.bin
+*.prm
+*.d

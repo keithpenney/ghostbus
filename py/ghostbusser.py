@@ -298,7 +298,8 @@ class MemoryTree(WalkDict):
                             #print("Adding {} to {}".format(node.label, node._parent.label))
                             node._parent.memory.add_item(node.memory)
                     else:
-                        print(f"Node {node.label} has memsize {node.memsize}")
+                        #print(f"Node {node.label} has memsize {node.memsize}")
+                        pass
                 if hasattr(node, "mark"):
                     node.mark()
         return self._mr
@@ -349,9 +350,8 @@ class GhostBusser(VParser):
         top_mod = None
         top_dict = self._dict["modules"]
         handledExtModules = []
-        for module, mod_dict in top_dict.items():
+        for mod_hash, mod_dict in top_dict.items():
             associated_strobes = {}
-            mod_hash = module
             module_name = get_modname(mod_hash)
             if not hasattr(mod_dict, "items"):
                 continue
@@ -595,13 +595,23 @@ class GhostBusser(VParser):
                 modtree[module] = {}
         if len(modtree) == 0:
             raise GhostbusException("Could not find top: {}".format(top))
-        for module, instances_dict in dd.items():
-            new_mod_dict = {}
-            for inst_name, inst_key in instances_dict.items():
-                #new_mod_dict[inst_name] = ModuleInstance(inst_key, inst_name, dd[inst_key])
+        nested = False
+        dd_keys = [key for key in dd.keys()]
+        for module in dd_keys:
+            instances_dict = dd[module]
+            #print(f"Processing: {module}")
+            instance_keys = [key for key in instances_dict.keys()]
+            for inst_name in instance_keys:
+                inst_key = instances_dict[inst_name]
                 dict_key = (inst_name, inst_key)
-                new_mod_dict[dict_key] = dd[inst_key]
-            dd[module] = new_mod_dict
+                #print(f"  Instance key: {dict_key}")
+                inst = dd.get(inst_key, None)
+                del instances_dict[inst_name]
+                if inst is None:
+                    print(f"Is this a Xilinx primitive? {inst_key}")
+                else:
+                    # Update memory in-place
+                    dd[module][dict_key] = inst
         return ModuleInstance(top, top, dd[top])
 
     def build_memory_tree(self, modtree, ghostmods):
@@ -624,7 +634,7 @@ class GhostBusser(VParser):
                 mrcopy.hierarchy = hier
                 val.memory = mrcopy
             else:
-                print(f"no {key} in ghostmods")
+                #print(f"no {key} in ghostmods")
                 val.memory = MemoryRegion(label=module_name, hierarchy=hier)
         # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
         return modtree
@@ -694,7 +704,8 @@ class MetaMemory(Memory):
 
 class ExternalModule():
     def __init__(self, name, ghostbus, extbus):
-        print(f"New external module: {name}")
+        size = 1<<extbus.aw
+        print(f"New external module: {name}; size = 0x{size:x}")
         if extbus.aw > ghostbus.aw:
             serr = f"{name} external bus has greater address width {extbus['aw']}" + \
                    f" than the ghostbus {ghostbus['aw']}"
@@ -756,8 +767,8 @@ def doSubcommandLive(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     mods = gb.get_map()
     bus = gb.getBusDict()
-    print("=========================== BUS!")
-    print_dict(bus)
+    #print("=========================== BUS!")
+    #print_dict(bus)
     try:
         dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
         #print(dec.GhostbusDecoding())

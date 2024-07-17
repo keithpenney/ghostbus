@@ -18,7 +18,7 @@ def srcParse(s):
 
 
 def ismodule(s):
-    restr = "^\$(\w+)\$"
+    restr = r"^\$(\w+)[\$\\]"
     _match = re.search(restr, s)
     if _match:
         yotype = _match.groups()[0]

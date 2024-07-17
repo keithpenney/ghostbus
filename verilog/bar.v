@@ -62,50 +62,16 @@ ext #(
   .we(ext_we) // input
 );
 
+reg [1:0] garbage=2'b11;
+wire [1:0] trash;
+bof bof_i (
+  .clk(clk), // input
+  .garbage(garbage), // input [1:0]
+  .trash(trash) // output [1:0]
+);
+
 `ifdef GHOSTBUS_LIVE
 `GHOSTBUS_bar
-`else
-  `ifdef MANUAL_TEST
-    // Manual decoding
-    wire en_local = gb_addr[11:9] == 3'b000; // 0x000-0x1ff
-    reg  [31:0] local_din=0;
-    // din routing
-    assign gb_din = en_local ? local_din :
-                    32'h00000000;
-    // local rams
-    localparam BAR_RAM_AW = $clog2(64);
-    wire en_bar_ram = gb_addr[11:6] == 6'b000100; // 0x100-0x13f
-    // bus decoding
-    always @(posedge gb_clk) begin
-      // local writes
-      if (en_local & gb_we) begin
-        // bar_ram writes
-        if (en_bar_ram) begin
-          bar_ram[gb_addr[BAR_RAM_AW-1:0]] <= gb_dout[7:0];
-        end
-        // CSR writes
-        casez (gb_addr[8:0])
-          9'h0: bar_ha_reg <= gb_dout[7:0];
-          9'h1: bar_ha_reg_two <= gb_dout[31:0];
-          default: bar_ha_reg <= bar_ha_reg; // just to prevent incomplete case warning
-        endcase
-      end
-      // local reads
-      if (en_local & ~gb_we) begin
-        // bar_ram reads
-        if (en_bar_ram) begin
-          local_din <= {{32-8{1'b0}}, bar_ram[gb_addr[BAR_RAM_AW-1:0]]};
-        end else begin
-          // CSR reads
-          casez (gb_addr[8:0])
-            9'h0: local_din <= {{32-8{1'b0}}, bar_ha_reg};
-            9'h1: local_din <= {{32-32{1'b0}}, bar_ha_reg_two};
-            default: local_din <= local_din;
-          endcase
-        end
-      end
-    end
-  `endif
 `endif
 
 endmodule

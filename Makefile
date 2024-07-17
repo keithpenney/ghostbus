@@ -30,7 +30,12 @@ VERILOG_SIM = cd `dirname $@` && $(VVP) `basename $<` $(VVP_FLAGS)
 
 TOP=foo_tb
 
-MAGIC_SOURCES=$(VGHOST_DIR)/foo.v $(VGHOST_DIR)/bar.v $(VGHOST_DIR)/baz.v $(VGHOST_DIR)/bif.v $(VGHOST_DIR)/ext.v
+MAGIC_SOURCES=$(VGHOST_DIR)/foo.v \
+							$(VGHOST_DIR)/bar.v \
+							$(VGHOST_DIR)/baz.v \
+							$(VGHOST_DIR)/bif.v \
+							$(VGHOST_DIR)/ext.v \
+							$(VGHOST_DIR)/bof.v
 
 $(AUTOGEN_DIR)/defs.vh: $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
