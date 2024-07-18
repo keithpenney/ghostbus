@@ -794,18 +794,20 @@ class JSONMaker():
         dd = {}
         entries = mem.get_entries()
         if top:
+            # Note! Discarding top-level name in hierarcy
             top_hierarchy = []
         else:
-            top_hierarchy = mem.hierarchy
+            top_hierarchy = mem.hierarchy[1:]
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
                 subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False)
                 if flat:
+                    # Note! Discarding top-level name in hierarcy
                     if mangle_names:
-                        hier_str = "_".join(ref.hierarchy)
+                        hier_str = "_".join(ref.hierarchy[1:0])
                     else:
-                        hier_str = ".".join(ref.hierarchy)
+                        hier_str = ".".join(ref.hierarchy[1:0])
                     dd.update(subdd)
                 else:
                     dd[ref.name] = subdd

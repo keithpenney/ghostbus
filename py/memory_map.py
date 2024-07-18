@@ -572,6 +572,9 @@ class MemoryRegionStager(MemoryRegion):
                 continue
             ref, base, aw, _type = data
             if _type == self.TYPE_MEM:
+                name = None
+                if ref is not None:
+                    name = ref.name
                 print(f"Adding {name} to anywhere ({base})")
                 super().add(aw, ref=ref, addr=base)
         self._staged_items = []

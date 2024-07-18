@@ -1,69 +1,40 @@
 # GhostBus Auto-Bus Decoder
+A new auto-bus-decoder based on the successes of Newad and Gang Huang's SystemVerilog decoder scheme.
 
-Ok, here's the concept for a new auto-bus-decoder based on the successes of
-Newad and Gang Huang's SystemVerilog decoder scheme.
+__The name__: the decoding happens via a bus that's instantiated but not routed
+("invisible") until after preprocessing.
 
-__The name__: the decoding happens via a bus that's routed but the decoding is "invisible"
-until after preprocessing.  Also considering an option where the bus could be routed
-automatically as well, though that competes with some of the goals below.
-
-## Goals
-### (Same as all the others)
+## Core Features
 1. Automatically decode bus transactions for register/memory reads/writes
 2. Automatically manage the memory map, allowing easy, maintainable scaling of codebase.
 3. Avoid errors associated with hand-written bus decoders.
-4. Use existing Verilog parser(s). Avoid hand-rolled parser/scanner.
+4. Reduces boilerplate code, improving readability/maintainability.
 
-## Preprocessing steps
-1. Scan each GhostBus-compliant module and compute its minimum size and access type.
-2. Automatically generate each module's relative memory map.
-3. Working from the lowest-level (leaf) modules upward to the top, automatically generate
-   the module-level memory map.
-4. (TODO) Write out a complete memory map in a hierarchical JSON.
-5. Generate a `.vh` file for every module which contains the bus decoding with the
-   local addresses computed in step 3.
-6. (TODO) Also generate a top-level "mirror memory" decoder for readback of R/W (memory-like)
-   registers.
+## Design Philosophy
+1. The Verilog code is the ONLY source (no information stored "elsewhere").
+2. Don't break code. Unprocessed Verilog is still valid/functional.
+3. Be explicit; avoid heuristics. No guessing at functionality based on e.g. net names.
+4. Use existing Verilog parser(s). Avoid hand-rolled parser/scanner.
+5. Be obvious; attribute names all start with `ghostbus_` so that a reader immediately
+   knows what tool the attribute targets. A few extra characters avoids a lot of confusion.
 
 ## Comparison with Newad
 
-|__GhostBus__                        |__Newad__                               |
+|__Newad__                           |__Ghostbus__                            |
 |------------------------------------|----------------------------------------|
 |Decoding at top level               |Distributed decoder (in each module)    |
 |"Magic" (auto-generated) ports      |...sadly, magic ports for the bus       |
-|Flat memory map; all registers in the same scope; name mangling|Hierarchical memory map; name mangling if needed for EPICS|
+|Flat memory map; all registers in the same scope; name mangling|Hierarchical memory map; flattening with name mangling if needed|
 |Preprocessing required              |Valid Verilog without preprocessing; host-accessible registers retain initial values|
 |Manual (global) address via static JSON |Manual (module-relative) address via Verilog attribute|
 
-## Usage Example
-
-```verilog
-// TODO
-```
-
 ## Status
-__TODO__:
-  1. Build a proper test case and test on hardware
-
-__240711__: Got a system for hooking up an external module to the ghostbus.  Need to find a way to test it.
-
-__240709__: Knocked some stuff off the TODO list
-  DONE: Develop a testbench that will automatically check the memory map (i.e. write and readback)
-  DONE: Handle strobes
-  DONE: Handle associated (write) strobes
-  DONE: Handle read-only registers
-  DONE: Support associated _read_ strobes (pulse high on read of a register)
-
-__240705__: Eliminated some hard-coding in the working demo.
-  * Parsing of `(* ghostbus_port=... *)` attributes implemented (not mandated until `getBusDict()`)
-
-__240702__: I have a working demo which still uses some hard-coded values.  I still need the following:
-  1. Parse the testbench to grab the `(* ghostbus_port=... *)` attributes so we can auto-infer those port
-     names and widths.
-  2. Should the testbench be part of the memory map?  Or is that scanned separately?
-  3. Find a better way to populate the preprocessor definitions instead of mandating an `include "defs.vh"` line
-     The only alternative I can think of is to pass them directly to the tool.  Can I just make the tool process the
-     file as if it's source?  Verilog preprocessor macros are (for better or worse) global afterall.
+__TODO:__
+  * Mangle ghostbus port names to reduce potential for port/net name collisions
+  * Configurable pipelining
+  * Auto-pipelining for module-specific read delays
+  * Support for multiple ghostbuses
+  * Alternate bus architectures (AXI4/AXI4LITE, wishbone, etc)
 
 ## Design considerations
 
@@ -82,91 +53,6 @@ current decoding rules:
 
 3. Local registers should be packed as tightly as possible (i.e. try to avoid setting explicit addresses) to reduce the
    LUT usage for address decoding.
-
-### Limitations of the Verilog Preprocessor
-Mayday. The verilog preprocessor is trying to sink this concept.  The notion that all macros are global in
-scope is one of the core issues.  I think I have a workaround, but it will require careful code generation
-and unfortunately a bit of an implementation gotcha.
-
-__hand-written__
-```verilog
-module foo #(
-  parameter AW
-) (
-  input d
-);
-
-`ifdef GHOSTBUS_LIVE
-`GHOSTBUS_foo
-// Could also just use `include "_ghostbus_foo.vh" instead
-`endif
-
-endmodule
-```
-
-__auto-generated__
-```verilog
-/* file "_gb_auto.vh" */
-`define GHOSTBUS_foo `include "_ghostbus_foo.vh"
-```
-
-```verilog
-/* file "_ghostbus_foo.vh" */
-// bus decoding logic implemented here
-```
-
-The other major issue is that the module-local memory map can be parameterized (i.e. depend on the value
-of parameters) and thus the decoding for each instance could differ.  Thus, if we had only one `_ghostbus_foo.vh`
-file and two different instances off `module foo` with different parameters, the bus decoding could be wrong
-in one or both instances.  So instead of resolving the parameter to a constant, we'll need to preseve parameter
-names in the decoding (much trickier, especially since the Yosys abstract model resolves parameters already).
-
-### Magic ports
-I can't figure out a way to avoid magic ports in Verilog.  That was a big goal here, but I can't figure out
-a way to generically wire up a bus without pre-defining the memory map within the constraints of the language
-(and without abusing the preprocessor to the point of complete obfuscation).
-
-So I sadly yield to the concept of magic ports, but ONLY for the bus itself (hence the "ghost").  But this
-brings up several important issues to resolve:
-
-* How do the magic ports appear?
-
-Do we mandate preprocessor macros galore (ugh), or do we invoke a custom preprocessor (yikes)?  The latter
-would probably just be a custom Python script; developing the script is not the hard part - it's integrating
-it with an existing build system that's a pain.  So I think the macro method is still somehow favorable.
-
-* How do we allow a user to manually hook up to the ghost bus?
-
-This use case would appear pretty quickly, i.e. putting a dual-port RAM on the bus.  Remember, the raison
-d'etre of this whole thing is to allow the source to be valid Verilog outside of the ghostbus toolchain
-(making code more obvious/self-documenting, and simplifying testbench coverage).  So the only halfway decent
-solution that comes to mind is declaring nets and labeling them as part of the ghost bus with attributes.
-
-```Verilog
-// Example of manually hooking up to the ghost bus
-
-(* ghostbus_port=clk *)  wire gb_clk;
-(* ghostbus_port=addr *) wire [DW-1:0] gb_addr;
-(* ghostbus_port=din *)  wire [DW-1:0] gb_din;
-(* ghostbus_port=dout *) wire [DW-1:0] gb_dout;
-(* ghostbus_port=wen *)  wire gb_we;
-
-// Optionally drive with actual signals in a non-ghostbus context
-`ifndef GHOSTBUS_LIVE
-assign gb_clk  = clk;
-assign gb_addr = test_addr;
-assign gb_din  = test_din;
-assign gb_dout = test_dout;
-assign gb_we   = test_we;
-`endif
-
-// And here we manually wire up the dpram. Note that we'll need to communicate its
-// size (address width 'AW') to the ghostbus memory map
-(* ghostbus_aw=AW *) dpram #(.AW(AW)) dpram_i (
-  .clk_a(clk_a), .addr_a(addr_a), .din_a(din_a), .dout_a(dout_a), .wen_a(wen_a),
-  .clk_b(gb_clk), .addr_b(gb_addr), .din_b(gb_din), .dout_b(gb_dout), .wen_b(gb_we)
-);
-```
 
 ### Pipeline and fanout
 (slightly out-dated by the __Decoding__ section above, but still contains important consideration)
@@ -219,72 +105,3 @@ The final question would be where the simple mirror memory RAM decoding logic go
 is either at the top level or at the same level as the bus controller since it functions purely as RAM attached to
 the bus.  As of writing, these two are sort of required to be the same place (there's currently no provision for
 auto-routing the bus "upwards" from a submodule bus controller to the top-level.
-
-### Passthrough modules
-
-A conceivable hierarchy could be the following:
-
-```
-| bus controller |
-        \
-         | module A |
-              \
-               | module B |
-                    \
-                     | module C (HA regs) |
-```
-
-In this example, there are no host-accessible registers ("HA regs") in modules `A` or `B` but the auto-generated bus
-needs to route through these two modules to reach the HA regs in module `C`.
-
-To solve this problem, two options come to mind:
-
-1. Only require routing the bus ports inside module A and module B, as in:
-```verilog
-module mod_a (
-  input bus_clk,
-  input [AW-1:0] bus_addr,
-  input [DW-1:0] bus_din,
-  output [DW-1:0] bus_dout,
-  input bus_we
-);
-
-mod_b mod_b_i (
-  .bus_clk(bus_clk),
-  .bus_addr(bus_addr),
-  .bus_din(bus_din),
-  .bus_dout(bus_dout)
-);
-endmodule
-```
-And similarly for `mod_c` within `mod_b`.
-
-2. Insert auto-generated decoding even though there are no HA regs in this module, as in:
-```verilog
-module mod_a (
-  input bus_clk,
-  input [AW-1:0] bus_addr,
-  input [DW-1:0] bus_din,
-  output [DW-1:0] bus_dout,
-  input bus_we
-);
-
-mod_b mod_b_i (
-  .bus_clk(bus_clk),
-  .bus_addr(bus_addr),
-  .bus_din(bus_din),
-  .bus_dout(bus_dout)
-);
-
-`ifdef GHOSTBUS_LIVE
-`include "gb_mod_a.vh"
-`endif
-
-endmodule
-```
-
-In case __1__ above, module `A` and `B` function as transparent passthrough and do not count as pipeline boundaries
-(because decoding logic is not included).  In the second option, if the pipeline depth is >1, module `A` will include
-decoding pipeline logic (i.e. `gb_mod_a.vh` will be non-empty).  Similarly, if pipeline depth is >2, module `B` will
-include such logic as well.
-

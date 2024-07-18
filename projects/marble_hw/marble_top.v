@@ -41,6 +41,12 @@ module marble_top(
   output LD16,
   output LD17,
 
+	// One I2C bus, everything gatewayed through a TCA9548
+  inout  TWI_SCL,
+  inout  TWI_SDA,
+  inout  TWI_RST,
+  input  TWI_INT,
+
   // Physical Pmod, may be used as LEDs
   output [7:0] Pmod1   // feel free to change to inout, if you attach to something other than LEDs
   //input [7:0] Pmod2
@@ -136,41 +142,33 @@ gmii_to_rgmii #(
 // Basic clock setup
 wire tx_clk = gmii_tx_clk;
 wire rx_clk = vgmii_rx_clk;
+wire clk = tx_clk;
 
 // ============================== Ghostbus ===========================
-// LB controller <============ This is the Ghostbus!
+// This is the Ghostbus!
 localparam GB_AW = 24;
 localparam GB_DW = 32;
-(* ghostbus_port="clk" *) wire lb_clk = gmii_tx_clk;
-(* ghostbus_port="addr" *) wire [GB_AW-1:0] lb_addr;
-(* ghostbus_port="wen" *) wire lb_write;
-//(* ghostbus_port="ren" *) wire lb_read;
-(* ghostbus_port="wdata" *) wire [GB_DW-1:0] lb_wdata;
-(* ghostbus_port="rdata" *) wire [GB_DW-1:0] lb_rdata;
-(* ghostbus_port="rstb" *) wire lb_rvalid;
-
-// ============================== Mailbox =============================
-// The MMC mailbox is an external ghostbus module
-(* ghostbus_ext="spi_mbox, addr" *) wire [10:0] mailbox_addr;
-(* ghostbus_ext="spi_mbox, wdata" *) wire [7:0]  mailbox_wdata;
-(* ghostbus_ext="spi_mbox, rdata" *) wire [7:0]  mailbox_rdata;
-(* ghostbus_ext="spi_mbox, wen" *) wire mailbox_wen;
-//(* ghostbus_ext="spi_mbox, ren" *) wire mailbox_ren;
-
+(* ghostbus_port="clk"   *)     wire gb_clk = gmii_tx_clk;
+(* ghostbus_port="addr"  *)     wire [GB_AW-1:0] gb_addr;
+(* ghostbus_port="wen"   *)     wire gb_write;
+(* ghostbus_port="wdata" *)     wire [GB_DW-1:0] gb_wdata;
+(* ghostbus_port="rdata" *)     wire [GB_DW-1:0] gb_rdata;
+(* ghostbus_port="rstb"  *)     wire gb_rvalid;
 // This control strobe is required for the mailbox interface but is
 // not a standard "localbus" port according to ghostbus, so it's
 // tagging along as an "extra output".
-(* ghostbus_ext="spi_mbox, extra_out0" *) wire mailbox_ctrl_strobe;
+(* ghostbus_port="extra_out0" *) wire gb_control_strobe;
 
-`ifndef LB_GATEWAY_TEST
-(* ghostbus_port="extra_out0" *) wire lb_control_strobe;
-wire lb_control_rd, lb_control_rd_valid;
-assign lb_write  = lb_control_strobe & ~lb_control_rd;
-assign lb_rvalid = lb_control_rd_valid;
-//assign lb_read   = |control_pipe_rd;
-`else
-(* ghostbus_port="extra_out0" *) wire lb_pre_rvalid;
-`endif
+// ============================== Mailbox =============================
+// The MMC mailbox is an external ghostbus module
+(* ghostbus_ext="spi_mbox, addr" *)   wire [10:0] mailbox_addr;
+(* ghostbus_ext="spi_mbox, wdata" *)  wire [7:0]  mailbox_wdata;
+(* ghostbus_ext="spi_mbox, rdata" *)  wire [7:0]  mailbox_rdata;
+(* ghostbus_ext="spi_mbox, wen" *)    wire mailbox_wen;
+
+(* ghostbus_ext="spi_mbox, extra_out0" *) wire mailbox_ctrl_strobe;
+wire lb_control_rd;
+assign gb_write  = gb_control_strobe & ~lb_control_rd;
 
 // Signals provided by mmc_mailbox
 wire enable_rx;
@@ -243,29 +241,17 @@ rtefi_blob #(
     .rx_mac_accept  (1'b0),
     .tx_mac_done    (),
 
-`ifdef LB_GATEWAY_TEST
-    .p2_lb_clk      (),
-    .p2_lb_addr     (lb_addr),
-    .p2_lb_write    (lb_write),
-    .p2_lb_read     (lb_read),
-    .p2_lb_rvalid   (lb_rvalid),
-    .p2_lb_wdata    (lb_wdata),
-    //.p2_lb_pre_rvalid(lb_pre_rvalid),
-    .p2_lb_rdata    (lb_rdata),
-`else
-    .p2_addr        (lb_addr),
-    .p2_control_strobe(lb_control_strobe),
+    .p2_addr        (gb_addr),
+    .p2_control_strobe(gb_control_strobe),
     .p2_control_rd  (lb_control_rd),
-    .p2_control_rd_valid(lb_control_rd_valid),
-    .p2_data_out    (lb_wdata),
-    .p2_data_in     (lb_rdata),
-`endif
+    .p2_control_rd_valid(gb_rvalid),
+    .p2_data_out    (gb_wdata),
+    .p2_data_in     (gb_rdata),
 
     .rx_mon         (rx_mon), // output
     .tx_mon         (tx_mon) // output
 );
 //assign in_use = blob_in_use | boot_busy;
-wire clk = tx_clk;
 
 (* ghostbus_ext="rom, rdata" *) wire [15:0] romx_rdata;
 (* ghostbus_ext="rom, addr", ghostbus_addr='h4000 *) wire [10:0] romx_addr;
@@ -284,12 +270,80 @@ assign LD17 = leds[1];
 
 assign VCXO_EN = 1'b0;
 
+localparam initial_file="";
+localparam twi_q0=6;  // 145 kbps with 125 MHz clock
+localparam twi_q1=2;
+localparam twi_q2=7;
+
+wire [3:0] hw_config;
+wire sda_drive, sda_sense, scl_sense;
+wire twi0_scl;
+i2c_chunk_gb #(
+  .initial_file(initial_file),
+  .q1(twi_q1),
+  .q2(twi_q2),
+  .tick_scale(twi_q0)
+) twi ( // Naming it 'twi' causes the name mangling to produce identical registers as test_marble_family
+  .clk(clk), // input
+  .hw_config(hw_config), // output [3:0]
+  .scl(twi0_scl), // output
+  .sda_drive(sda_drive), // output
+  .sda_sense(sda_sense), // input
+  .scl_sense(scl_sense), // input
+  .rst(twi_rst), // input
+  .intp(twi_int) // input
+`ifdef GHOSTBUS_LIVE
+`GHOSTBUS_marble_top_twi
+`endif
+);
+
+//   0 is main I2C, routes to Marble I2C bus multiplexer
+//   1 and 2 route to FMC User I/O
+//   3 is unused so far
+// vestiges of CERN FMC tester support
+wire old_scl1, old_scl2, old_sda1, old_sda2;
+wire dum_scl, dum_sda;
+wire [3:0] twi_scl = {dum_scl, old_scl1, old_scl2, TWI_SCL};
+wire [3:0] twi_sda = {dum_sda, old_sda1, old_sda2, TWI_SDA};
+wire twi_int;
+wire twi_rst;
+
+// I2C drive logic taken from "lb_marble_slave.v"
+// twi_scl_l == pull pin low (dominates)
+// twi_scl_h == pull pin high
+// neither == let pin float
+localparam scl_act_high = 3;
+wire [1:0] twi_bus_sel = hw_config[2:1];
+reg [3:0] twi_scl_l=0, twi_scl_h=0, twi_sda_r=0, twi_sda_grab=0, twi_scl_grab=0;
+reg [scl_act_high:0] twi0_scl_shf=0;
+always @(posedge clk) begin
+  twi0_scl_shf <= {twi0_scl_shf[scl_act_high-1:0], twi0_scl};
+  twi_scl_l <= 4'b0000;
+  twi_scl_l[twi_bus_sel] <= ~twi0_scl;
+  twi_scl_h <= 4'b0000;
+  twi_scl_h[twi_bus_sel] <= ~twi0_scl_shf[scl_act_high];
+  twi_sda_r <= 4'b1111;
+  twi_sda_r[twi_bus_sel] <= sda_drive;
+  twi_sda_grab <= twi_sda;
+  twi_scl_grab <= twi_scl;
+end
+assign TWI_SCL    = twi_scl_l[0] ? 1'b0 : twi_scl_h[0] ? 1'b1 : 1'bz;
+assign old_scl2   = twi_scl_l[1] ? 1'b0 : twi_scl_h[1] ? 1'b1 : 1'bz;
+assign old_scl1   = twi_scl_l[2] ? 1'b0 : twi_scl_h[2] ? 1'b1 : 1'bz;
+assign dum_scl    = twi_scl_l[3] ? 1'b0 : twi_scl_h[3] ? 1'b1 : 1'bz;
+assign TWI_SDA    = twi_sda_r[0] ? 1'bz : 1'b0;
+assign old_sda2   = twi_sda_r[1] ? 1'bz : 1'b0;
+assign old_sda1   = twi_sda_r[2] ? 1'bz : 1'b0;
+assign dum_sda    = twi_sda_r[3] ? 1'bz : 1'b0;
+assign sda_sense  = twi_sda_grab[twi_bus_sel];
+assign scl_sense  = twi_scl_grab[twi_bus_sel];
+assign twi_rst    = hw_config[0] ? 1'b0 : 1'bz;  // three-state
+
 // A few test registers to read/write
-(* ghostbus *) reg [7:0]  test_reg_0=8'hcc;        // Host-accessible register (will be auto-decoded)
-(* ghostbus *) reg [31:0] test_reg_1=32'hceceface; // Host-accessible register (will be auto-decoded)
+(* ghostbus *)      reg [7:0]  test_reg_0=8'h42;        // R/W host-accessible register
+(* ghostbus="ro" *) reg [31:0] test_reg_1=20'hcecee;    // Read-only host-accessible register
 
 `ifdef GHOSTBUS_LIVE
-  initial $display("Going live with ghostbus!");
   `include "defs.vh"
   `GHOSTBUS_marble_top
 `endif

@@ -27,6 +27,10 @@ RTEFI_CLIENT_LIST = hello.v mem_gateway.v
 include $(BADGER_DIR)/rules.mk
 CLEAN+=$(RTEFI_CLEAN)
 
+I2C_DIR=$(PERIPH_DRIVERS_DIR)/i2cbridge
+include $(I2C_DIR)/i2cbridge_rules.mk
+I2C_CHUNK_SOURCES=$(addprefix $(I2C_DIR)/, $(filter-out dpram.v, $(I2CBRIDGE_V)))
+
 MARBLE_DIR=$(PROJECTS_DIR)/test_marble_family
 VERILOG_SOURCES=$(MARBLE_DIR)/mmc_mailbox.v \
 								$(HOMELESS_DIR)/fake_dpram.v \
@@ -34,7 +38,10 @@ VERILOG_SOURCES=$(MARBLE_DIR)/mmc_mailbox.v \
 								$(DSP_DIR)/dpram.v \
 								$(BADGER_DIR)/mem_gateway.v \
 								$(FPGA_FAMILY_DIR)/xilinx/xilinx7_clocks.v \
-								$(SERIAL_IO_DIR)/gmii_to_rgmii.v
+								$(SERIAL_IO_DIR)/gmii_to_rgmii.v \
+								$(THIS_DIR)/i2c_chunk_gb.v
+
+VERILOG_SOURCES+=$(I2C_CHUNK_SOURCES)
 
 # Grr... I hate vpath
 vpath %.v   $(DSP_DIR)
@@ -54,7 +61,7 @@ $(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(VERILOG_SOURCES)
 
 $(AUTOGEN_DIR)/regmap.json: $(TOP_SOURCE) $(VERILOG_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(TOP) -o $@ --flat
+	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(TOP) -o $@ --flat --mangle
 
 config_romx.v: $(AUTOGEN_DIR)/regmap.json
 	$(PYTHON) $(BUILD_DIR)/build_rom.py --placeholder_rev -v $@ -j $< -d "Ghostbus Test"
@@ -63,7 +70,7 @@ config_romx.v: $(AUTOGEN_DIR)/regmap.json
 magic: $(AUTOGEN_DIR)/defs.vh
 
 .PHONY: json
-json: $(AUTOGEN_DIR)/test.json
+json: $(AUTOGEN_DIR)/regmap.json
 
 # vivado synth without ghostbus magic
 marble_nomagic.bit: $(THIS_DIR)/Marble.xdc $(THIS_DIR)/timing.xdc $(TOP_SOURCE) $(VERILOG_SOURCES)

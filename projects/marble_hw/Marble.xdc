@@ -1,5 +1,9 @@
 # An explicit marble XDC file
 
+# Bank 0 setup
+set_property CFGBVS VCCO [current_design]
+set_property CONFIG_VOLTAGE 2.5 [current_design]
+
 set_property -dict {PACKAGE_PIN AC9 IOSTANDARD DIFF_SSTL15} [get_ports DDR_REF_CLK_P]
 set_property -dict {PACKAGE_PIN AD9 IOSTANDARD DIFF_SSTL15} [get_ports DDR_REF_CLK_N]
 set_property -dict {PACKAGE_PIN H11 IOSTANDARD LVCMOS25} [get_ports RGMII_TXD[0]]
@@ -37,6 +41,11 @@ set_property -dict {PACKAGE_PIN C18 IOSTANDARD LVCMOS25} [get_ports Pmod1[5]]
 set_property -dict {PACKAGE_PIN C19 IOSTANDARD LVCMOS25} [get_ports Pmod1[6]]
 set_property -dict {PACKAGE_PIN C17 IOSTANDARD LVCMOS25} [get_ports Pmod1[7]]
 
+set_property -dict {PACKAGE_PIN A17 IOSTANDARD LVCMOS25} [get_ports TWI_SDA]
+set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS25} [get_ports TWI_SCL]
+set_property -dict {PACKAGE_PIN B19 IOSTANDARD LVCMOS25} [get_ports TWI_RST]
+set_property -dict {PACKAGE_PIN A18 IOSTANDARD LVCMOS25} [get_ports TWI_INT]
+
 # Save for later
 #set_property -dict {PACKAGE_PIN A8 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_24_N]
 #set_property -dict {PACKAGE_PIN A9 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_24_P]
@@ -45,8 +54,6 @@ set_property -dict {PACKAGE_PIN C17 IOSTANDARD LVCMOS25} [get_ports Pmod1[7]]
 #set_property -dict {PACKAGE_PIN A13 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_31_P]
 #set_property -dict {PACKAGE_PIN A14 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_22_N]
 #set_property -dict {PACKAGE_PIN A15 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_20_N]
-#set_property -dict {PACKAGE_PIN A17 IOSTANDARD LVCMOS25} [get_ports I2C_FPGA_SDA]
-#set_property -dict {PACKAGE_PIN A18 IOSTANDARD LVCMOS25} [get_ports EXP_INT]
 #set_property -dict {PACKAGE_PIN A19 IOSTANDARD LVCMOS25} [get_ports FPGA_XR_GPIO_0]
 #set_property -dict {PACKAGE_PIN A20 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC2_LA_32_N]
 #set_property -dict {PACKAGE_PIN A22 IOSTANDARD LVCMOS25} [get_ports CFG_D03]
@@ -167,8 +174,6 @@ set_property -dict {PACKAGE_PIN C17 IOSTANDARD LVCMOS25} [get_ports Pmod1[7]]
 #set_property -dict {PACKAGE_PIN B12 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_30_P]
 #set_property -dict {PACKAGE_PIN B14 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_22_P]
 #set_property -dict {PACKAGE_PIN B15 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC1_LA_20_P]
-#set_property -dict {PACKAGE_PIN B16 IOSTANDARD LVCMOS25} [get_ports I2C_FPGA_SCL]
-#set_property -dict {PACKAGE_PIN B19 IOSTANDARD LVCMOS25} [get_ports I2C_FPGA_SW_RST]
 #set_property -dict {PACKAGE_PIN B20 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC2_LA_32_P]
 #set_property -dict {PACKAGE_PIN B21 IOSTANDARD DIFF_HSTL_II_25} [get_ports FMC2_LA_33_N]
 #set_property -dict {PACKAGE_PIN B22 IOSTANDARD LVCMOS25} [get_ports CFG_D02]
