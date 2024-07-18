@@ -47,6 +47,18 @@ class BusLB():
         'aw': ("addr",),
         'dw': ("din", "dout"),
     }
+    # Access encoding shared from Register
+    READ = Register.READ
+    WRITE = Register.WRITE
+    RW = Register.RW
+
+    @classmethod
+    def allowed_portname(cls, name):
+        if name in cls._alias_keys:
+            return True
+        if cls._matchExtra(name) is not None:
+            return True
+        return False
 
     def __init__(self):
         self._bus = {}
@@ -60,6 +72,13 @@ class BusLB():
         self._bus['dw_str'] = None
         # Is this a fully-defined bus? See self.validate
         self._valid = False
+        self._base = None
+
+    def __str__(self):
+        return strDict(self._bus)
+
+    def __repr__(self):
+        return self.__str__()
 
     def _get_by_direction(self, _dirs):
         dd = {}
@@ -70,6 +89,26 @@ class BusLB():
                 else:
                     dd[key] = None
         return dd
+
+    @property
+    def base(self):
+        return self._base
+
+    @base.setter
+    def base(self, _base):
+        if self._base is not None and _base != self._base:
+            raise GhostbusException("Multiple explicit addresses set for bus.")
+        self._base = _base
+        return
+
+    @property
+    def access(self):
+        acc = 0
+        if self._bus["din"] is not None:
+            acc |= self.READ
+        if self._bus["dout"] is not None:
+            acc |= self.WRITE
+        return acc
 
     def inputs(self):
         return self._get_by_direction((self._input,))
@@ -114,6 +153,33 @@ class BusLB():
             return _dw[0]
         return None
 
+    @classmethod
+    def _matchExtra(cls, name):
+        import re
+        re_in = "extra_(in|input)(\d+)?"
+        re_out = "extra_(out|output)(\d+)?"
+        _match = re.match(re_in, name)
+        if _match:
+            index = _match.groups()[1]
+            if index is None or len(index) == 0:
+                index = 0
+            else:
+                index = int(index)
+            portname = f"extra_in{index:d}"
+            print(f"Matched input: {portname}")
+            return (cls._input, portname)
+        _match = re.match(re_out, name)
+        if _match:
+            index = _match.groups()[1]
+            if index is None or len(index) == 0:
+                index = 0
+            else:
+                index = int(index)
+            portname = f"extra_out{index:d}"
+            print(f"Matched output: {portname}")
+            return (cls._output, portname)
+        return None
+
     def _validate_portname(self, name):
         if name not in self._alias_keys:
             err = "Invalid value ({}) for attribute 'ghostbus_port'.".format(name) + \
@@ -122,14 +188,22 @@ class BusLB():
         return self._alias_map[name]
 
     def set_port(self, portname, netname, portwidth=1, rangestr=None, source=None):
-        portname = self._validate_portname(portname)
-        busval = self._bus[portname]
+        # Check for "extra" ports
+        _match = self._matchExtra(portname)
+        if _match is not None:
+            _dir, portname = _match
+            busval = self._bus.get(portname)
+            # Register the direction in _bus_info
+            self._bus_info[portname] = ((), self.optional, _dir)
+        else:
+            portname = self._validate_portname(portname)
+            busval = self._bus[portname]
         if busval is None:
             self._bus[portname] = (netname, source)
             # Get width of addr/data
             self._set_width(portname, width=portwidth, rangestr=rangestr)
         else:
-            raise GhostbusException("'ghostbus_port={}' already defined at {}".format(val.strip().lower(), busval[1]))
+            raise GhostbusException("'ghostbus_port={}' already defined at {}".format(busval[0].strip().lower(), busval[1]))
         return
 
     def _set_width(self, name, width=1, rangestr=None):
@@ -515,6 +589,9 @@ class DecoderLB():
     def GhostbusPorts(self):
         """Generate the necessary ghostbus Verilog port declaration"""
         ss = [
+            # TODO - It is conceivable that one could have a read-only or write-only
+            #        ghostbus and therefore 'wdata' or 'rdata' are not stricly necessary
+            #        but there should be at least one present.
             # Mandatory ports
             "// Ghostbus ports",
             f",input  {self.bus['clk']}",
@@ -544,6 +621,9 @@ class DecoderLB():
         re = self.bus['re']
         rstb = self.bus['rstb']
         ss = [
+            # TODO - It is conceivable that one could have a read-only or write-only
+            #        ghostbus and therefore 'wdata' or 'rdata' are not stricly necessary
+            #        but there should be at least one present.
             # Mandatory ports
             f",.{clk}({clk})    // input",
             f",.{addr}({addr}_{self.inst})  // input [{self.bus['aw']-1}:0]",
@@ -677,12 +757,15 @@ class DecoderLB():
                 ss.append(f"                en_{inst} ? {self.bus['din']}_{inst} :")
         for n in range(len(self.exts)):
             base_rel, ext = self.exts[n]
+            if not ext.access & Register.READ:
+                # Skip non-readable ext modules
+                continue
             inst = ext.name
-            dout = ext.getDoutPort()
+            din = ext.getDinPort()
             if (n == 0) and (self.no_local) and (len(self.submods) == 0):
-                ss[-1] = ss[-1] + f"en_{inst} ? {{{{{self.bus['dw']-ext.dw}{{1'b0}}}}, {dout}}} :"
+                ss[-1] = ss[-1] + f"en_{inst} ? {{{{{self.bus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
             else:
-                ss.append(f"                en_{inst} ? {{{{{self.bus['dw']-ext.dw}{{1'b0}}}}, {dout}}} :")
+                ss.append(f"                en_{inst} ? {{{{{self.bus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
         ss.append(f"                {vhex(0, self.bus['dw'])};")
         return "\n".join(ss)
 
@@ -868,6 +951,6 @@ class DecoderLB():
                 _s, _e = _range
                 ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
             else:
-                ss.append(f"assign {ext_port} = {gb_port};")
+                ss.append(f"assign {ext_port} = {gb_port} & en_{extmod.name};")
         return "\n".join(ss)
 

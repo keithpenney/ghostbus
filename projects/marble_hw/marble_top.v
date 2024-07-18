@@ -144,26 +144,33 @@ localparam GB_DW = 32;
 (* ghostbus_port="clk" *) wire lb_clk = gmii_tx_clk;
 (* ghostbus_port="addr" *) wire [GB_AW-1:0] lb_addr;
 (* ghostbus_port="wen" *) wire lb_write;
-(* ghostbus_port="ren" *) wire lb_read;
+//(* ghostbus_port="ren" *) wire lb_read;
 (* ghostbus_port="wdata" *) wire [GB_DW-1:0] lb_wdata;
 (* ghostbus_port="rdata" *) wire [GB_DW-1:0] lb_rdata;
 (* ghostbus_port="rstb" *) wire lb_rvalid;
 
 // ============================== Mailbox =============================
 // The MMC mailbox is an external ghostbus module
-(* ghostbus_ext="mailbox_i, addr" *) wire [10:0] mailbox_addr;
-(* ghostbus_ext="mailbox_i, wdata" *) wire [7:0]  mailbox_wdata;
-(* ghostbus_ext="mailbox_i, rdata" *) wire [7:0]  mailbox_rdata;
-(* ghostbus_ext="mailbox_i, wen" *) wire mailbox_wen;
-(* ghostbus_ext="mailbox_i, ren" *) wire mailbox_ren;
+(* ghostbus_ext="spi_mbox, addr" *) wire [10:0] mailbox_addr;
+(* ghostbus_ext="spi_mbox, wdata" *) wire [7:0]  mailbox_wdata;
+(* ghostbus_ext="spi_mbox, rdata" *) wire [7:0]  mailbox_rdata;
+(* ghostbus_ext="spi_mbox, wen" *) wire mailbox_wen;
+//(* ghostbus_ext="spi_mbox, ren" *) wire mailbox_ren;
 
-// Oddball early-strobe not yet supported by ghostbus
-wire mailbox_rdstrobe;
-reg mailbox_ren_0;
-always @(posedge gmii_tx_clk) begin
-  mailbox_ren_0 <= mailbox_ren;
-end
-assign mailbox_rdstrobe = mailbox_ren & ~mailbox_ren_0;
+// This control strobe is required for the mailbox interface but is
+// not a standard "localbus" port according to ghostbus, so it's
+// tagging along as an "extra output".
+(* ghostbus_ext="spi_mbox, extra_out0" *) wire mailbox_ctrl_strobe;
+
+`ifndef LB_GATEWAY_TEST
+(* ghostbus_port="extra_out0" *) wire lb_control_strobe;
+wire lb_control_rd, lb_control_rd_valid;
+assign lb_write  = lb_control_strobe & ~lb_control_rd;
+assign lb_rvalid = lb_control_rd_valid;
+//assign lb_read   = |control_pipe_rd;
+`else
+(* ghostbus_port="extra_out0" *) wire lb_pre_rvalid;
+`endif
 
 // Signals provided by mmc_mailbox
 wire enable_rx;
@@ -175,14 +182,14 @@ localparam default_enable_rx = 1;
 // Actual mmc_mailbox instance
 mmc_mailbox #(
   .DEFAULT_ENABLE_RX(default_enable_rx)
-  ) mailbox_i (
+  ) spi_mbox (
   .clk(gmii_tx_clk), // input
   // localbus
   .lb_addr(mailbox_addr), // input [10:0]
   .lb_din(mailbox_wdata), // input [7:0]
   .lb_dout(mailbox_rdata), // output [7:0]
   .lb_write(mailbox_wen), // input
-  .lb_control_strobe(mailbox_rdstrobe), // input
+  .lb_control_strobe(mailbox_ctrl_strobe), // input
   // SPI PHY
   .sck(SCLK), // input
   .ncs(CSB), // input
@@ -236,19 +243,39 @@ rtefi_blob #(
     .rx_mac_accept  (1'b0),
     .tx_mac_done    (),
 
-    .p2_lb_clk      (lb_clk),
+`ifdef LB_GATEWAY_TEST
+    .p2_lb_clk      (),
     .p2_lb_addr     (lb_addr),
     .p2_lb_write    (lb_write),
     .p2_lb_read     (lb_read),
     .p2_lb_rvalid   (lb_rvalid),
     .p2_lb_wdata    (lb_wdata),
-    .p2_lb_pre_rvalid(),
+    //.p2_lb_pre_rvalid(lb_pre_rvalid),
     .p2_lb_rdata    (lb_rdata),
+`else
+    .p2_addr        (lb_addr),
+    .p2_control_strobe(lb_control_strobe),
+    .p2_control_rd  (lb_control_rd),
+    .p2_control_rd_valid(lb_control_rd_valid),
+    .p2_data_out    (lb_wdata),
+    .p2_data_in     (lb_rdata),
+`endif
 
     .rx_mon         (rx_mon), // output
     .tx_mon         (tx_mon) // output
 );
 //assign in_use = blob_in_use | boot_busy;
+wire clk = tx_clk;
+
+(* ghostbus_ext="rom, rdata" *) wire [15:0] romx_rdata;
+(* ghostbus_ext="rom, addr", ghostbus_addr='h4000 *) wire [10:0] romx_addr;
+// Prevent recursive dependency
+`ifndef YOSYS
+// Configuration ROM
+config_romx rom (
+    .clk(clk), .address(romx_addr), .data(romx_rdata)
+);
+`endif
 
 wire [7:0] leds;
 assign Pmod1 = leds;
@@ -262,6 +289,7 @@ assign VCXO_EN = 1'b0;
 (* ghostbus *) reg [31:0] test_reg_1=32'hceceface; // Host-accessible register (will be auto-decoded)
 
 `ifdef GHOSTBUS_LIVE
+  initial $display("Going live with ghostbus!");
   `include "defs.vh"
   `GHOSTBUS_marble_top
 `endif

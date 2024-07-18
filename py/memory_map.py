@@ -24,6 +24,15 @@ class Register():
     RW = READ | WRITE
     _accessMask = RW
 
+    @classmethod
+    def accessToStr(cls, access):
+        sd = {
+            cls.READ: "r",
+            cls.WRITE: "w",
+            cls.RW: "rw",
+        }
+        return sd[access]
+
     def __init__(self, name=None, dw=1, base=None, meta=None, access=RW):
         self._name = name
         self._size = 1
@@ -506,6 +515,67 @@ class MemoryRegion():
         (e.g. a Python object reference, a string, None, etc)."""
         return self.map.copy()
 
+
+class MemoryRegionStager(MemoryRegion):
+    """Uses a near-indentical API as class MemoryRegion, but doesn't actually compose
+    the map until you call 'resolve()' which adds explicit-address entries first, then
+    the implicit-address entries."""
+    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
+        super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
+        # Each entry = (item, addr, addr_width, type)
+        self._staged_items = []
+
+    def add_item(self, item, offset=None, keep_base=False):
+        """Overloaded to Stage-only"""
+        addr_width = None
+        if hasattr(item, 'aw'):
+            addr_width = item.aw
+        self._staged_items.append((item, offset, addr_width, self.TYPE_MEM))
+        return
+
+    def add(self, width=0, ref=None, addr=None):
+        """Overloaded to Stage-only"""
+        self._staged_items.append((ref, addr, width, self.TYPE_MEM))
+        return
+
+    def keepout(self, addr, width=0):
+        """Overloaded to Stage-only"""
+        self._staged_items.append((None, addr, width, self.TYPE_KEEPOUT))
+        return
+
+    def resolve(self):
+        """Allocate the staged items in an explicit memory map.  Items staged with
+        explicit addresses get priority."""
+        # First pass, keepouts
+        for n in range(len(self._staged_items)):
+            ref, base, aw, _type = self._staged_items[n]
+            if _type == self.TYPE_KEEPOUT:
+                super().keepout(base, aw)
+                self._staged_items[n] = None
+        # Second pass, add any with explicit addresses
+        for n in range(len(self._staged_items)):
+            data = self._staged_items[n]
+            if data is None:
+                continue
+            ref, base, aw, _type = data
+            if _type == self.TYPE_MEM and base is not None:
+                name = None
+                if ref is not None:
+                    name = ref.name
+                print(f"Adding {name} to addr 0x{base:x}")
+                super().add(aw, ref=ref, addr=base)
+                self._staged_items[n] = None
+        # Third pass, add everything else
+        for n in range(len(self._staged_items)):
+            data = self._staged_items[n]
+            if data is None:
+                continue
+            ref, base, aw, _type = data
+            if _type == self.TYPE_MEM:
+                print(f"Adding {name} to anywhere ({base})")
+                super().add(aw, ref=ref, addr=base)
+        self._staged_items = []
+        return
 
 class Addrspace():
     @staticmethod

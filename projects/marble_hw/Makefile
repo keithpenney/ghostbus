@@ -1,7 +1,7 @@
 # GhostBus development makefile
 
 THIS_DIR=.
-TOP_DIR=$(THIS_DIR)/../../
+TOP_DIR=$(THIS_DIR)/../..
 # NOTE! Simlink this!
 BEDROCK_DIR=$(TOP_DIR)/bedrock
 
@@ -23,8 +23,9 @@ VFLAGS_DEP += $(AUTOGEN_DIR)
 TOP=marble_top
 TOP_SOURCE=$(THIS_DIR)/$(TOP).v
 
-RTEFI_CLIENT_LIST = hello.v lb_gateway.v
+RTEFI_CLIENT_LIST = hello.v mem_gateway.v
 include $(BADGER_DIR)/rules.mk
+CLEAN+=$(RTEFI_CLEAN)
 
 MARBLE_DIR=$(PROJECTS_DIR)/test_marble_family
 VERILOG_SOURCES=$(MARBLE_DIR)/mmc_mailbox.v \
@@ -51,26 +52,36 @@ $(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(VERILOG_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
 	$(PYTHON) $(PY_DIR)/ghostbusser.py map $^ -t $(TOP) -o $@
 
+$(AUTOGEN_DIR)/regmap.json: $(TOP_SOURCE) $(VERILOG_SOURCES)
+	mkdir -p $(AUTOGEN_DIR)
+	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(TOP) -o $@ --flat
+
+config_romx.v: $(AUTOGEN_DIR)/regmap.json
+	$(PYTHON) $(BUILD_DIR)/build_rom.py --placeholder_rev -v $@ -j $< -d "Ghostbus Test"
+
 .PHONY: magic
 magic: $(AUTOGEN_DIR)/defs.vh
 
-# FIXME
-VFLAGS_foo_tb=-DGHOSTBUS_LIVE
-foo_tb:  $(VERILOG_DIR)/foo_tb.v $(VERILOG_SOURCES) $(AUTOGEN_DIR)/mmap.vh $(AUTOGEN_DIR)/defs.vh
-	$(VERILOG_TB)
+.PHONY: json
+json: $(AUTOGEN_DIR)/test.json
 
 # vivado synth without ghostbus magic
 marble_nomagic.bit: $(THIS_DIR)/Marble.xdc $(THIS_DIR)/timing.xdc $(TOP_SOURCE) $(VERILOG_SOURCES)
 	$(VIVADO_SYNTH) $(HARDWARE) $(TOP) "$(SYNTH_OPT)" $^
 
 # vivado synth with ghostbus magic
-marble.bit: $(THIS_DIR)/Marble.xdc $(THIS_DIR)/timing.xdc $(TOP_SOURCE) $(VERILOG_SOURCES) $(AUTOGEN_DIR)/defs.vh ghostbus.d
+marble.bit: $(THIS_DIR)/Marble.xdc $(THIS_DIR)/timing.xdc $(TOP_SOURCE) config_romx.v $(VERILOG_SOURCES) $(AUTOGEN_DIR)/defs.vh ghostbus.d
 	$(VIVADO_SYNTH) $(HARDWARE) $(TOP) "$(SYNTH_OPT) -DGHOSTBUS_LIVE" $^
 
 marble_top_lint: marble_top.v
 	$(VERILATOR_LINT)
 
+#include $(BUILD_DIR)/bottom_rules.mk
+CLEAN += *.pyc
+CLEAN += config_romx.v
+CLEAN_DIRS += $(DEPDIR) $(IPX_DIR) $(AUTOGEN_DIR) __pycache__
 
 .PHONY: clean
 clean:
-	$(RM) $(AUTOGEN_DIR)
+	$(RM) $(CLEAN)
+	$(RM) $(CLEAN_DIRS)
