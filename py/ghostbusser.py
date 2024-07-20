@@ -774,11 +774,12 @@ class ExternalModule():
 
 
 class JSONMaker():
-    def __init__(self, memtree):
+    def __init__(self, memtree, drops=()):
         self.memtree = memtree
+        self._drops = drops
 
     @classmethod
-    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True):
+    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=()):
         """ Returns a dict ready for JSON-ification using our preferred memory map style:
         // Example
         {
@@ -801,13 +802,8 @@ class JSONMaker():
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
-                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False)
+                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops)
                 if flat:
-                    # Note! Discarding top-level name in hierarcy
-                    if mangle_names:
-                        hier_str = "_".join(ref.hierarchy[1:0])
-                    else:
-                        hier_str = ".".join(ref.hierarchy[1:0])
                     dd.update(subdd)
                 else:
                     dd[ref.name] = subdd
@@ -828,7 +824,8 @@ class JSONMaker():
                         hier_str = ".".join(hierarchy)
                 else:
                     hier_str = ref.name
-                dd[hier_str] = entry
+                if hier_str not in drops:
+                    dd[hier_str] = entry
             else:
                 print(f"What is this? {ref}")
         return dd
@@ -841,7 +838,7 @@ class JSONMaker():
             filepath = os.path.join(path, filename)
         else:
             filepath = filename
-        ss = json.dumps(self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle), indent=2)
+        ss = json.dumps(self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle, drops=self._drops), indent=2)
         with open(filepath, 'w') as fd:
             fd.write(ss)
         return
@@ -887,7 +884,7 @@ def doSubcommandJson(args):
     #print_dict(bus)
     try:
         #dd = gb.memory_map.asdict()
-        jm = JSONMaker(gb.memory_map)
+        jm = JSONMaker(gb.memory_map, drops=args.ignore)
         #dd = JSONMaker.memoryRegionToJSONDict(gb.memory_map)
         jm.write(args.out_file, path=None, flat=args.flat, mangle=args.mangle)
         #print_dict(dd)
@@ -946,6 +943,7 @@ def doGhostbus():
     parserJson.add_argument("-o", "--out_file", default=None, help="The filepath for JSON memory map output.")
     parserJson.add_argument("--flat", default=False, action="store_true", help="Yield a flat JSON, rather than hierarchical.")
     parserJson.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
+    parserJson.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
     parserJson.set_defaults(handler=doSubcommandJson)
     args = parser.parse_args()
     return args.handler(args)

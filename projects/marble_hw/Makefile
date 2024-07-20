@@ -61,7 +61,7 @@ $(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(VERILOG_SOURCES)
 
 $(AUTOGEN_DIR)/regmap.json: $(TOP_SOURCE) $(VERILOG_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(TOP) -o $@ --flat --mangle
+	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(TOP) -o $@ --flat --mangle --ignore rom
 
 config_romx.v: $(AUTOGEN_DIR)/regmap.json
 	$(PYTHON) $(BUILD_DIR)/build_rom.py --placeholder_rev -v $@ -j $< -d "Ghostbus Test"
