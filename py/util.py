@@ -36,3 +36,11 @@ class enum():
 
     def str(self, val):
         return self._strs[val]
+
+def strip_empty(ll):
+    """Remove the empty items from list 'll'"""
+    result = []
+    for entry in ll:
+        if entry != "":
+            result.append(entry)
+    return result

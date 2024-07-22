@@ -2,7 +2,6 @@
 
 THIS_DIR=.
 VERILOG_DIR=$(THIS_DIR)/verilog
-VGHOST_DIR=$(VERILOG_DIR)
 PY_DIR=$(THIS_DIR)/py
 SCRIPTS_DIR=$(THIS_DIR)/scripts
 
@@ -28,29 +27,39 @@ VERILOG_SIM = cd `dirname $@` && $(VVP) `basename $<` $(VVP_FLAGS)
 %.vcd: %_tb
 	$(VERILOG_SIM) +vcd $(VCD_ARGS)
 
-TOP=foo_tb
+GHOSTBUS_TOP=foo_tb
 
-MAGIC_SOURCES=$(VGHOST_DIR)/foo.v \
-							$(VGHOST_DIR)/bar.v \
-							$(VGHOST_DIR)/baz.v \
-							$(VGHOST_DIR)/bif.v \
-							$(VGHOST_DIR)/ext.v \
-							$(VGHOST_DIR)/bof.v
+GHOSTBUS_SOURCES=$(VERILOG_DIR)/$(GHOSTBUS_TOP).v \
+							$(VERILOG_DIR)/foo.v \
+							$(VERILOG_DIR)/bar.v \
+							$(VERILOG_DIR)/baz.v \
+							$(VERILOG_DIR)/bif.v \
+							$(VERILOG_DIR)/ext.v \
+							$(VERILOG_DIR)/bof.v
 
-$(AUTOGEN_DIR)/defs.vh: $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
+include $(THIS_DIR)/rules.mk
+
+#$(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
+#	mkdir -p $(AUTOGEN_DIR)
+#	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(GHOSTBUS_TOP) -o $@ --flat $(ignore_args)
+
+#$(AUTOGEN_DIR)/defs.vh: $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES)
+#	mkdir -p $(AUTOGEN_DIR)
+#	$(PYTHON) $(PY_DIR)/ghostbusser.py live $^ -t $(GHOSTBUS_TOP)
+
+$(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py live $^ -t $(TOP)
-
-$(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES)
-	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py map $^ -t $(TOP) -o $@
+	$(PYTHON) $(PY_DIR)/ghostbusser.py map $^ -t $(GHOSTBUS_TOP) -o $@
 
 .PHONY: magic
 magic: $(AUTOGEN_DIR)/defs.vh
 
+.PHONY: json
+json: $(AUTOGEN_DIR)/regmap.json
+
 #VFLAGS_foo_tb=-DMANUAL_TEST
 VFLAGS_foo_tb=-DGHOSTBUS_LIVE
-foo_tb:  $(VERILOG_DIR)/foo_tb.v $(MAGIC_SOURCES) $(AUTOGEN_DIR)/mmap.vh $(AUTOGEN_DIR)/defs.vh
+foo_tb:  $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES) $(AUTOGEN_DIR)/mmap.vh $(AUTOGEN_DIR)/defs.vh
 	$(VERILOG_TB)
 
 foo.vcd: foo_tb

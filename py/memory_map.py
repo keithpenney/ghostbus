@@ -515,6 +515,78 @@ class MemoryRegion():
         (e.g. a Python object reference, a string, None, etc)."""
         return self.map.copy()
 
+    def _collectCommon(self, common=None):
+        hier = self.hierarchy
+        # Pass 0: find out if there are any registers defined here
+        hasregs = False
+        for start, stop, item in self.map:
+            if isinstance(item, Register):
+                hasregs = True
+                break
+        if hasregs:
+            if common is None:
+                common = list(hier)
+            else:
+                common = self._getCommon(hier, common)
+            # print(f"{self.name} has regs; common = {common}")
+        else:
+            # print(f"{self.name} has NO regs; common = {common}")
+            pass
+        # If not hasregs, common passes through
+        # Pass 1
+        for start, stop, item in self.map:
+            if isinstance(item, MemoryRegion):
+                common = item._collectCommon(common)
+                #print(f"MemoryRegion: {item.hierarchy}")
+        # print(f"{self.name} returning {common}")
+        return common
+
+    def _nullHierarchy(self, nempty):
+        """Set the first 'nempty' entries of the hierarchy to the emptry string ''."""
+        # print(f"  Nulling {nempty} entries. {self.hierarchy}")
+        if self.hierarchy is None:
+            return
+        hier = list(self.hierarchy)
+        for n in range(min(nempty, len(hier))):
+            hier[n] = ""
+        self.hierarchy = hier
+        # print(f"  Done nulling. {self.hierarchy}")
+        # Unfortunately, I can't rely on the self.hierarchy setter because
+        # nempty could be > len(self.hierarchy)
+        if nempty > len(self.hierarchy):
+            for start, stop, item in self.map:
+                if hasattr(item, "_nullHierarchy"):
+                    item._nullHierarchy(nempty)
+        return
+
+    def trim_hierarchy(self):
+        """This requires two passes.  Pass #0 identifies any common prefix to the
+        hierarchy of all MemoryRegions.  If the common element is not the empty list,
+        pass #1 sets the first len(common) items of each MemoryRegion's hierarchy to empty
+        strings."""
+        common = self._collectCommon()
+        if len(common) == 0:
+            # print("    No common root. Done")
+            return
+        else:
+            # print(f"    Common root: {common}")
+            pass
+        self._nullHierarchy(len(common))
+        return
+
+    @staticmethod
+    def _getCommon(l0, l1):
+        """Get the common overlap between the two lists, starting from index 0.
+        E.g. if l0 = [1,2,3,4,5] and l1=[1,2,9], returns [1,2].
+        If l0[0] != l1[0], returns []"""
+        common = []
+        for n in range(min(len(l0), len(l1))):
+            if l0[n] == l1[n]:
+                common.append(l0[n])
+            else:
+                break
+        return common
+
 
 class MemoryRegionStager(MemoryRegion):
     """Uses a near-indentical API as class MemoryRegion, but doesn't actually compose

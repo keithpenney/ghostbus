@@ -11,7 +11,7 @@ from yoparse import VParser, srcParse, ismodule, get_modname, get_value, \
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from decoder_lb import DecoderLB, BusLB, vhex
 from gbexception import GhostbusException
-from util import enum, strDict, print_dict
+from util import enum, strDict, print_dict, strip_empty
 
 # When Yosys generates a JSON, it follows this structure:
 #   modules: {
@@ -351,7 +351,7 @@ class GhostBusser(VParser):
         self._top_bus = BusLB()
         self._ext_dict = {}
 
-    def get_map(self):
+    def get_map(self, trim_hierarchy=True):
         ghostmods = {}
         modtree = {}
         top_mod = None
@@ -461,6 +461,8 @@ class GhostBusser(VParser):
         self.memory_map = memtree.resolve()
         self.memory_map.shrink()
         self.memory_map.print(4)
+        if trim_hierarchy:
+            self.memory_map.trim_hierarchy()
         return ghostmods
 
     def _handleBus(self, netname, vals, dw, source):
@@ -819,9 +821,9 @@ class JSONMaker():
                     hierarchy = list(top_hierarchy)
                     hierarchy.append(ref.name)
                     if mangle_names:
-                        hier_str = "_".join(hierarchy)
+                        hier_str = "_".join(strip_empty(hierarchy))
                     else:
-                        hier_str = ".".join(hierarchy)
+                        hier_str = ".".join(strip_empty(hierarchy))
                 else:
                     hier_str = ref.name
                 if hier_str not in drops:
@@ -897,7 +899,8 @@ def doSubcommandJson(args):
 
 def doSubcommandLive(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
-    mods = gb.get_map()
+    trim = not args.notrim
+    mods = gb.get_map(trim_hierarchy=trim)
     bus = gb.getBusDict()
     #print("=========================== BUS!")
     #print_dict(bus)
@@ -912,7 +915,8 @@ def doSubcommandLive(args):
 
 def doSubcommandMap(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
-    mods = gb.get_map()
+    trim = not args.notrim
+    mods = gb.get_map(trim_hierarchy=trim)
     bus = gb.getBusDict()
     try:
         dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
@@ -942,6 +946,7 @@ def doGhostbus():
     parserJson.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
     parserJson.add_argument("-o", "--out_file", default=None, help="The filepath for JSON memory map output.")
     parserJson.add_argument("--flat", default=False, action="store_true", help="Yield a flat JSON, rather than hierarchical.")
+    parserJson.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
     parserJson.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
     parserJson.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
     parserJson.set_defaults(handler=doSubcommandJson)
