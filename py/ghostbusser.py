@@ -897,7 +897,7 @@ def handleGhostbus(args):
             if trim:
                 gb.trim_hierarchy()
             jm = JSONMaker(gb.memory_map, drops=args.ignore)
-            jm.write(args.json, path=None, flat=args.flat, mangle=args.mangle)
+            jm.write(args.json, path=args.dest, flat=args.flat, mangle=args.mangle)
     except GhostbusException as e:
         print(e)
         return 1
