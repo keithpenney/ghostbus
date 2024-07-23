@@ -351,7 +351,7 @@ class GhostBusser(VParser):
         self._top_bus = BusLB()
         self._ext_dict = {}
 
-    def get_map(self, trim_hierarchy=True):
+    def get_map(self):
         ghostmods = {}
         modtree = {}
         top_mod = None
@@ -461,9 +461,11 @@ class GhostBusser(VParser):
         self.memory_map = memtree.resolve()
         self.memory_map.shrink()
         self.memory_map.print(4)
-        if trim_hierarchy:
-            self.memory_map.trim_hierarchy()
         return ghostmods
+
+    def trim_hierarchy(self):
+        self.memory_map.trim_hierarchy()
+        return
 
     def _handleBus(self, netname, vals, dw, source):
         rangestr = getUnparsedWidthRange(source)
@@ -878,49 +880,24 @@ def testWalkDict():
     print()
     return
 
-def doSubcommandJson(args):
+def handleGhostbus(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
+    trim = not args.notrim
     mods = gb.get_map()
-    #bus = gb.getBusDict()
-    #print("=========================== BUS!")
-    #print_dict(bus)
-    try:
-        #dd = gb.memory_map.asdict()
-        jm = JSONMaker(gb.memory_map, drops=args.ignore)
-        #dd = JSONMaker.memoryRegionToJSONDict(gb.memory_map)
-        jm.write(args.out_file, path=None, flat=args.flat, mangle=args.mangle)
-        #print_dict(dd)
-        #dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
-        #print(dec.GhostbusDecoding())
-    except GhostbusException as e:
-        print(e)
-        return 1
-    return 0
-
-def doSubcommandLive(args):
-    gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
-    trim = not args.notrim
-    mods = gb.get_map(trim_hierarchy=trim)
-    bus = gb.getBusDict()
-    #print("=========================== BUS!")
-    #print_dict(bus)
-    try:
-        dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
-        #print(dec.GhostbusDecoding())
-        dec.GhostbusMagic(dest_dir="_auto")
-    except GhostbusException as e:
-        print(e)
-        return 1
-    return 0
-
-def doSubcommandMap(args):
-    gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
-    trim = not args.notrim
-    mods = gb.get_map(trim_hierarchy=trim)
     bus = gb.getBusDict()
     try:
-        dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
-        dec.ExtraVerilogMemoryMap(args.out_file, bus)
+        if args.live or (args.map is not None):
+            dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
+            if args.live:
+                dec.GhostbusMagic(dest_dir=args.dest)
+            if args.map is not None:
+                dec.ExtraVerilogMemoryMap(args.map, bus)
+        if args.json is not None:
+            # JSON
+            if trim:
+                gb.trim_hierarchy()
+            jm = JSONMaker(gb.memory_map, drops=args.ignore)
+            jm.write(args.json, path=None, flat=args.flat, mangle=args.mangle)
     except GhostbusException as e:
         print(e)
         return 1
@@ -928,30 +905,21 @@ def doSubcommandMap(args):
 
 def doGhostbus():
     import argparse
-    parser = argparse.ArgumentParser("Ghostbus Verilog router")
-    parser.set_defaults(handler=lambda args: 1)
-    subparsers = parser.add_subparsers(help="Subcommands")
-    parserLive = subparsers.add_parser("live", help="Generate the Ghostbus decoder logic.")
-    parserLive.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
-    parserLive.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
-    parserLive.set_defaults(handler=doSubcommandLive)
-    parserMap = subparsers.add_parser("map", help="Generate a memory map in Verilog form for testing.")
-    # TODO - How do I make this less redundant with the "subcommands" usage
-    parserMap.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
-    parserMap.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
-    parserMap.add_argument("-o", "--out_file", default=None, help="The filepath for Verilog memory map output.")
-    parserMap.set_defaults(handler=doSubcommandMap)
-    parserJson = subparsers.add_parser("json", help="Generate the memory map as a JSON file.")
-    parserJson.add_argument("files", default=[], action="append", nargs="+", help="Source files.")
-    parserJson.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
-    parserJson.add_argument("-o", "--out_file", default=None, help="The filepath for JSON memory map output.")
-    parserJson.add_argument("--flat", default=False, action="store_true", help="Yield a flat JSON, rather than hierarchical.")
-    parserJson.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
-    parserJson.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
-    parserJson.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
-    parserJson.set_defaults(handler=doSubcommandJson)
+    parser = argparse.ArgumentParser("Ghostbus Verilog bus generator")
+    #parser.set_defaults(handler=lambda args: 1)
+    parser.add_argument("--live",   default=False, action="store_true", help="Generate the Ghostbus decoder logic (.vh) files.")
+    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parser.add_argument("--dest",   default="_autogen", help="Directory name for auto-generated files.")
+    parser.add_argument("--map",    default=None, help="[experimental] Filename for a generated memory map in Verilog form for testing.")
+    parser.add_argument("--json",   default=None, help="Filename for a generated memory map as a JSON file.")
+    parser.add_argument("--flat",   default=False, action="store_true", help="Yield a flat JSON, rather than hierarchical.")
+    parser.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
+    parser.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
+    parser.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
+    parser.add_argument("files",    default=[], action="append", nargs="+", help="Source files.")
     args = parser.parse_args()
-    return args.handler(args)
+    return handleGhostbus(args)
+
 
 if __name__ == "__main__":
     #testWalkDict()

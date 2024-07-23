@@ -1,5 +1,7 @@
 # Ghostbus localbus-style decoder logic
 
+import os
+
 from memory_map import Register, MemoryRegion, bits
 from gbexception import GhostbusException
 from util import enum, strDict, print_dict
@@ -326,13 +328,11 @@ class DecoderLB():
 
     def _clearDef(self, dest_dir):
         """Start with empty macro definitions file"""
-        import os
         fd = open(os.path.join(dest_dir, self._def_file), "w")
         fd.close()
         return
 
     def _addDef(self, dest_dir, macrostr, macrodef):
-        import os
         defstr = f"`define {macrostr} {macrodef}\n"
         with open(os.path.join(dest_dir, self._def_file), "a") as fd:
             fd.write(defstr)
@@ -342,6 +342,17 @@ class DecoderLB():
         macrostr = f"GHOSTBUS_{suffix}"
         macrodef = f"`include \"ghostbus_{suffix}.vh\""
         return self._addDef(dest_dir, macrostr, macrodef)
+
+    def _addGhostbusLive(self, dest_dir):
+        live = "GHOSTBUS_LIVE"
+        macrostr = (
+            f"`ifndef {live}",
+            f"`define {live}",
+            f"`endif // ifndef {live}",
+        )
+        with open(os.path.join(dest_dir, self._def_file), "a") as fd:
+            fd.write("\n".join(macrostr) + "\n")
+        return
 
     def ExtraVerilogMemoryMap(self, filename, bus):
         """An extra (non-core functionality) feature.  Generate a memory
@@ -555,12 +566,12 @@ class DecoderLB():
         with open(os.path.join(dest_dir, fname), "w") as fd:
             fd.write(gbports)
             print(f"Wrote to {fname}")
+        self._addGhostbusLive(dest_dir)
         self._addGhostbusDef(dest_dir, "ports")
         self._GhostbusDoSubmods(dest_dir)
         return
 
     def _GhostbusDoSubmods(self, dest_dir):
-        import os
         decode = self.GhostbusDecoding()
         fname = f"ghostbus_{self.name}.vh"
         with open(os.path.join(dest_dir, fname), "w") as fd:

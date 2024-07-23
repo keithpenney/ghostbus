@@ -12,18 +12,19 @@ GHOSTBUS_DIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
 AUTOGEN_DIR?=_autogen
 PY_DIR=$(GHOSTBUS_DIR)/py
-$(AUTOGEN_DIR)/defs.vh: $(GHOSTBUS_SOURCES)
-	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py live $^ -t $(GHOSTBUS_TOP)
-
-ghostbus.d: $(AUTOGEN_DIR)/defs.vh
-	ls $(AUTOGEN_DIR)/ghostbus* > $@
 
 GHOSTBUS_IGNORES?=rom
 ignore_args=$(addprefix --ignore ,$(GHOSTBUS_IGNORES))
 
-$(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
+$(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(GHOSTBUS_TOP) -o $@ --flat --mangle $(ignore_args)
+	$(PYTHON) $(PY_DIR)/ghostbusser.py --live --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) --flat --mangle $(ignore_args) $^
+
+ghostbus.d: $(AUTOGEN_DIR)/defs.vh
+	ls $(AUTOGEN_DIR)/ghostbus* > $@
+
+#$(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
+#	mkdir -p $(AUTOGEN_DIR)
+#	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(GHOSTBUS_TOP) -o $@ --flat --mangle $(ignore_args)
 
 

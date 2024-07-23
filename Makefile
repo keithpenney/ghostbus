@@ -39,17 +39,9 @@ GHOSTBUS_SOURCES=$(VERILOG_DIR)/$(GHOSTBUS_TOP).v \
 
 include $(THIS_DIR)/rules.mk
 
-#$(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
-#	mkdir -p $(AUTOGEN_DIR)
-#	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(GHOSTBUS_TOP) -o $@ --flat $(ignore_args)
-
-#$(AUTOGEN_DIR)/defs.vh: $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES)
-#	mkdir -p $(AUTOGEN_DIR)
-#	$(PYTHON) $(PY_DIR)/ghostbusser.py live $^ -t $(GHOSTBUS_TOP)
-
 $(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py map $^ -t $(GHOSTBUS_TOP) -o $@
+	$(PYTHON) $(PY_DIR)/ghostbusser.py --map $@ -t $(GHOSTBUS_TOP) $^
 
 .PHONY: magic
 magic: $(AUTOGEN_DIR)/defs.vh
