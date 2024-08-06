@@ -330,25 +330,8 @@ class MemoryTree(WalkDict):
 
 
 class GhostBusser(VParser):
-    # Boolean aliases for clarity
-    mandatory = True
-    optional = False
-    _bus_info = {
-        # dict key: ((acceptable names), mandatory?)
-        "clk":      (("clk",),  mandatory),
-        "addr":     (("addr",), mandatory),
-        "din":      (("din", "rdata"),  mandatory),
-        "dout":     (("dout", "wdata"), mandatory),
-        "we":       (("we", "wen"), mandatory),
-        "re":       (("re", "ren"), optional),
-        "wstb":     (("wstb", "write_strobe"), optional),
-        "rstb":     (("rstb", "read_strobe"), optional),
-    }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._empty_bus = {}
-        for key, data in self._bus_info.items():
-            self._empty_bus[key] = None
         self.memory_map = None
         self._top_bus = BusLB()
         self._ext_dict = {}
@@ -603,15 +586,6 @@ class GhostBusser(VParser):
             busses[instname] = bus
             #print_dict(busses[instname])
         return busses
-
-    @classmethod
-    def _validateBus(cls, bus):
-        _busValid = True
-        for key, data in cls._bus_info.items():
-            mandatory = data[1]
-            if mandatory and bus[key] is None:
-                _busValid = False
-        return _busValid
 
     def getBusDict(self):
         return self._top_bus.get()
