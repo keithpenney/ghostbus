@@ -48,20 +48,13 @@ vpath %.v   $(DSP_DIR)
 
 VERILOG_SOURCES+=$(RTEFI_V)
 
-$(AUTOGEN_DIR)/defs.vh: $(TOP_SOURCE) $(VERILOG_SOURCES)
-	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py live $^ -t $(TOP)
+GHOSTBUS_SOURCES=$(VERILOG_SOURCES)
+GHOSTBUS_TOP=$(TOP)
+GHOSTBUS_IGNORES=rom
+include $(GHOSTBUS_DIR)/rules.mk
 
 ghostbus.d: $(AUTOGEN_DIR)/defs.vh
 	ls $(AUTOGEN_DIR)/ghostbus* > $@
-
-$(AUTOGEN_DIR)/mmap.vh: $(VERILOG_DIR)/foo_tb.v $(VERILOG_SOURCES)
-	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py map $^ -t $(TOP) -o $@
-
-$(AUTOGEN_DIR)/regmap.json: $(TOP_SOURCE) $(VERILOG_SOURCES)
-	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(TOP) -o $@ --flat --mangle --ignore rom
 
 config_romx.v: $(AUTOGEN_DIR)/regmap.json
 	$(PYTHON) $(BUILD_DIR)/build_rom.py --placeholder_rev -v $@ -j $< -d "Ghostbus Test"
@@ -80,6 +73,7 @@ marble_nomagic.bit: $(THIS_DIR)/Marble.xdc $(THIS_DIR)/timing.xdc $(TOP_SOURCE) 
 marble.bit: $(THIS_DIR)/Marble.xdc $(THIS_DIR)/timing.xdc $(TOP_SOURCE) config_romx.v $(VERILOG_SOURCES) $(AUTOGEN_DIR)/defs.vh ghostbus.d
 	$(VIVADO_SYNTH) $(HARDWARE) $(TOP) "$(SYNTH_OPT) -DGHOSTBUS_LIVE" $^
 
+# This is broken
 marble_top_lint: marble_top.v
 	$(VERILATOR_LINT)
 

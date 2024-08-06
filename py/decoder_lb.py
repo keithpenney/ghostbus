@@ -384,7 +384,7 @@ class DecoderLB():
         rams = []
         self._collectCSRs(csrs)
         self._collectRAMs(rams)
-        # TODO - Find and remove any prefix common to all CSRs
+        # TODO - Find and remove any prefix common to all CSRs (this is done elsewhere a bit sloppily)
         print("CSRs:")
         csr_writeable = []
         for csr in csrs:
@@ -692,13 +692,14 @@ class DecoderLB():
         )
         return "\n".join(ss)
 
-
     @classmethod
     def _addrHit(cls, base_rel, mod):
         bus = mod.ghostbus
         busaw = bus['aw']
         divwidth = busaw - mod.aw
         end = base_rel + (1<<mod.aw) - 1
+        # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
+        #        to 'vhex' or do some tricky concatenation
         return f"wire en_{mod.inst} = {bus['addr']}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
 
     @classmethod
@@ -900,10 +901,10 @@ class DecoderLB():
                 # Skip write-only registers
                 continue
             if len(csr.read_strobes) == 0:
-                ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.bus['dw']}-{csr.range[0]}+1{{1'b0}}}}, {csr.name}}};")
+                ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.bus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
             else:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
-                ss.append(f"    local_din <= {{{{{self.bus['dw']}-{csr.range[0]}+1{{1'b0}}}}, {csr.name}}};")
+                ss.append(f"    local_din <= {{{{{self.bus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
                 for strobe_name in csr.read_strobes:
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")

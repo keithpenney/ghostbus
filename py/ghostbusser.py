@@ -10,7 +10,7 @@ from yoparse import VParser, srcParse, ismodule, get_modname, get_value, \
                     getUnparsedWidthAndDepthRange, getUnparsedWidth
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from decoder_lb import DecoderLB, BusLB, vhex
-from gbexception import GhostbusException
+from gbexception import GhostbusException, GhostbusNameCollision
 from util import enum, strDict, print_dict, strip_empty
 
 # When Yosys generates a JSON, it follows this structure:
@@ -37,6 +37,7 @@ class GhostbusInterface():
         "STROBE_W",
         "STROBE_R",
         "EXTERNAL",
+        "ALIAS",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -52,6 +53,7 @@ class GhostbusInterface():
         "ghostbus_read_strobe": tokens.STROBE_R,
         "ghostbus_rs":          tokens.STROBE_R,
         "ghostbus_ext":         tokens.EXTERNAL,
+        "ghostbus_alias":       tokens.ALIAS,
     }
     @staticmethod
     def handle_token_ha(val):
@@ -92,6 +94,7 @@ class GhostbusInterface():
         tokens.STROBE_W: lambda x: str(x),
         tokens.STROBE_R: lambda x: str(x),
         tokens.EXTERNAL: split_strs,
+        tokens.ALIAS:  lambda x: str(x),
     }
 
     @classmethod
@@ -105,7 +108,6 @@ class GhostbusInterface():
             token = cls._attributes.get(attr, None)
             if token is not None:
                 rvals[token] = cls._val_decoders[token](attrval)
-
         # Some attributes are implied
         if rvals.get(cls.tokens.ADDR) is not None:
             # Only imply HA if not an ExternalModule
@@ -389,12 +391,13 @@ class GhostBusser(VParser):
                     write_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
                     read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
                     exts = token_dict.get(GhostbusInterface.tokens.EXTERNAL, None)
+                    alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
                     if write_strobe is not None:
-                        print("                            write_strobe: {} => {}".format(netname, write_strobe))
+                        # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
                         associated_strobes[netname] = (write_strobe, False)
                     elif read_strobe is not None:
-                        print("                            read_strobe: {} => {}".format(netname, read_strobe))
+                        # print("                            read_strobe: {} => {}".format(netname, read_strobe))
                         associated_strobes[netname] = (read_strobe, True)
                     elif access is not None:
                         dw = len(net_dict['bits'])
@@ -402,6 +405,7 @@ class GhostBusser(VParser):
                         reg = MetaRegister(name=netname, dw=dw, meta=source, access=access)
                         reg.initval = initval
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
+                        reg.alias = alias
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
                             mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
@@ -683,6 +687,7 @@ class MetaRegister(Register):
         self.strobe = False
         self.write_strobes = []
         self.read_strobes = []
+        self.alias = None
 
     def copy(self):
         ref = super().copy()
@@ -704,6 +709,7 @@ class MetaRegister(Register):
             return False
         return True
 
+
 # TODO - Combine this class with MetaRegister
 class MetaMemory(Memory):
     def __init__(self, *args, **kwargs):
@@ -712,6 +718,7 @@ class MetaMemory(Memory):
         self._depthStr = None
         self.range = (None, None)
         self.depth = (None, None)
+        self.alias = None
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -808,7 +815,7 @@ class JSONMaker():
             if isinstance(ref, MemoryRegion):
                 subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops)
                 if flat:
-                    dd.update(subdd)
+                    update_without_collision(dd, subdd)
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
@@ -819,7 +826,9 @@ class JSONMaker():
                     "base_addr": mem.base + start,
                     "data_width": ref.dw,
                 }
-                if flat:
+                if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
+                    hier_str = str(ref.alias)
+                elif flat:
                     hierarchy = list(top_hierarchy)
                     hierarchy.append(ref.name)
                     if mangle_names:
@@ -846,6 +855,15 @@ class JSONMaker():
         with open(filepath, 'w') as fd:
             fd.write(ss)
         return
+
+
+def update_without_collision(old_dict, new_dict):
+    """Calls old_dict.update(new_dict) after ensuring there are no identical keys in both dicts."""
+    for key in new_dict.keys():
+        if key in old_dict:
+            raise GhostbusNameCollision("Memory map key {} defined more than once.".format(key))
+    old_dict.update(new_dict)
+    return
 
 
 def testWalkDict():

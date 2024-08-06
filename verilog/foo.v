@@ -23,7 +23,7 @@ module foo #(
 
 reg [3:0] foo_reg=0;                            // Non-host-accessible register
 
-(* ghostbus *) reg [GW-1:0] foo_ha_reg=8'h42;  // Host-accessible register (will be auto-decoded)
+(* ghostbus, ghostbus_alias="holiday_pasta" *) reg [GW-1:0] foo_ha_reg=8'h42;  // Host-accessible register (will be auto-decoded)
 (* ghostbus_ws="foo_ha_reg" *) reg foo_ha_reg_write_strobe=1'b0;  // Associated write-strobe; will strobe high when foo_ha_reg is written to
 (* ghostbus_rs="foo_ha_reg" *) reg foo_ha_reg_read_strobe=1'b0;  // Associated read-strobe; will strobe high when foo_ha_reg is read
 //(* ghostbus_strobe *) reg foo_strobe=1'b0;  // A strobe (write-only; value is ignored; pulse high for one clock cycle on write)

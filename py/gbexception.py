@@ -3,3 +3,7 @@
 class GhostbusException(Exception):
     def __init__(self, s):
         super().__init__(s)
+
+class GhostbusNameCollision(GhostbusException):
+    def __init__(self, s):
+        super().__init__(s)
