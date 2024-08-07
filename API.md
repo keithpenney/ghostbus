@@ -1,3 +1,31 @@
+# Quick Links
+
+[Attributes](#attributes)
+
+* [Define the Ghostbus](#busdefine)
+
+* [Define a CSR/RAM](#csr)
+
+* [Place a CSR/RAM at an explicit global address](#address)
+
+* [Add a simple strobe to the memory map](#simplestrobe)
+
+* [Add an associated strobe to a particular CSR/RAM](#ascstrobe)
+
+* [Conjuring: Add an external module to the Ghostbus](#conjure)
+
+* [Assign a CSR/RAM a global alias for the JSON memory map](#alias)
+
+[Routing Macros](#routing-macros)
+
+* [Adding the "magic" ports to your module declaration (i.e. "let the ghostbus in")](#ghost_in)
+
+* [Adding the "magic" ports to a module instantiation (i.e. "propogate the ghostbus")](#ghost_out)
+
+* [Including the auto-generated decoding logic into the codebase](#decoder)
+
+* [Including the macro definitions](#defs)
+
 # API
 All communication with the ghostbus Python tool is via Verilog attributes.
 The attributes are documented below.  All attributes listed in the same code block are functional aliases
@@ -13,7 +41,7 @@ not the author of this tool.  Complexity has been minimized as much as possible.
 
 ## Attributes
 
-### Define the Ghostbus
+### Define the Ghostbus <a name="busdefine"></a>
 ```verilog
 (* ghostbus_port="port_name" *)
 ```
@@ -79,8 +107,8 @@ _Example_:
 // Note that "foo_odd_duck" will assert whenever "odd_duck" asserts and the address specified is
 // within the block allocated to the "foo_bus" external module (and "address hit")
 ```
-
-### Define a CSR/RAM
+---------------------------------------------------------------------------------------------------
+### Define a CSR/RAM <a name="csr"></a>
 ```verilog
 // Add a CSR/RAM with R/W access (default)
 (* ghostbus *)
@@ -106,7 +134,8 @@ Add one of these attributes to a Verilog net to mark the net as host-accessible 
 __NOTE__: A writable register must be of net type `reg` while a read-only register can be of type `wire`
 or `reg`.
 
-### Place a CSR/RAM at an explicit global address
+---------------------------------------------------------------------------------------------------
+### Place a CSR/RAM at an explicit global address <a name="address"></a>
 ```verilog
 (* ghostbus_addr='h2000 *)
 ```
@@ -118,7 +147,8 @@ it requires more address bits than were allocated to the bus itself.
 __NOTE__: The `ghostbus_addr` attribute implies `ghostbus_ha` so you don't need them both (though they will
 not conflict if you add them both).
 
-### Add a simple strobe to the bus
+---------------------------------------------------------------------------------------------------
+### Add a simple strobe to the memory map <a name="simplestrobe"></a>
 ```verilog
 (* ghostbus_strobe *)
 ```
@@ -129,7 +159,8 @@ If you want both the written value and a strobe when it is written, you want an 
 
 __NOTE__: The tool currently only supports `reg` type nets, but it could easily support `wire` type in the future.
 
-### Add an associated strobe to a particular CSR/RAM
+---------------------------------------------------------------------------------------------------
+### Add an associated strobe to a particular CSR/RAM  <a name="ascstrobe"></a>
 ```verilog
 (* ghostbus_write_strobe="reg_name" *)
 (* ghostbus_ws="reg_name" *)
@@ -157,7 +188,8 @@ _Example_:
 (* ghostbus_rs="myReg" *) reg myRegRS=1'b0;
 ```
 
-### Conjuring: Add an external module to the Ghostbus
+---------------------------------------------------------------------------------------------------
+### Conjuring: Add an external module to the Ghostbus <a name="conjure"></a>
 ```verilog
 (* ghostbus_ext="bus_name, port_name" *)
 ```
@@ -190,7 +222,8 @@ config_romx rom (
 `endif
 ```
 
-### Assign a CSR/RAM a global alias for the JSON memory map
+---------------------------------------------------------------------------------------------------
+### Assign a CSR/RAM a global alias for the JSON memory map <a name="alias"></a>
 ```verilog
 (* ghostbus_alias="foo" *)
 ```
@@ -222,7 +255,7 @@ guarded ghostbus macro will look something like this:
 `endif
 ```
 
-### Adding the "magic" ports to your module declaration (i.e. "let the ghostbus in")
+### Adding the "magic" ports to your module declaration (i.e. "let the ghostbus in") <a name="ghost_in"></a>
 The ghostbus routes through the hierarchy using nets of the same width (simply masking out un-needed addr/data bits)
 so there's a single explicit macro to add those ports (which you should put at the bottom of your port list).
 
@@ -238,7 +271,7 @@ module foo (
 );
 ```
 
-### Adding the "magic" ports to a module instantiation (i.e. "propogate the ghostbus")
+### Adding the "magic" ports to a module instantiation (i.e. "propogate the ghostbus") <a name="ghost_out"></a>
 The yang to the `` `GHOSTBUS_ports`` yin is not universal.  It is specific to both the module its within (the
 "parent module") and the instance (not the module) it connects to.
 
@@ -272,7 +305,7 @@ vince staples (
 endmodule
 ```
 
-### Including the auto-generated decoding logic into the codebase
+### Including the auto-generated decoding logic into the codebase <a name="decoder"></a>
 The bus decoding logic is generated specific to each module through which the ghostbus passes
 (even if it's just passing through).  A macro is created for each of these modules, so logically
 the naming convention simply depends only on the module name in which the logic is included.
@@ -301,7 +334,7 @@ module foo (
 endmodule
 ```
 
-### Including the macro definitions
+### Including the macro definitions <a name="defs"></a>
 This cat can be... shaved... in many ways.  A good solution for a particular build system is to pass
 all the macro definitions to the synthesis tool directly (recall Verilog macros are global by definition).
 All the macros generated by the __ghostbus__ tool are collected in a special file called `defs.vh` which
