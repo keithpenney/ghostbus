@@ -36,81 +36,8 @@ __TODO:__
   * Support for multiple ghostbuses
   * Alternate bus architectures (AXI4/AXI4LITE, wishbone, etc)
 
-# API
-All communication with the ghostbus Python tool is via Verilog attributes.
-The attributes are documented below.  All attributes listed in the same code block are functional aliases
-(no difference in functionality).  The different aliases are provided for personal choice or "grepability".
-
-### Define the Ghostbus
-```verilog
-(* ghostbus_port="bus_name, port_name" *)
-```
-TODO doc
-
-### Define a CSR/RAM
-```verilog
-// Add a CSR/RAM with R/W access (default)
-(* ghostbus *)
-(* ghostbus_ha *)
-(* ghostbus_csr *)
-(* ghostbus_ram *)
-(* ghostbus="rw" *) // Optional explicit access specifier
-
-// Add a CSR/RAM with read-only access
-(* ghostbus="r" *)
-(* ghostbus="ro" *)
-
-// Add a CSR/RAM with write-only access
-(* ghostbus="w" *)
-(* ghostbus="wo" *)
-```
-All the above attributes are aliases (function identically).
-The various choices are provided for cases where you e.g. want to easily find your CSRs or your RAMs, or
-perhaps find the simplified "ghostbus" attribute not "grepable" enough.
-
-Add one of these attributes to a Verilog net to mark the net as host-accessible (i.e. a CSR/RAM).
-
-__NOTE__: A writable register must be of net type `reg` while a read-only register can be of type `wire`
-or `reg`.
-
-### Place a CSR/RAM at an explicit global address
-```verilog
-(* ghostbus_addr='h2000 *)
-```
-Forces the tool to place the marked CSR/RAM at an explicit address.
-Explicit addresses get priority when assigning the memory map.
-The tool will raise a Python exception if the address conflicts with any other explicit address or if
-it requires more address bits than were allocated to the bus itself.
-
-__NOTE__: The `ghostbus_addr` attribute implies `ghostbus_ha` so you don't need them both (though they will
-not conflict if you add them both).
-
-### Add a simple strobe to the bus
-```verilog
-(* ghostbus_strobe *)
-```
-TODO doc
-
-### Add an associated strobe to a particular CSR/RAM
-```verilog
-(* ghostbus_write_strobe="reg_name" *)
-(* ghostbus_ws="reg_name" *)
-(* ghostbus_read_strobe="reg_name" *)
-(* ghostbus_rs="reg_name" *)
-```
-TODO doc
-
-### Add an external module to the Ghostbus
-```Verilog
-(* ghostbus_ext=??? *) // TODO
-```
-TODO doc
-
-### Assign a CSR/RAM a global alias for the JSON memory map
-```verilog
-(* ghostbus_alias="foo" *)
-```
-TODO doc
+## Usage
+See the [API documentation]("API.md") for usage.
 
 ## Design considerations
 

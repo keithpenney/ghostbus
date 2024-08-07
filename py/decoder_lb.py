@@ -30,8 +30,8 @@ class BusLB():
         "dout":     (("wdata",), mandatory, _output),
         "we":       (("wen",), mandatory, _output),
         "re":       (("ren",), optional, _output),
-        "wstb":     (("write_strobe",), optional, _output),
-        "rstb":     (("read_strobe",), optional, _output),
+        "wstb":     (("write_strobe", "wstrb"), optional, _output),
+        "rstb":     (("read_strobe", "rstrb"), optional, _output),
     }
     # Make a map of alias-to-value
     _alias_map = {}
