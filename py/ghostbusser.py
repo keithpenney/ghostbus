@@ -55,7 +55,9 @@ class GhostbusInterface():
         "ghostbus_ext":         tokens.EXTERNAL,
         "ghostbus_alias":       tokens.ALIAS,
     }
-    @staticmethod
+
+    # NOTE! This is only callable via the _val_decoders dict below
+    #       Changed from @staticmethod for compatibility with Python <3.10
     def handle_token_ha(val):
         """Allow for optional access string specifiers.
         E.g.:
@@ -79,7 +81,8 @@ class GhostbusInterface():
                     access |= Register.READ
         return access
 
-    @staticmethod
+    # NOTE! This is only callable via the _val_decoders dict below
+    #       Changed from @staticmethod for compatibility with Python <3.10
     def split_strs(val):
         if hasattr(val, 'split'):
             if ',' in val:
