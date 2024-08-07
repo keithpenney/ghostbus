@@ -48,6 +48,38 @@ __NOTE__: The way the ghostbus declaration is done should bring to mind how the 
 
 __NOTE__: I'd love some help supporting other bus protocols (e.g. AXI4(lite), wishbone, etc). See `py/decoder_lb.py`.
 
+In addition to the above, a method is provided to tack on one or more weird signals to your bus which will become part
+of the bus definition and will "ride along" with the bus and get routed into all the same places the bus goes.  Some
+oddball use cases could include a "pre-read" signal that gives forewarning that a read is coming, or some additional
+context lines like a status/response code.  The only way to use such signals is by _conjuring_ a "real bus" (see below)
+and specifying the special net in question.
+
+For the below attributes, the `N` is any positive integer.  There is no upper bound to the number of wacky signals that
+can ride along with your very strange bus.
+* `extra_inN`, `extra_inputN`: some special net that is an input into the host
+* `extra_outN`, `extra_outputN`: some special net that is an output from the host
+
+_Example_:
+```verilog
+// Declare the ghostbus as in the example above
+(* ghostbus_port="clk" *)         wire lb_clk;
+//... assume the rest of the ghostbus is declared
+
+// Tack on an extra output (host-centric nomenclature) from the host
+(* ghostbus_port="extra_out0" *)  wire odd_duck; // who knows what this does? Ghostbus doesn't care.
+
+// Conjure a real bus sometime later.  Could be anywhere the ghostbus goes.
+// See "Conjuring" discussion below
+(* ghostbus_ext="foo_bus, clk" *)        wire foo_clk;
+//... again assume we conjure as much of the bus as needed
+
+// We'll also grab this special signal we defined earlier
+(* ghostbus_ext="foo_bus, extra_out0" *) wire foo_odd_duck;
+
+// Note that "foo_odd_duck" will assert whenever "odd_duck" asserts and the address specified is
+// within the block allocated to the "foo_bus" external module (and "address hit")
+```
+
 ### Define a CSR/RAM
 ```verilog
 // Add a CSR/RAM with R/W access (default)
@@ -125,9 +157,9 @@ _Example_:
 (* ghostbus_rs="myReg" *) reg myRegRS=1'b0;
 ```
 
-### Add an external module to the Ghostbus
+### Conjuring: Add an external module to the Ghostbus
 ```verilog
-(* ghostbus_ext="bus_name, port_name" *) // TODO
+(* ghostbus_ext="bus_name, port_name" *)
 ```
 As nice as it would be to build an entire codebase using just ghostbus CSRs/RAMs, it's often necessary to attach an
 existing module with a compatible bus interface to the ghostbus itself.  Since the ghostbus is auto-routed, you
