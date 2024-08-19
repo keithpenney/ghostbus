@@ -371,6 +371,7 @@ class GhostBusser(VParser):
                     # for token, val in token_dict.items():
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
+                    signed = net_dict.get("signed", None)
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
@@ -392,6 +393,7 @@ class GhostBusser(VParser):
                         reg.initval = initval
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
                         reg.alias = alias
+                        reg.signed = signed
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
                             mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
@@ -410,6 +412,7 @@ class GhostBusser(VParser):
             if memories is not None:
                 for memname, mem_dict in memories.items():
                     attr_dict = mem_dict["attributes"]
+                    signed = net_dict.get("signed", None)
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
                     # for token, val in token_dict.items():
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
@@ -421,6 +424,7 @@ class GhostBusser(VParser):
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
                         mem = MetaMemory(name=memname, dw=dw, aw=aw, meta=source)
+                        mem.signed = signed
                         if mr is None:
                             module_name = get_modname(mod_hash)
                             mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
@@ -665,6 +669,7 @@ class MetaRegister(Register):
         self.write_strobes = []
         self.read_strobes = []
         self.alias = None
+        self.signed = None
 
     def copy(self):
         ref = super().copy()
@@ -696,6 +701,7 @@ class MetaMemory(Memory):
         self.range = (None, None)
         self.depth = (None, None)
         self.alias = None
+        self.signed = None
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -726,6 +732,7 @@ class ExternalModule():
             serr = f"{name} external bus has greater data width {extbus['dw']}" + \
                    f" than the ghostbus {ghostbus['dw']}"
             raise GhostbusException(serr)
+        self.signed = None
         self.name = name
         self.inst = name # alias
         self.ghostbus = ghostbus
@@ -796,10 +803,14 @@ class JSONMaker():
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
+                if ref.signed is not None and ref.signed:
+                    signstr = "signed"
+                else:
+                    signstr = "unsigned"
                 entry = {
                     "access": Register.accessToStr(ref.access),
                     "addr_width": ref.aw,
-                    "sign": "unsigned", # TODO detect/support signed values
+                    "sign": signstr,
                     "base_addr": mem.base + start,
                     "data_width": ref.dw,
                 }

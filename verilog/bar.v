@@ -22,7 +22,7 @@ module bar #(
 
 reg [3:0] bar_reg=1;                            // Non-host-accessible register
 
-(* ghostbus_ha *) reg [7:0] bar_ha_reg=8'hcc;      // Host-accessible register (will be auto-decoded)
+(* ghostbus_ha *) reg signed [7:0] bar_ha_reg=8'hcc;      // Host-accessible register (will be auto-decoded)
 (* ghostbus_ha *) reg [31:0] bar_ha_reg_two=32'hceceface;  // Another host-accessible register
 
 (* ghostbus_ha, ghostbus_addr='h100 *)
