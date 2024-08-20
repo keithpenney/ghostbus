@@ -13,6 +13,21 @@ from decoder_lb import DecoderLB, BusLB, vhex
 from gbexception import GhostbusException, GhostbusNameCollision
 from util import enum, strDict, print_dict, strip_empty
 
+# TODO: Multi-ghostbus hierarchy parsing
+#   1. If len(busnames) > 1:
+#       All instantiated modules must be tagged with the "ghostbus_name" attribute.
+#       Raise Exception if any are not tagged or if the attribute value does not match
+#       any names in 'busnames'
+#   2. If len(busnames) > 1:
+#       Tag all instantiated modules with the particular ghostbus that is to be routed
+#       into them.
+#       This attribute must be inherited throughout the hiearchy
+#   3. Break off branches of the MemoryTree starting which include the "bustop" level
+#       and isolate the bus domains.
+#   4. Each of these MemoryTree branches should make its own JSON relative to base 0.
+#   5. An external tool can combine the JSONs and ensure the resulting memory map reflects
+#       the hand-wired combination of the ghostbusses.
+
 # When Yosys generates a JSON, it follows this structure:
 #   modules: {
 #     mod_inst : {},
@@ -340,7 +355,10 @@ class GhostBusser(VParser):
         super().__init__(*args, **kwargs)
         self.memory_map = None
         #self._top_bus = BusLB()
-        self._ghostbusses = [BusLB()]
+        self._ghostbusses = []
+        # TODO - There should be a separate memory map for each
+        #        ghostbus.  But how do I detect this...?
+        self.memory_maps = []
         self._ext_dict = {}
 
     def get_map(self):
@@ -365,12 +383,19 @@ class GhostBusser(VParser):
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
                     if ismodule(inst_name):
+                        attr_dict = inst_dict["attributes"]
+                        token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                        busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
+                        if busname is not None:
+                            # TODO - Keep track of this info to build a hierarchy dict for each bus!
+                            print(f"Harumph! Instance {inst_name} in {module_name} hooks up to bus {busname}.")
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             mr = None
             # Check for regs
             netnames = mod_dict.get("netnames")
             entries = []
             bustop = False
+            busnames = []
             if netnames is not None:
                 for netname, net_dict in netnames.items():
                     attr_dict = net_dict["attributes"]
@@ -405,6 +430,8 @@ class GhostBusser(VParser):
                         if mr is None:
                             mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
                             # print("created mr label {}".format(mr.label))
+                        if addr is not None:
+                            reg.manually_assigned = True
                         mr.add(width=0, ref=reg, addr=addr)
                     elif exts is not None:
                         dw = len(net_dict['bits'])
@@ -414,9 +441,10 @@ class GhostBusser(VParser):
                     busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if ports is not None:
                         bustop = True
-                        print(f"^^^^^^^^^^^^^^^^^^^^^ bustop = True because of {netname} in {module_name}")
                         dw = len(net_dict['bits'])
                         self._handleBus(netname, ports, dw, source, busname)
+                        if busname not in busnames:
+                            busnames.append(busname)
             # Check for RAMs
             memories = mod_dict.get("memories")
             if memories is not None:
@@ -439,6 +467,8 @@ class GhostBusser(VParser):
                             module_name = get_modname(mod_hash)
                             mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
                             print("created mr label {}".format(mr.label))
+                        if addr is not None:
+                            mem.manually_assigned = True
                         mr.add(width=aw, ref=mem, addr=addr)
             if mr is not None:
                 for strobe_name, reg_type in associated_strobes.items():
@@ -455,7 +485,11 @@ class GhostBusser(VParser):
                 ghostmods[mod_hash] = mr
             if bustop:
                 bustops[module_name] = True
-                print(f"^^^^^^^^^^^^^^^^^^^^^ Module {module_name} contains a bus instantiation! mr = {mr}")
+                nbusses = len(busnames)
+                plural = ""
+                if nbusses > 1:
+                    plural = "s"
+                print(f"^^^^^^^^^^^^^^^^^^^^^ Module {module_name} contains {nbusses} bus instantiation{plural}! mr = {mr}")
             handledExtModules.append(module_name)
         self._busValid = True
         for bus in self._ghostbusses:
@@ -474,6 +508,7 @@ class GhostBusser(VParser):
         self.memory_map = memtree.resolve()
         self.memory_map.shrink()
         self.memory_map.print(4)
+        self.memory_maps = [self.memory_map]
         return ghostmods
 
     def trim_hierarchy(self):
@@ -711,6 +746,7 @@ class MetaRegister(Register):
         self.read_strobes = []
         self.alias = None
         self.signed = None
+        self.manually_assigned = False
 
     def copy(self):
         ref = super().copy()
@@ -718,6 +754,7 @@ class MetaRegister(Register):
         ref.strobe = self.strobe
         ref.write_strobes = self.write_strobes
         ref.read_strobes = self.read_strobes
+        ref.manually_assigned = self.manually_assigned
         return ref
 
     def _readRangeDepth(self):
@@ -743,6 +780,7 @@ class MetaMemory(Memory):
         self.depth = (None, None)
         self.alias = None
         self.signed = None
+        self.manually_assigned = False
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -779,9 +817,11 @@ class ExternalModule():
         self.ghostbus = ghostbus
         self.extbus = extbus
         self.access = self.extbus.access
+        self.manually_assigned = False
         if self.base is None:
             print(f"New external module: {name}; size = 0x{size:x}")
         else:
+            self.manually_assigned = True
             print(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
 
     def getDoutPort(self):
@@ -810,6 +850,11 @@ class ExternalModule():
 
 
 class JSONMaker():
+    # TODO - I need to make one JSON for every ghostbus in the design, which will each
+    #        specify the regmap of its own tree relative to its own base (0)
+    #        Then a separate tool can merge the JSONs into a complete memory map. This
+    #        is outside the scope of this tool because it is not aware of how the
+    #        individual ghostbusses are assigned (paged) globally
     def __init__(self, memtree, drops=()):
         self.memtree = memtree
         self._drops = drops
@@ -824,7 +869,8 @@ class JSONMaker():
                 "addr_width": 0,
                 "sign": "unsigned",
                 "base_addr": 327681,
-                "data_width": 1
+                "data_width": 1,
+                "global": false
             },
         }
         """
@@ -944,7 +990,8 @@ def handleGhostbus(args):
             # JSON
             if trim:
                 gb.trim_hierarchy()
-            jm = JSONMaker(gb.memory_map, drops=args.ignore)
+            for mem_map in gb.memory_maps:
+                jm = JSONMaker(mem_map, drops=args.ignore)
             jm.write(args.json, path=args.dest, flat=args.flat, mangle=args.mangle)
     except GhostbusException as e:
         print(e)

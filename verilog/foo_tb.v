@@ -48,7 +48,7 @@ localparam GB_DW = 32;
   `GHOSTBUS_foo_tb
 `endif
 
-foo #(
+(* ghostbus_name="schoolie" *) foo #(
   .AW(AW),
   .DW(DW),
   .GW(GW),

@@ -53,15 +53,9 @@ and we only distinguish between the busses (with the specific macros/attributes 
 where multiple busses exist.
 
 Specifically, these need to change somehow:
-  * `` `GHOSTBUS_ports``
-    For only that specific layer where more than one bus exists, we need to incorporate the name of the bus somehow.
-    I don't know if this macro will ever be used (it would need to be a module with more than one bus coming in).
-    In fact, I don't think it should be used (port name collision); let's deprecate it before it even exists!
-    __Deprecated__:
-      `` `GHOSTBUSPORTS_busname``
-      The default (single ghostbus) usage can just omit `_busname` like: `` `GHOSTBUSPORTS``
-
   * `(* ghostbus_port="port_name" *)`
+    If I figure out how to interpret the hierarchy (via Yosys) in a multi-ghostbus context, I'll need a way to
+    specify each bus by name and indicate which bus should be routed to which instance.
     Need to incorporate the name of the bus somehow.
     Ideas:
       `(* ghostbus_port="bus_name, port_name" *)`
@@ -73,6 +67,13 @@ Specifically, these need to change somehow:
               Clean and explicit.
               Easy to make backwards compatible (`ghostbus_bus=None` by default)
         I'm going with this option.
+
+  * `` `GHOSTBUS_parentmodname_instname ``
+    Suppose in the top module we have two ghostbusses declared and named, and we also have a ghostmod instantiated
+    at that same level.  How do we specify which ghostbus is to wire to the ghostmod?
+    Let's use an attribute on the module instance!
+      `(* ghostbus_name="ghostbus_name" *) foo foo_i (...);`
+    Again, this will only be needed in the scenario considered above.
 
   * `(* ghostbus_ext="bus_name, port_name" *)`
     For the vast majority of use cases (only a single ghostbus comes into the module), the above should be sufficient.
