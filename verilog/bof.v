@@ -5,7 +5,7 @@ module bof (
   ,input [1:0] garbage
   ,output [1:0] trash
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_ports
+`GHOSTBUSPORTS
 `endif
 );
 

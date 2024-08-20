@@ -8,7 +8,7 @@ module foo #(
 ) (
   input clk
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_ports
+`GHOSTBUSPORTS
 `else
   `ifdef MANUAL_TEST
   // Manual ports

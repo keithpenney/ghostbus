@@ -9,7 +9,7 @@ module baz #(
    input clk
   ,input demo_sig
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_ports
+`GHOSTBUSPORTS
 `else
   `ifdef MANUAL_TEST
   // Manual ports

@@ -27,7 +27,7 @@ module i2c_chunk_gb #(
 	input  rst,  // not yet used
 	input  intp  // not yet used
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_ports
+`GHOSTBUSPORTS
 `endif
 );
 

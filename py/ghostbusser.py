@@ -38,6 +38,7 @@ class GhostbusInterface():
         "STROBE_R",
         "EXTERNAL",
         "ALIAS",
+        "BUSNAME",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -54,6 +55,7 @@ class GhostbusInterface():
         "ghostbus_rs":          tokens.STROBE_R,
         "ghostbus_ext":         tokens.EXTERNAL,
         "ghostbus_alias":       tokens.ALIAS,
+        "ghostbus_name":        tokens.BUSNAME,
     }
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -90,14 +92,15 @@ class GhostbusInterface():
         return (val,)
 
     _val_decoders = {
-        tokens.HA: handle_token_ha,
-        tokens.ADDR: lambda x: int(x, 2),
-        tokens.PORT: split_strs,
-        tokens.STROBE: lambda x: True,
+        tokens.HA:       handle_token_ha,
+        tokens.ADDR:     lambda x: int(x, 2),
+        tokens.PORT:     split_strs,
+        tokens.STROBE:   lambda x: True,
         tokens.STROBE_W: lambda x: str(x),
         tokens.STROBE_R: lambda x: str(x),
         tokens.EXTERNAL: split_strs,
-        tokens.ALIAS:  lambda x: str(x),
+        tokens.ALIAS:    lambda x: str(x),
+        tokens.BUSNAME:  lambda x: str(x),
     }
 
     @classmethod
@@ -336,7 +339,8 @@ class GhostBusser(VParser):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.memory_map = None
-        self._top_bus = BusLB()
+        #self._top_bus = BusLB()
+        self._ghostbusses = [BusLB()]
         self._ext_dict = {}
 
     def get_map(self):
@@ -345,6 +349,8 @@ class GhostBusser(VParser):
         top_mod = None
         top_dict = self._dict["modules"]
         handledExtModules = []
+        # Keep track of where a ghostbus is instantiated
+        bustops = {}
         for mod_hash, mod_dict in top_dict.items():
             associated_strobes = {}
             module_name = get_modname(mod_hash)
@@ -364,6 +370,7 @@ class GhostBusser(VParser):
             # Check for regs
             netnames = mod_dict.get("netnames")
             entries = []
+            bustop = False
             if netnames is not None:
                 for netname, net_dict in netnames.items():
                     attr_dict = net_dict["attributes"]
@@ -404,9 +411,12 @@ class GhostBusser(VParser):
                         if module_name not in handledExtModules:
                             self._handleExt(module_name, netname, exts, dw, source, addr=addr)
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
+                    busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if ports is not None:
+                        bustop = True
+                        print(f"^^^^^^^^^^^^^^^^^^^^^ bustop = True because of {netname} in {module_name}")
                         dw = len(net_dict['bits'])
-                        self._handleBus(netname, ports, dw, source)
+                        self._handleBus(netname, ports, dw, source, busname)
             # Check for RAMs
             memories = mod_dict.get("memories")
             if memories is not None:
@@ -441,16 +451,25 @@ class GhostBusser(VParser):
                                 register.read_strobes.append(strobe_name)
                             else:
                                 register.write_strobes.append(strobe_name)
+                mr.bustop = bustop
                 ghostmods[mod_hash] = mr
+            if bustop:
+                bustops[module_name] = True
+                print(f"^^^^^^^^^^^^^^^^^^^^^ Module {module_name} contains a bus instantiation! mr = {mr}")
             handledExtModules.append(module_name)
-        self._busValid = self._top_bus.validate()
+        self._busValid = True
+        for bus in self._ghostbusses:
+            valid = bus.validate()
+            if not valid:
+                self._busValid = False
+        #self._busValid = self._top_bus.validate()
         self._top = top_mod
         self._resolveExt(ghostmods)
         #print_dict(modtree)
         modtree = self.build_modtree(modtree)
         #print("===============================================")
         #print_dict(modtree)
-        memtree = self.build_memory_tree(modtree, ghostmods)
+        memtree = self.build_memory_tree(modtree, ghostmods, bustops)
         #print("***********************************************")
         self.memory_map = memtree.resolve()
         self.memory_map.shrink()
@@ -461,10 +480,20 @@ class GhostBusser(VParser):
         self.memory_map.trim_hierarchy()
         return
 
-    def _handleBus(self, netname, vals, dw, source):
+    def _handleBus(self, netname, vals, dw, source, busname=None):
         rangestr = getUnparsedWidthRange(source)
         for val in vals:
-            self._top_bus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
+            hit = False
+            for bus in self._ghostbusses:
+                if bus.name == busname:
+                    print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname}")
+                    bus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
+                    hit = True
+            if not hit:
+                print(f"&&&&&&&&&&&&&&&&&&& _handleBus: New bus {busname}; adding {netname}")
+                newbus = BusLB(busname)
+                newbus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
+                self._ghostbusses.append(newbus)
         return
 
     def _handleExt(self, module, netname, vals, dw, source, addr=None):
@@ -514,7 +543,8 @@ class GhostBusser(VParser):
 
     def _resolveExt(self, ghostmods):
         #self._ext_modules = {}
-        ghostbus = self._top_bus
+        #ghostbus = self._top_bus
+        ghostbus = self.getBusDict()
         for module, data in self._ext_dict.items():
             busses = self._resolveExtModule(module, data)
             #self._ext_modules[module] = []
@@ -594,8 +624,16 @@ class GhostBusser(VParser):
             #print_dict(busses[instname])
         return busses
 
-    def getBusDict(self):
-        return self._top_bus.get()
+    def getBusDict(self, busname=None):
+        if len(self._ghostbusses) == 1:
+            return self._ghostbusses[0]
+        for bus in self._ghostbusses:
+            if bus.name == busname:
+                return bus
+        return None
+
+    def getBusDicts(self):
+        return self._ghostbusses
 
     def build_modtree(self, dd):
         top = self._top
@@ -611,12 +649,12 @@ class GhostBusser(VParser):
         dd_keys = [key for key in dd.keys()]
         for module in dd_keys:
             instances_dict = dd[module]
-            #print(f"Processing: {module}")
+            # print(f"               Processing: {module}")
             instance_keys = [key for key in instances_dict.keys()]
             for inst_name in instance_keys:
                 inst_key = instances_dict[inst_name]
                 dict_key = (inst_name, inst_key)
-                #print(f"  Instance key: {dict_key}")
+                # print(f"                   Instance key: {dict_key}")
                 inst = dd.get(inst_key, None)
                 del instances_dict[inst_name]
                 if inst is None:
@@ -626,7 +664,7 @@ class GhostBusser(VParser):
                     dd[module][dict_key] = inst
         return ModuleInstance(top, top, dd[top])
 
-    def build_memory_tree(self, modtree, ghostmods):
+    def build_memory_tree(self, modtree, ghostmods, bustops={}):
         # First build an empty dict of MemoryRegions
         # Start from leaf,
         #print("++++++++++++++++++++++++++++++++++++++++++++")
@@ -650,6 +688,9 @@ class GhostBusser(VParser):
             else:
                 #print(f"no {key} in ghostmods")
                 val.memory = MemoryRegion(label=module_name, hierarchy=hier)
+            bustop = bustops.get(module_name, None)
+            if bustop is not None:
+                val.memory.bustop = bustop
         # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
         return modtree
 
@@ -890,14 +931,15 @@ def handleGhostbus(args):
     gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
     trim = not args.notrim
     mods = gb.get_map()
-    bus = gb.getBusDict()
+    #bus = gb.getBusDict()
+    gbusses = gb.getBusDicts()
     try:
         if args.live or (args.map is not None):
-            dec = DecoderLB(gb.memory_map, bus, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
+            dec = DecoderLB(gb.memory_map, gbusses, csr_class=MetaRegister, ram_class=MetaMemory, ext_class=ExternalModule)
             if args.live:
                 dec.GhostbusMagic(dest_dir=args.dest)
             if args.map is not None:
-                dec.ExtraVerilogMemoryMap(args.map, bus)
+                dec.ExtraVerilogMemoryMap(args.map, gbusses)
         if args.json is not None:
             # JSON
             if trim:

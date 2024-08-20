@@ -33,6 +33,7 @@ class BusLB():
         "wstb":     (("write_strobe", "wstrb"), optional, _output),
         "rstb":     (("read_strobe", "rstrb"), optional, _output),
     }
+    _port_dict = {key: "GBPORT_{}".format(key) for key in _bus_info.keys()}
     # Make a map of alias-to-value
     _alias_map = {}
     for key, data in _bus_info.items():
@@ -62,7 +63,8 @@ class BusLB():
             return True
         return False
 
-    def __init__(self):
+    def __init__(self, name=None):
+        self._name = name
         self._bus = {}
         for key, data in self._bus_info.items():
             self._bus[key] = None
@@ -91,6 +93,13 @@ class BusLB():
                 else:
                     dd[key] = None
         return dd
+
+    def getPortDict(self):
+        return self._port_dict
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def base(self):
@@ -136,7 +145,10 @@ class BusLB():
         return None
 
     def __getitem__(self, key):
-        return self._bus.__getitem__(key)[0]
+        item = self._bus.__getitem__(key)
+        if item is not None:
+            return self._bus.__getitem__(key)[0]
+        return None
 
     def get_source(self, key):
         return self._bus.__getitem__(key)[1]
@@ -251,13 +263,23 @@ class BusLB():
 
 
 class DecoderLB():
-    def __init__(self, memregion, bus, csr_class, ram_class, ext_class):
+    # This list is singular to the class and keeps track of macros
+    # defined by any instance
+    _defs = []
+    def __init__(self, memregion, ghostbusses, csr_class, ram_class, ext_class):
         self.mod = memregion
-        self.bus = bus # TODO deleteme; replace with self.ghostbus
-        self.ghostbus = bus
+        self.bustop = self.mod.bustop
+        self.ghostbusses = ghostbusses
+        # TODO - Enable all the ghostbusses
+        self.ghostbus = self.ghostbusses[0]
+        self.ghostbus_dict = {}
+        for bus in self.ghostbusses:
+            self.ghostbus_dict[bus.name] = bus
         self.aw = self.mod.aw
         self.inst = self.mod.hierarchy[-1]
         self.name = self.mod.label
+        if self.bustop:
+            print(f"This DecoderLB is a bustop! {self.name}")
         self.base = self.mod.base
         self.submods = []
         self.rams = []
@@ -274,7 +296,7 @@ class DecoderLB():
             elif isinstance(ref, ext_class):
                 self.exts.append((start, ref))
             elif isinstance(ref, MemoryRegion):
-                self.submods.append((start, self.__class__(ref, self.bus, csr_class, ram_class, ext_class)))
+                self.submods.append((start, self.__class__(ref, ghostbusses, csr_class, ram_class, ext_class)))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
                     self.max_local = stop
@@ -291,7 +313,7 @@ class DecoderLB():
         defined."""
         for csr in self.csrs:
             if csr.strobe or (len(csr.write_strobes) > 0):
-                if self.bus["wstb"] is None:
+                if self.ghostbus["wstb"] is None:
                     if csr.strobe:
                         strobe_name = csr.name
                     else:
@@ -304,7 +326,7 @@ class DecoderLB():
                             "  (* ghostbus_port='wstb, we' *) wire wen;"
                     raise Exception(serr)
             if len(csr.read_strobes) > 0:
-                if self.bus["rstb"] is None:
+                if self.ghostbus["rstb"] is None:
                     strobe_name = csr.read_strobes[0]
                     serr = f"\n{strobe_name} requires a 'rstb' signal in the ghostbus. " + \
                             "Please define it with the other bus signals, e.g.:\n" + \
@@ -314,17 +336,40 @@ class DecoderLB():
                             "  (* ghostbus_port='rstb, re' *) wire ren;"
                     raise Exception(serr)
         # Make some decoding definitions here to save checks later
-        if (self.bus['wstb'] is None) or (self.bus['we'] == self.bus['wstb']):
-            self._bus_we = self.bus['we']
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
         else:
-            self._bus_we = f"{self.bus['we']} & {self.bus['wstb']}"
-        if self.bus['re'] is not None:
+            namemap = portdict
+        if (self.ghostbus['wstb'] is None) or (self.ghostbus['we'] == self.ghostbus['wstb']):
+            self._bus_we = namemap['we']
+        else:
+            self._bus_we = f"{namemap['we']} & {namemap['wstb']}"
+        if self.ghostbus['re'] is not None:
             self._asynch_read = False
-            self._bus_re = self.bus['re']
+            self._bus_re = namemap['re']
         else:
-            self._bus_re = f"~{self.bus['we']}"
+            self._bus_re = f"~{namemap['we']}"
             self._asynch_read = True
         return
+
+    def getGhostbus(self, name=None):
+        bus = self.ghostbus_dict.get(name, None)
+        if bus is None:
+            raise GhostbusException(f"Unknown ghostbus with name {name}")
+        return bus
+
+    @classmethod
+    def _logDef(cls, suffix):
+        cls._defs.append(suffix)
+        return
+
+    @classmethod
+    def _isDefd(cls, suffix):
+        for ss in cls._defs:
+            if ss == suffix:
+                return True
+        return False
 
     def _clearDef(self, dest_dir):
         """Start with empty macro definitions file"""
@@ -338,9 +383,22 @@ class DecoderLB():
             fd.write(defstr)
         return
 
+    def _addGhostPortsDef(self, dest_dir):
+        gbports = self.GhostbusPorts()
+        fname = "ghostbusports.vh"
+        with open(os.path.join(dest_dir, fname), "w") as fd:
+            fd.write(gbports + "\n")
+            print(f"Wrote to {fname}")
+        macrostr = f"GHOSTBUSPORTS"
+        macrodef = f"`include \"{fname}\""
+        return self._addDef(dest_dir, macrostr, macrodef)
+
     def _addGhostbusDef(self, dest_dir, suffix):
+        if self._isDefd(suffix):
+            return
         macrostr = f"GHOSTBUS_{suffix}"
         macrodef = f"`include \"ghostbus_{suffix}.vh\""
+        self._logDef(suffix)
         return self._addDef(dest_dir, macrostr, macrodef)
 
     def _addGhostbusLive(self, dest_dir):
@@ -354,7 +412,7 @@ class DecoderLB():
             fd.write("\n".join(macrostr) + "\n")
         return
 
-    def ExtraVerilogMemoryMap(self, filename, bus):
+    def ExtraVerilogMemoryMap(self, filename, ghostbusses):
         """An extra (non-core functionality) feature.  Generate a memory
         map in Verilog syntax which can be used for automatic testbench
         decoder validation.
@@ -380,6 +438,8 @@ class DecoderLB():
                     v |= (1<<n)
             return v
 
+        # TODO - Enable all the ghostbusses
+        bus = ghostbusses[0]
         csrs = []
         rams = []
         self._collectCSRs(csrs)
@@ -561,13 +621,8 @@ class DecoderLB():
         output directory 'dest_dir'."""
         import os
         self._clearDef(dest_dir)
-        gbports = self.GhostbusPorts()
-        fname = "ghostbus_ports.vh"
-        with open(os.path.join(dest_dir, fname), "w") as fd:
-            fd.write(gbports)
-            print(f"Wrote to {fname}")
         self._addGhostbusLive(dest_dir)
-        self._addGhostbusDef(dest_dir, "ports")
+        self._addGhostPortsDef(dest_dir)
         self._GhostbusDoSubmods(dest_dir)
         return
 
@@ -597,57 +652,63 @@ class DecoderLB():
         ss.append(self.busDecoding())
         return "\n".join(ss)
 
-    def GhostbusPorts(self):
+    def GhostbusPorts(self, name=None):
         """Generate the necessary ghostbus Verilog port declaration"""
+        # TODO: This needs to change to support multiple ghostbusses.  We should
+        #       use the "name" parameter to get the ports for a given named bus
+        ghostbus = self.getGhostbus(name)
+        ports = ghostbus.getPortDict()
         ss = [
             # TODO - It is conceivable that one could have a read-only or write-only
             #        ghostbus and therefore 'wdata' or 'rdata' are not stricly necessary
             #        but there should be at least one present.
             # Mandatory ports
             "// Ghostbus ports",
-            f",input  {self.bus['clk']}",
-            f",input  [{self.bus['aw']-1}:0] {self.bus['addr']}",
-            f",input  [{self.bus['dw']-1}:0] {self.bus['dout']}",
-            f",output [{self.bus['dw']-1}:0] {self.bus['din']}",
-            f",input  {self.bus['we']}",
+            f",input  {ports['clk']}",
+            f",input  [{ghostbus['aw']-1}:0] {ports['addr']}",
+            f",input  [{ghostbus['dw']-1}:0] {ports['dout']}",
+            f",output [{ghostbus['dw']-1}:0] {ports['din']}",
+            f",input  {ports['we']}",
         ]
         # Optional ports
-        if self.bus['wstb'] is not None and self.bus['wstb'] != self.bus['we']:
-            ss.append(f",input  {self.bus['wstb']}")
-        if self.bus['re'] is not None:
-            ss.append(f",input  {self.bus['re']}")
-        if self.bus['rstb'] is not None and self.bus['rstb'] != self.bus['re']:
-            ss.append(f",input  {self.bus['rstb']}")
+        if ghostbus['wstb'] is not None and ghostbus['wstb'] != ghostbus['we']:
+            ss.append(f",input  {ports['wstb']}")
+        if ghostbus['re'] is not None:
+            ss.append(f",input  {ports['re']}")
+        if ghostbus['rstb'] is not None and ghostbus['rstb'] != ghostbus['re']:
+            ss.append(f",input  {ports['rstb']}")
         return "\n".join(ss)
 
     def GhostbusSubmodMap(self):
         """Generate the necessary ghostbus Verilog port map for this instance
         within its parent module."""
-        clk = self.bus['clk']
-        addr = self.bus['addr']
-        dout = self.bus['dout']
-        din = self.bus['din']
-        we = self.bus['we']
-        wstb = self.bus['wstb']
-        re = self.bus['re']
-        rstb = self.bus['rstb']
+        ghostbus = self.getGhostbus()
+        ports = ghostbus.getPortDict()
+        clk = ports['clk']
+        addr = ports['addr']
+        dout = ports['dout']
+        din = ports['din']
+        we = ports['we']
+        wstb = ports['wstb']
+        re = ports['re']
+        rstb = ports['rstb']
         ss = [
             # TODO - It is conceivable that one could have a read-only or write-only
             #        ghostbus and therefore 'wdata' or 'rdata' are not stricly necessary
             #        but there should be at least one present.
             # Mandatory ports
-            f",.{clk}({clk})    // input",
-            f",.{addr}({addr}_{self.inst})  // input [{self.bus['aw']-1}:0]",
-            f",.{dout}({dout})  // input [{self.bus['dw']-1}:0]",
-            f",.{din}({din}_{self.inst}) // output [{self.bus['dw']-1}:0]",
+            f",.{clk}({clk}_{self.inst})    // input",
+            f",.{addr}({addr}_{self.inst})  // input [{ghostbus['aw']-1}:0]",
+            f",.{dout}({dout}_{self.inst})  // input [{ghostbus['dw']-1}:0]",
+            f",.{din}({din}_{self.inst}) // output [{ghostbus['dw']-1}:0]",
             f",.{we}({we}_{self.inst}) // input",
         ]
         # Optional ports
-        if wstb is not None and wstb != we:
+        if ghostbus['wstb'] is not None and ghostbus['wstb'] != ghostbus['we']:
             ss.append(f",.{wstb}({wstb}_{self.inst}) // input")
-        if re is not None:
+        if ghostbus['re'] is not None:
             ss.append(f",.{re}({re}_{self.inst}) // input")
-        if rstb is not None and rstb != re:
+        if ghostbus['rstb'] is not None and ghostbus['rstb'] != ghostbus['re']:
             ss.append(f",.{rstb}({rstb}_{self.inst}) // input")
         return "\n".join(ss)
 
@@ -656,96 +717,126 @@ class DecoderLB():
         # reg  [31:0] local_din=0;
         if self.no_local:
             return ""
-        busaw = self.bus['aw']
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
+        busaw = self.ghostbus['aw']
         divwidth = busaw - self.local_aw
         ss = [
             f"// local init",
-            f"wire en_local = {self.bus['addr']}[{self.bus['aw']-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw:x}",
-            f"reg  [{self.bus['dw']-1}:0] local_din=0;",
+            f"wire en_local = {namemap['addr']}[{self.ghostbus['aw']-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw:x}",
+            f"reg  [{self.ghostbus['dw']-1}:0] local_din=0;",
         ]
         if len(self.rams) > 0:
             ss.append("// local rams")
             for n in range(len(self.rams)):
-                ss.append(self._ramInit(self.rams[n], self.bus, self.local_aw))
+                ss.append(self._ramInit(self.rams[n], self.local_aw))
         return "\n".join(ss)
 
     def submodsTopInit(self):
         ss = []
         for base, submod in self.submods:
-            ss.append(submod.submodInitStr(base))
+            ss.append(submod.submodInitStr(base, parent_bustop=self.bustop))
         for base_rel, ext in self.exts:
             ss.append(f"// External Module Instance {ext.name}")
-            ss.append(self._addrHit(base_rel, ext))
+            ss.append(self._addrHit(base_rel, ext, parent_bustop=self.bustop))
             ss.append(self.busHookup(ext))
         return "\n".join(ss)
 
-    @classmethod
-    def _ramInit(cls, mod, bus, local_aw=None):
+    def _ramInit(self, mod, local_aw=None):
         # localparam FOO_RAM_AW = $clog2(RD);
         # wire en_foo_ram = gb_addr[8:3] == 6'b001000;
         if local_aw is None:
-            local_aw = bus['aw']
+            local_aw = self.ghostbus['aw']
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         divwidth = local_aw - mod.aw
         ss = (
             f"localparam {mod.name.upper()}_AW = $clog2({mod.depth[1]}+1);",
-            f"wire en_{mod.name} = {bus['addr']}[{local_aw-1}:{mod.aw}] == {vhex(mod.base>>mod.aw, divwidth)};",
+            f"wire en_{mod.name} = {namemap['addr']}[{local_aw-1}:{mod.aw}] == {vhex(mod.base>>mod.aw, divwidth)};",
         )
         return "\n".join(ss)
 
-    @classmethod
-    def _addrHit(cls, base_rel, mod):
+    @staticmethod
+    def _addrHit(base_rel, mod, parent_bustop=False):
         bus = mod.ghostbus
         busaw = bus['aw']
+        if parent_bustop:
+            addr_net = bus['addr']
+        else:
+            addr_net = bus.getPortDict()['addr']
         divwidth = busaw - mod.aw
         end = base_rel + (1<<mod.aw) - 1
         # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
         #        to 'vhex' or do some tricky concatenation
-        return f"wire en_{mod.inst} = {bus['addr']}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
-
-    @classmethod
-    def _addrMask(cls, mod):
-        bus = mod.ghostbus
-        busaw = bus['aw']
-        divwidth = busaw - mod.aw
-        return f"wire [{busaw-1}:0] {bus['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {bus['addr']}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
-
-    @classmethod
-    def _wen(cls, mod):
-        return cls._andPort(mod, "we")
+        return f"wire en_{mod.inst} = {addr_net}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
 
     @staticmethod
-    def _andPort(mod, portname):
-        signal = mod.ghostbus[portname]
-        return f"wire {signal}_{mod.inst}={signal} & en_{mod.inst};"
+    def _addrMask(mod, parent_bustop=False):
+        bus = mod.ghostbus
+        busaw = bus['aw']
+        portdict = bus.getPortDict()
+        if parent_bustop:
+            addr_net = bus['addr']
+        else:
+            addr_net = portdict['addr']
+        divwidth = busaw - mod.aw
+        return f"wire [{busaw-1}:0] {portdict['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
 
-    def submodInitStr(self, base_rel):
+    def _wen(self, mod, parent_bustop):
+        return self._andPort(mod, "we", parent_bustop=parent_bustop)
+
+    def _andPort(self, mod, portname, parent_bustop=False):
+        portdict = mod.ghostbus.getPortDict()
+        signal = portdict[portname]
+        if parent_bustop:
+            parent_signal = mod.ghostbus[portname]
+        else:
+            parent_signal = signal
+        return f"wire {signal}_{mod.inst}={parent_signal} & en_{mod.inst};"
+
+    def submodInitStr(self, base_rel, parent_bustop=False):
+        """If self.bustop, then this submodule is instantiated in the same layer as the bus is declared (thus the bus
+        ports need to connect to the unique net names, not the generic port names)."""
         #e.g.
         # // submodule bar_0
         # wire [31:0] gb_din_bar_0;
         # wire en_bar_0 = gb_addr[11:9] == 3'b001; // 0x200-0x3ff
         # wire [11:0] gb_addr_bar_0 = {3'b000, gb_addr[8:0]}; // address relative to own base (0x0)
         # wire gb_we_bar_0=gb_we & en_bar_0;
-        busaw = self.bus['aw']
+        busaw = self.ghostbus['aw']
+        portdict = self.ghostbus.getPortDict()
+        if parent_bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         divwidth = busaw - self.aw
         end = base_rel + (1<<self.aw) - 1
-        addrHit = self._addrHit(base_rel, self)
-        addrMask = self._addrMask(self)
-        wen = self._wen(self)
+        addrHit = self._addrHit(base_rel, self, parent_bustop)
+        addrMask = self._addrMask(self, parent_bustop)
+        wen = self._wen(self, parent_bustop)
         ss = [
             # Mandatory ports
             f"// submodule {self.inst}",
-            f"wire [{self.bus['dw']-1}:0] {self.bus['din']}_{self.inst};",
+            f"wire {portdict['clk']}_{self.inst} = {namemap['clk']};",
+            f"wire [{self.ghostbus['dw']-1}:0] {portdict['din']}_{self.inst};",
+            f"wire [{self.ghostbus['dw']-1}:0] {portdict['dout']}_{self.inst} = {namemap['dout']};",
             addrHit,
             addrMask,
             wen,
         ]
         # Optional ports
-        if self.bus['wstb'] is not None and self.bus['wstb'] != self.bus['we']:
-            ss.append(self._andPort(self, "wstb"))
-        if self.bus['re'] is not None:
-            ss.append(self._andPort(self, "re"))
-        if self.bus['rstb'] is not None and self.bus['rstb'] != self.bus['re']:
-            ss.append(self._andPort(self, "rstb"))
+        if self.ghostbus['wstb'] is not None and self.ghostbus['wstb'] != self.ghostbus['we']:
+            ss.append(self._andPort(self, "wstb", parent_bustop))
+        if self.ghostbus['re'] is not None:
+            ss.append(self._andPort(self, "re", parent_bustop))
+        if self.ghostbus['rstb'] is not None and self.ghostbus['rstb'] != self.ghostbus['re']:
+            ss.append(self._andPort(self, "rstb", parent_bustop))
         return "\n".join(ss)
 
     def dinRouting(self):
@@ -753,20 +844,25 @@ class DecoderLB():
         #                 en_bar_0 ? gb_din_bar_0 :
         #                 en_local ? local_din :
         #                 32'h00000000;
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         ss = [
             "// din routing",
         ]
         if not self.no_local:
-            ss.append(f"assign {self.bus['din']} = en_local ? local_din :")
+            ss.append(f"assign {namemap['din']} = en_local ? local_din :")
         else:
-            ss.append(f"assign {self.bus['din']} = ")
+            ss.append(f"assign {namemap['din']} = ")
         for n in range(len(self.submods)):
             base, submod = self.submods[n]
             inst = submod.inst
             if n == 0 and self.no_local:
-                ss[-1] = ss[-1] + f"en_{inst} ? {self.bus['din']}_{inst} :"
+                ss[-1] = ss[-1] + f"en_{inst} ? {portdict['din']}_{inst} :"
             else:
-                ss.append(f"                en_{inst} ? {self.bus['din']}_{inst} :")
+                ss.append(f"                en_{inst} ? {portdict['din']}_{inst} :")
         for n in range(len(self.exts)):
             base_rel, ext = self.exts[n]
             if not ext.access & Register.READ:
@@ -775,10 +871,10 @@ class DecoderLB():
             inst = ext.name
             din = ext.getDinPort()
             if (n == 0) and (self.no_local) and (len(self.submods) == 0):
-                ss[-1] = ss[-1] + f"en_{inst} ? {{{{{self.bus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
+                ss[-1] = ss[-1] + f"en_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
             else:
-                ss.append(f"                en_{inst} ? {{{{{self.bus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
-        ss.append(f"                {vhex(0, self.bus['dw'])};")
+                ss.append(f"                en_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
+        ss.append(f"                {vhex(0, self.ghostbus['dw'])};")
         return "\n".join(ss)
 
     def busDecoding(self):
@@ -814,8 +910,12 @@ class DecoderLB():
         hasclk = False
         csrdefaults.extend(wdefaults)
         csrdefaults.extend(rdefaults)
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = self.ghostbus.getPortDict()
         if len(_ramwrites) > 0 or len(_csrwrites) > 0:
-            ss.append(f"always @(posedge {self.bus['clk']}) begin")
+            ss.append(f"always @(posedge {namemap['clk']}) begin")
             if len(csrdefaults) > 0:
                 ss.append("  // Strobe default assignments")
             for strobe in csrdefaults:
@@ -831,7 +931,7 @@ class DecoderLB():
             hasclk = True
         if len(_ramreads) > 0 or len(_csrreads) > 0:
             if not hasclk:
-                ss.append(f"always @(posedge {self.bus['clk']}) begin")
+                ss.append(f"always @(posedge {namemap['clk']}) begin")
             ss.append("  // local reads")
             ss.append(f"  if (en_local & {self._bus_re}) begin")
             ss.append("    " + ramreads.replace("\n", "\n    ") + midend)
@@ -839,12 +939,17 @@ class DecoderLB():
             ss.append(extraend)
             ss.append(f"  end // if (en_local & {self._bus_re})")
         if hasclk:
-            ss.append(f"end // always @(posedge {self.bus['clk']})")
+            ss.append(f"end // always @(posedge {namemap['clk']})")
         return "\n".join(ss)
 
     def csrWrites(self):
         if len(self.csrs) == 0:
             return ("", [])
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         # Default-assign any strobes
         defaults = []
         for csr in self.csrs:
@@ -854,7 +959,7 @@ class DecoderLB():
                 defaults.extend(csr.write_strobes)
         ss = [
             "// CSR writes",
-            f"casez ({self.bus['addr']}[{self.local_aw-1}:0])",
+            f"casez ({namemap['addr']}[{self.local_aw-1}:0])",
         ]
         writes = 0
         for n in range(len(self.csrs)):
@@ -867,13 +972,13 @@ class DecoderLB():
                 if csr.strobe:
                     ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {vhex(1, csr.dw)};")
                 else:
-                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {self.bus['dout']}[{csr.range[0]}:0];")
+                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {namemap['dout']}[{csr.range[0]}:0];")
             else:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
                 if csr.strobe:
                     ss.append(f"    {csr.name} <= {vhex(0, strobe.dw)};")
                 else:
-                    ss.append(f"    {csr.name} <= {self.bus['dout']}[{csr.range[0]}:0];")
+                    ss.append(f"    {csr.name} <= {namemap['dout']}[{csr.range[0]}:0];")
                 for strobe_name in csr.write_strobes:
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
@@ -885,6 +990,11 @@ class DecoderLB():
     def csrReads(self):
         if len(self.csrs) == 0:
             return ("", [])
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         # Default-assign any strobes
         defaults = []
         for csr in self.csrs:
@@ -892,7 +1002,7 @@ class DecoderLB():
                 defaults.extend(csr.read_strobes)
         ss = [
             "// CSR reads",
-            f"casez ({self.bus['addr']}[{self.local_aw-1}:0])",
+            f"casez ({namemap['addr']}[{self.local_aw-1}:0])",
         ]
         reads = 0
         for n in range(len(self.csrs)):
@@ -901,15 +1011,15 @@ class DecoderLB():
                 # Skip write-only registers
                 continue
             if len(csr.read_strobes) == 0:
-                ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.bus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
+                ss.append(f"  {vhex(csr.base, self.local_aw)}: local_din <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
             else:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
-                ss.append(f"    local_din <= {{{{{self.bus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
+                ss.append(f"    local_din <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
                 for strobe_name in csr.read_strobes:
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
             reads += 1
-        ss.append(f"  default: local_din <= {vhex(0, self.bus['dw'])};")
+        ss.append(f"  default: local_din <= {vhex(0, self.ghostbus['dw'])};")
         ss.append("endcase")
         if reads == 0:
             return ("", [])
@@ -918,6 +1028,11 @@ class DecoderLB():
     def ramWrites(self):
         if len(self.rams) == 0:
             return ""
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         ss = [
             "// RAM writes",
             "",
@@ -928,13 +1043,18 @@ class DecoderLB():
             if n > 0:
                 s0 = " else " + s0
             ss[-1] = ss[-1] + s0
-            ss.append(f"  {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.bus['dout']}[{ram.range[0]}:{ram.range[1]}];")
+            ss.append(f"  {ram.name}[{namemap['addr']}[{ram.name.upper()}_AW-1:0]] <= {namemap['dout']}[{ram.range[0]}:{ram.range[1]}];")
             ss.append("end")
         return "\n".join(ss)
 
     def ramReads(self):
         if len(self.rams) == 0:
             return ""
+        portdict = self.ghostbus.getPortDict()
+        if self.bustop:
+            namemap = self.ghostbus
+        else:
+            namemap = portdict
         ss = [
             "// RAM reads",
             "",
@@ -945,18 +1065,21 @@ class DecoderLB():
             if n > 0:
                 s0 = " else " + s0
             ss[-1] = ss[-1] + s0
-            #ss.append(f"  {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.bus['dout']}[{ram.range[0]}:{ram.range[1]}];")
-            ss.append(f"  local_din <= {{{{{self.bus['dw']}-{ram.range[0]}+1{{1'b0}}}}, {ram.name}[{self.bus['addr']}[{ram.name.upper()}_AW-1:0]]}};")
+            #ss.append(f"  {ram.name}[{self.ghostbus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.ghostbus['dout']}[{ram.range[0]}:{ram.range[1]}];")
+            ss.append(f"  local_din <= {{{{{self.ghostbus['dw']}-{ram.range[0]}+1{{1'b0}}}}, {ram.name}[{namemap['addr']}[{ram.name.upper()}_AW-1:0]]}};")
             ss.append("end")
         return "\n".join(ss)
 
-    @classmethod
-    def busHookup(cls, extmod):
+    def busHookup(self, extmod):
         ss = []
         for portname, ext_port in extmod.extbus.outputs_and_clock().items():
             if ext_port is None:
                 continue
-            gb_port = extmod.ghostbus[portname]
+            portdict = extmod.ghostbus.getPortDict()
+            if self.bustop:
+                gb_port = extmod.ghostbus[portname]
+            else:
+                gb_port = portdict[portname]
             #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
             _range = extmod.extbus.get_range(portname)
             if _range is not None:

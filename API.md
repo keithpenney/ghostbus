@@ -266,13 +266,13 @@ module foo (
   input [1:0] some_input,
   output [7:0] some_output // Note no comma! See "valid verilog" discussion
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_ports
+`GHOSTBUSPORTS
 `endif
 );
 ```
 
 ### Adding the "magic" ports to a module instantiation (i.e. "propogate the ghostbus") <a name="ghost_out"></a>
-The yang to the `` `GHOSTBUS_ports`` yin is not universal.  It is specific to both the module its within (the
+The yang to the `` `GHOSTBUSPORTS`` yin is not universal.  It is specific to both the module its within (the
 "parent module") and the instance (not the module) it connects to.
 
 The naming convention of the auto-generated macros is `` `GHOSTBUS_parentmodname_instname`` where `instname` is

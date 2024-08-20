@@ -151,6 +151,9 @@ class MemoryRegion():
         else:
             self.label = label
         self._delta_indent = 0 # see self.print()
+        # NOTE: self.bustop is an annoying application-specific hook and I'm being lazy.
+        # If I end up with more of these, I'll just subclass it.
+        self.bustop = False
 
     def copy(self):
         addr_range = (self._offset, self._top)
@@ -159,6 +162,7 @@ class MemoryRegion():
         mr.vacant = self.vacant.copy()
         mr._keepout = self._keepout.copy()
         mr.refs = self.refs.copy()
+        mr.bustop = self.bustop
         return mr
 
     def shrink(self):

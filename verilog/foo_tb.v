@@ -32,6 +32,14 @@ localparam GB_DW = 32;
 (* ghostbus_port="we, wstb" *)  reg gb_we=1'b0;
 (* ghostbus_port="rstb" *)      reg gb_rstb=1'b0; // optional
 
+// Testing a second bus (routed nowhere right now)
+(* ghostbus_port="clk", ghostbus_name="schoolie" *)       wire school_clk=clk;
+(* ghostbus_port="addr", ghostbus_name="schoolie" *)      reg [GB_AW-1:0] school_addr=0;
+(* ghostbus_port="wdata", ghostbus_name="schoolie" *)     reg [GB_DW-1:0] school_dout=0;
+(* ghostbus_port="rdata", ghostbus_name="schoolie" *)     wire [GB_DW-1:0] school_din;
+(* ghostbus_port="we, wstb", ghostbus_name="schoolie" *)  reg school_we=1'b0;
+(* ghostbus_port="rstb", ghostbus_name="schoolie" *)      reg school_rstb=1'b0; // optional
+
 `define GHOSTBUS_TEST_CSRS
 `define GHOSTBUS_TEST_RAMS
 `ifdef GHOSTBUS_LIVE

@@ -7,7 +7,7 @@ module bar #(
    input clk
   ,input demo_sig
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_ports
+`GHOSTBUSPORTS
 `else
   `ifdef MANUAL_TEST
   // Manual ports
@@ -62,16 +62,19 @@ ext #(
   .we(ext_we) // input
 );
 
+`ifdef GHOSTBUS_LIVE
+`GHOSTBUS_bar
+`endif
+
 reg [1:0] garbage=2'b11;
 wire [1:0] trash;
 bof bof_i (
   .clk(clk), // input
   .garbage(garbage), // input [1:0]
   .trash(trash) // output [1:0]
-);
-
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_bar
+  `GHOSTBUS_bar_bof_i
 `endif
+);
 
 endmodule

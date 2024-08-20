@@ -41,6 +41,62 @@ See the [API documentation]("API.md") for usage.
 
 ## Design considerations
 
+### Multiple Ghostbuses
+I'm a bit conflicted on how to support multiple ghostbuses.  Theoretically, it should not be difficult but it requires
+a bit more complexity in the API/macro naming convention.
+
+Wait! If a module has only a single ghostbus coming in (a normal ghostmod), we should _NOT_ be requiring the macro
+specify the name of this single bus!  That kills code reuse!  So any module that contains only a single ghostbus should
+be able to use the simple macros/attributes.  This actually seems like it could be fairly easy to handle for a multi-bus
+project by simply requiring that all busses have the same protocol/AW/DW.  Then the port names can be generic/universal
+and we only distinguish between the busses (with the specific macros/attributes detailed below) in the particular layer
+where multiple busses exist.
+
+Specifically, these need to change somehow:
+  * `` `GHOSTBUS_ports``
+    For only that specific layer where more than one bus exists, we need to incorporate the name of the bus somehow.
+    I don't know if this macro will ever be used (it would need to be a module with more than one bus coming in).
+    In fact, I don't think it should be used (port name collision); let's deprecate it before it even exists!
+    __Deprecated__:
+      `` `GHOSTBUSPORTS_busname``
+      The default (single ghostbus) usage can just omit `_busname` like: `` `GHOSTBUSPORTS``
+
+  * `(* ghostbus_port="port_name" *)`
+    Need to incorporate the name of the bus somehow.
+    Ideas:
+      `(* ghostbus_port="bus_name, port_name" *)`
+        Pros: Agrees with syntax of `ghostbus_ext`
+        Cons: Might be confused with `ghostbus_ext`
+              No! Collides with usage of `ghostbus_port` allowing a single net to function as multiple port nets!
+      `(* ghostbus_port="port_name", ghostbus_bus="bus_name" *)`
+        Pros: Seems to be the only option.
+              Clean and explicit.
+              Easy to make backwards compatible (`ghostbus_bus=None` by default)
+        I'm going with this option.
+
+  * `(* ghostbus_ext="bus_name, port_name" *)`
+    For the vast majority of use cases (only a single ghostbus comes into the module), the above should be sufficient.
+    For those times where you want to conjure an external bus onto a single ghostbus in the same module with others,
+    you'll need to specify the bus (or risk it getting hooked up to the wrong one).  This only affects the routing
+    logic.
+    Let's make this agree with `ghostbus_port` above:
+      `(* ghostbus_ext="extbus_name, port_name", ghostbus_name="ghostbus_name" *)`
+    The rule should be:
+      If `ghostbus_name` is not None, get the bus net names from the named bus.
+      Else, use the generic bus port names.
+
+A few more considerations with multiple busses:
+  1. If a module appears as an instance in more than one domain, the bus protocol, AW, and DW of the two busses must be
+     identical.  This requirement makes sense if you consider hand-writing the bus ports and connecting each bus to them.
+     Of course AW and DW could be parameters of the module, but then that adds a new requirement for another GHOSTBUS
+     macro in the parameters section.  I want to avoid that and this tiny gotcha doesn't seem to be too bad.
+
+  2. Multiple busses can also be managed at the Makefile level by segmenting the codebase into domains and then treating
+     each domain as a separate project with a single ghostbus (using the simplified macros/attributes).  Then you'd end
+     up with a separate `regmap.json` generated for each domain which would need to be merged into a single JSON by some
+     other tool (outside the scope of this tool).
+
+
 ### Decoding
 
 I'd like the decoding rules to be parameterized in the future.  For now, they're fixed.  These are the
