@@ -111,19 +111,23 @@ _Example_:
 ### Define a CSR/RAM <a name="csr"></a>
 ```verilog
 // Add a CSR/RAM with R/W access (default)
-(* ghostbus *)
-(* ghostbus_ha *)
-(* ghostbus_csr *)
-(* ghostbus_ram *)
+(* ghostbus *) reg foo;
+(* ghostbus_ha *) reg foo;
+(* ghostbus_csr *) reg foo;
+(* ghostbus_ram *) reg foo;
 (* ghostbus="rw" *) // Optional explicit access specifier
 
 // Add a CSR/RAM with read-only access
+(* ghostbus *) wire foo;
 (* ghostbus="r" *)
 (* ghostbus="ro" *)
 
 // Add a CSR/RAM with write-only access
 (* ghostbus="w" *)
 (* ghostbus="wo" *)
+
+// Invalid r/w access of 'wire' type
+(* ghostbus="rw" *) wire foo;
 ```
 All the above attributes are aliases (function identically).
 The various choices are provided for cases where you e.g. want to easily find your CSRs or your RAMs, or
@@ -133,6 +137,11 @@ Add one of these attributes to a Verilog net to mark the net as host-accessible 
 
 __NOTE__: A writable register must be of net type `reg` while a read-only register can be of type `wire`
 or `reg`.
+
+__NOTE__: In an effort to minimize headache, the default access type (assumed when there is no explicit
+access specifier string given to attribute `(* ghostbus *)`) is dependent on the net type.  For a `reg`
+type net, the assumed access is read/write (rw).  For a 'wire' type net, the assumed access is
+read-only (ro).  These assumptions only apply when no explicit specifier is given.
 
 ---------------------------------------------------------------------------------------------------
 ### Place a CSR/RAM at an explicit global address <a name="address"></a>

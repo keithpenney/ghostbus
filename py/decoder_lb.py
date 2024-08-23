@@ -268,8 +268,12 @@ class DecoderLB():
     _defs = []
     def __init__(self, memregion, ghostbusses, csr_class, ram_class, ext_class):
         self.mod = memregion
-        self.bustop = self.mod.bustop
+        if len(self.mod.declared_busses) > 0:
+            self.bustop = True
+        else:
+            self.bustop = False
         self.ghostbusses = ghostbusses
+        self.busdomain = None
         # TODO - Enable all the ghostbusses
         self.ghostbus = self.ghostbusses[0]
         self.ghostbus_dict = {}
@@ -278,8 +282,11 @@ class DecoderLB():
         self.aw = self.mod.aw
         self.inst = self.mod.hierarchy[-1]
         self.name = self.mod.label
+        #self.nbusses = len(self.mod.declared_busses)
+        self.nbusses = len(self.mod.declared_busses) + len(self.mod.implicit_busses)
         if self.bustop:
             print(f"This DecoderLB is a bustop! {self.name}")
+            #self._validateBusDistribution()
         self.base = self.mod.base
         self.submods = []
         self.rams = []
@@ -351,6 +358,27 @@ class DecoderLB():
         else:
             self._bus_re = f"~{namemap['we']}"
             self._asynch_read = True
+        return
+
+    def _validateBusDistribution(self):
+        # TODO - This may belong elsewhere, but the nested structure of DecoderLB makes it very convenient to do it here
+        if len(self.mod.declared_busses) < 2:
+            return True
+        for start, stop, ref in self.mod.get_entries():
+            if isinstance(ref, MemoryRegion):
+                inst = ref.hierarchy[-1]
+                busname = self.mod.named_bus_insts.get(inst, None)
+                if busname is None:
+                    print(f"WHUPS! No {inst} in {self.name}'s named_bus_insts")
+                    print_dict(self.mod.named_bus_insts)
+                    # raise GhostbusException("Boop bop.")
+                else:
+                    if busname not in self.mod.declared_busses:
+                        raise GhostbusException(f"Inst {inst} in {self.name} is given busname {busname} " + \
+                                                "which is not declared in the module itself. Module " + \
+                                                f"{self.name} declares these busses: {self.mod.declared_busses}")
+                    print(f"POW! {inst} is connected to bus {busname}")
+                    ref.busdomain = busname
         return
 
     def getGhostbus(self, name=None):

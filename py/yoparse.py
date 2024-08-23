@@ -6,6 +6,10 @@ import os
 import subprocess
 import json
 import re
+from util import enum
+
+_net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
+NetTypes = enum(_net_keywords, base=0)
 
 def srcParse(s):
     # FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
@@ -64,27 +68,49 @@ def getUnparsedWidthAndDepthRange(source):
     getUnparsedDepthRange() with a single file access.
     Returns (getUnparsedWidthRange(), getUnparsedDepthRange())"""
     snippet, offset = _getSourceSnippet(source)
-    _ww = _getUnparsedWidthRange(snippet, offset)
+    _ww = _getUnparsedWidthRange(snippet, offset, get_type=False)
     _dd = _getUnparsedDepthRange(snippet, offset)
     return (_ww, _dd)
 
 
-def getUnparsedWidthRange(source):
-    """Get the range of a net (wire/reg) as an unparsed string (i.e. however it is
-    declared in source).
-    Returns ('0', '0') if keyword 'wire' or 'reg' is encountered (walking backward)
-    before a range spec, otherwise returns (str range_high, str range_low)."""
+def getUnparsedWidthAndDepthRangeAndType(source):
+    """A convenience method to do both getUnparsedWidthRange() and
+    getUnparsedDepthRange() with a single file access.
+    Returns (range_spec, depth_spec, net_type)"""
+    snippet, offset = _getSourceSnippet(source)
+    _ww, net_type = _getUnparsedWidthRange(snippet, offset)
+    _dd = _getUnparsedDepthRange(snippet, offset)
+    return (_ww, _dd, net_type)
+
+
+def getUnparsedWidthRangeType(source):
+    """Get the range and net type of a net (wire/reg/input/output/inout). The range
+    is returned as an unparsed string (i.e. however it is declared in source).
+    The net type is one of enum NetType.
+    Returns ('0', '0') for the range if a net type keyword is encountered (walking
+    backward) before a range spec, otherwise returns (str range_high, str range_low)."""
     snippet, offset = _getSourceSnippet(source)
     return _getUnparsedWidthRange(snippet, offset)
 
 
-def _getUnparsedWidthRange(snippet, offset):
+def getUnparsedWidthRange(source):
+    """Get the range of a net (wire/reg/input/output/inout) as an unparsed string
+    (i.e. however it is declared in source).
+    Returns ('0', '0') if a net type keyword is encountered (walking backward) before
+    a range spec, otherwise returns (str range_high, str range_low)."""
+    snippet, offset = _getSourceSnippet(source)
+    return _getUnparsedWidthRange(snippet, offset, get_type=False)
+
+
+def _getUnparsedWidthRange(snippet, offset, get_type=True):
     _range = None
     if snippet is not None:
-        _rangeStr = _findRangeStr(snippet, offset)
+        _rangeStr, net_type = _findRangeStr(snippet, offset, get_type=get_type)
         split = _rangeStr.split(':')
         if len(split) > 1:
             _range = (split[0], split[1])
+    if get_type:
+        return (_range, net_type)
     return _range
 
 
@@ -140,20 +166,22 @@ def _getSourceSnippet(yosrc, size=1024):
     return snippet, offset
 
 
-def _findRangeStr(snippet, offset):
+def _findRangeStr(snippet, offset, get_type=True):
     """Start at char offset. Read backwards. Look for ']' to open a range.
     If we find either keyword 'reg' or 'wire' before the ']', we'll break and
     decide the reg is 1-bit."""
     grouplevel = 0
     endix = None
     rangestr = None
-    keywords = ('reg', 'wire', 'input', 'output', 'inout')
+    keywords = _net_keywords
+    nettype = None
     maxlen = max([len(kw) for kw in keywords])
     for n in range(offset, -1, -1):
         char = snippet[n]
         # Room for whitespace+'r'+'e'+'g'+whitespace
         slc = snippet[n:n+maxlen].replace('\n', ' ').replace('.', ' ')
         if slc.strip() in keywords:
+            nettype = NetTypes.get(slc.strip())
             rangestr = "0:0"
             break
         elif char == ']': # walking backwards
@@ -164,8 +192,9 @@ def _findRangeStr(snippet, offset):
             grouplevel -= 1
             if grouplevel == 0:
                 rangestr = snippet[n+1:endix]
-                break
-    return rangestr
+                if not get_type:
+                    break
+    return (rangestr, nettype)
 
 
 def _findDepthStr(snippet, offset):
@@ -190,6 +219,10 @@ def _findDepthStr(snippet, offset):
             break
     return depthstr
 
+
+class YosysParsingError(Exception):
+    def __init__(self, msg):
+        super().__init__(msg)
 
 class VParser():
     # Helper values
@@ -216,9 +249,13 @@ class VParser():
         else:
             topstr = ""
         ycmd = f'yosys -q -p "verilog_defines -DYOSYS\nread_verilog {filestr}{topstr}\nproc" -p write_json'
-        #try:
-        jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
-        #except subprocess.CalledProcessError as e:
+        err = None
+        try:
+            jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
+        except subprocess.CalledProcessError as e:
+            err = str(e)
+        if err is not None:
+            raise YosysParsingError(err)
         self._dict = json.loads(jsfile)
         # Separate attributes for this module
         mod = self._dict.get("modules", None)

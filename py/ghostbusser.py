@@ -7,7 +7,8 @@ import re
 
 from yoparse import VParser, srcParse, ismodule, get_modname, get_value, \
                     getUnparsedWidthRange, getUnparsedDepthRange, \
-                    getUnparsedWidthAndDepthRange, getUnparsedWidth
+                    getUnparsedWidthAndDepthRange, getUnparsedWidth, \
+                    YosysParsingError, getUnparsedWidthRangeType, NetTypes
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from decoder_lb import DecoderLB, BusLB, vhex
 from gbexception import GhostbusException, GhostbusNameCollision
@@ -27,6 +28,10 @@ from util import enum, strDict, print_dict, strip_empty
 #   4. Each of these MemoryTree branches should make its own JSON relative to base 0.
 #   5. An external tool can combine the JSONs and ensure the resulting memory map reflects
 #       the hand-wired combination of the ghostbusses.
+
+# DONE: Permissive CSR access defaults
+#   If a detected CSR is of net "wire", assume it's read-only.
+#   If a detected CSR is of net "reg", assume it's read/write.
 
 # When Yosys generates a JSON, it follows this structure:
 #   modules: {
@@ -87,7 +92,8 @@ class GhostbusInterface():
         else:
             if val.isnumeric():
                 # This is probably a YOSYS-default "0000000000000001" string
-                access = Register.RW
+                #access = Register.RW
+                access = Register.UNSPECIFIED
             else:
                 # Interpret as an access-specifier string
                 access = 0
@@ -369,6 +375,7 @@ class GhostBusser(VParser):
         handledExtModules = []
         # Keep track of where a ghostbus is instantiated
         bustops = {}
+        multibus_dict = {}
         for mod_hash, mod_dict in top_dict.items():
             associated_strobes = {}
             module_name = get_modname(mod_hash)
@@ -379,6 +386,7 @@ class GhostBusser(VParser):
                     top_mod = mod_hash
             # Check for instantiated modules
             modtree[mod_hash] = {}
+            multibus_dict[mod_hash] = {"insts": {}}
             cells = mod_dict.get("cells")
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
@@ -387,15 +395,16 @@ class GhostBusser(VParser):
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
                         busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                         if busname is not None:
-                            # TODO - Keep track of this info to build a hierarchy dict for each bus!
                             print(f"Harumph! Instance {inst_name} in {module_name} hooks up to bus {busname}.")
+                            multibus_dict[mod_hash]["insts"][inst_name] = busname
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             mr = None
             # Check for regs
             netnames = mod_dict.get("netnames")
             entries = []
             bustop = False
-            busnames = []
+            busnames_explicit = []
+            busnames_implicit = []
             if netnames is not None:
                 for netname, net_dict in netnames.items():
                     attr_dict = net_dict["attributes"]
@@ -442,9 +451,10 @@ class GhostBusser(VParser):
                     if ports is not None:
                         bustop = True
                         dw = len(net_dict['bits'])
+                        # print(f"     About to _handleBus for {mod_hash}")
                         self._handleBus(netname, ports, dw, source, busname)
-                        if busname not in busnames:
-                            busnames.append(busname)
+                        if busname not in busnames_explicit:
+                            busnames_explicit.append(busname)
             # Check for RAMs
             memories = mod_dict.get("memories")
             if memories is not None:
@@ -483,19 +493,29 @@ class GhostBusser(VParser):
                                 register.write_strobes.append(strobe_name)
                 mr.bustop = bustop
                 ghostmods[mod_hash] = mr
+                # Any ghostmod has an implied ghostbus coming in
+                if None not in busnames_implicit:
+                    busnames_implicit.append(None)
+            multibus_dict[mod_hash]["explicit_busses"] = busnames_explicit
+            multibus_dict[mod_hash]["implicit_busses"] = busnames_implicit
             if bustop:
+                # There are two cases where we could have a multi-bus module:
+                #   Case 0: Two or more busses are declared in the same module
+                #   Case 1: A single bus is declared inside a ghostmod (the ghostbus coming into the
+                #           ghostmod is the other bus).
                 bustops[module_name] = True
-                nbusses = len(busnames)
+                nbusses = len(busnames_implicit) + len(busnames_explicit)
                 plural = ""
                 if nbusses > 1:
                     plural = "s"
-                print(f"^^^^^^^^^^^^^^^^^^^^^ Module {module_name} contains {nbusses} bus instantiation{plural}! mr = {mr}")
+                print(f"^^^^^^^^^^^^^^^^^^^^^ Module {module_name} contains {nbusses} bus instantiation{plural}!")
             handledExtModules.append(module_name)
         self._busValid = True
         for bus in self._ghostbusses:
             valid = bus.validate()
             if not valid:
                 self._busValid = False
+        #print_dict(multibus_dict)
         #self._busValid = self._top_bus.validate()
         self._top = top_mod
         self._resolveExt(ghostmods)
@@ -503,13 +523,48 @@ class GhostBusser(VParser):
         modtree = self.build_modtree(modtree)
         #print("===============================================")
         #print_dict(modtree)
-        memtree = self.build_memory_tree(modtree, ghostmods, bustops)
+        memtree = self.build_memory_tree(modtree, ghostmods, multibus_dict)
         #print("***********************************************")
         self.memory_map = memtree.resolve()
         self.memory_map.shrink()
         self.memory_map.print(4)
         self.memory_maps = [self.memory_map]
+        self.splitMemoryMap()
         return ghostmods
+
+    @classmethod
+    def getMultiBusRegion(cls, memregion):
+        for start, stop, ref in memregion.get_entries():
+            if isinstance(ref, MemoryRegion):
+                if len(ref.declared_busses) > 1:
+                    return ref
+                else:
+                    newref = cls.getMultiBusRegion(ref)
+                    if newref is not None:
+                        return newref
+        return None
+
+    def labelBusDomains(self):
+        # TODO - This currently only supports one multi-bus region
+        # KEEF - START HERE
+
+        # 0. Find the MemoryRegion with multiple busses
+        region = self.getMultiBusRegion(self.memory_map)
+        # 1. Enforce usage rules
+        # 2. Label instances with their bus domains
+        # 3. Make global list of bus domains
+        return
+
+    def splitMemoryMap(self):
+        # Start with empty self.memory_maps
+        # For each bus domain in the global list:
+        #   0. Make a copy of the memory map
+        #   1. Find the MemoryRegion where the bus is declared
+        #   2. For every instance declared in this region:
+        #       If inst.busdomain != target_busdomain:
+        #           delete the branch
+        #   3. Append the copy to self.memory_maps
+        return
 
     def trim_hierarchy(self):
         self.memory_map.trim_hierarchy()
@@ -521,7 +576,7 @@ class GhostBusser(VParser):
             hit = False
             for bus in self._ghostbusses:
                 if bus.name == busname:
-                    print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname}")
+                    print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname} from source {source}")
                     bus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
                     hit = True
             if not hit:
@@ -699,12 +754,13 @@ class GhostBusser(VParser):
                     dd[module][dict_key] = inst
         return ModuleInstance(top, top, dd[top])
 
-    def build_memory_tree(self, modtree, ghostmods, bustops={}):
+    def build_memory_tree(self, modtree, ghostmods, busdict={}):
         # First build an empty dict of MemoryRegions
         # Start from leaf,
         #print("++++++++++++++++++++++++++++++++++++++++++++")
         modtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
         #print("////////////////////////////////////////////")
+        print("First walk")
         for key, val in modtree.walk():
             #print("{}: {}".format(key, val))
             if key is None:
@@ -723,9 +779,37 @@ class GhostBusser(VParser):
             else:
                 #print(f"no {key} in ghostmods")
                 val.memory = MemoryRegion(label=module_name, hierarchy=hier)
-            bustop = bustops.get(module_name, None)
-            if bustop is not None:
-                val.memory.bustop = bustop
+            _busdict = busdict.get(inst_hash, None)
+            if _busdict is not None:
+                busses_implicit = _busdict.get("implicit_busses", [])
+                busses_explicit = _busdict.get("explicit_busses", [])
+                insts = _busdict.get("insts", {})
+                val.memory.declared_busses = busses_explicit
+                val.memory.implicit_busses = busses_implicit
+                val.memory.named_bus_insts = insts
+                if len(val.memory.declared_busses) > 0:
+                    val.memory.bustop = True
+
+        return modtree
+        # Skip all this stuff for now
+        print("Second walk")
+        for key, val in modtree.walk():
+            name = val.memory.label
+            for start, stop, ref in val.memory.get_entries():
+                if isinstance(ref, MemoryRegion):
+                    inst = ref.hierarchy[-1]
+                    busname = insts.get(inst, None)
+                    if busname is None:
+                        print(f"WHUPS! No {inst} in {name}'s named_bus_insts")
+                        print_dict(val.memory.named_bus_insts)
+                        # raise GhostbusException("Boop bop.")
+                    else:
+                        if busname not in busses:
+                            raise GhostbusException(f"Inst {inst} in {name} is given busname {busname} " + \
+                                                    "which is not declared in the module itself. Module " + \
+                                                    f"{name} declares these busses: {busses}")
+                        print(f"POW! {inst} is connected to bus {busname}")
+                        ref.busdomain = busname
         # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
         return modtree
 
@@ -747,6 +831,7 @@ class MetaRegister(Register):
         self.alias = None
         self.signed = None
         self.manually_assigned = False
+        self.net_type = None
 
     def copy(self):
         ref = super().copy()
@@ -755,6 +840,7 @@ class MetaRegister(Register):
         ref.write_strobes = self.write_strobes
         ref.read_strobes = self.read_strobes
         ref.manually_assigned = self.manually_assigned
+        ref.net_type = self.net_type
         return ref
 
     def _readRangeDepth(self):
@@ -762,9 +848,21 @@ class MetaRegister(Register):
             return True
         if self.meta is None:
             return False
-        _range = getUnparsedWidthRange(self.meta)
+        _range, _net_type = getUnparsedWidthRangeType(self.meta) # getUnparsedWidthRange(self.meta)
         if _range is not None:
             self.range = _range
+            self.net_type = _net_type
+            # Apply default access assumptions
+            if self.access == self.UNSPECIFIED and _net_type is not None:
+                if _net_type == NetTypes.reg:
+                    self.access = self.RW
+                elif _net_type == NetTypes.wire:
+                    self.access = self.READ
+            elif (self.access & self.WRITE):
+                if _net_type == NetTypes.wire:
+                    err = f"Cannot have write access to net {self.name} of 'wire' type." + \
+                          f" See: {self.meta}"
+                    raise GhostbusException(err)
         else:
             return False
         return True
@@ -974,7 +1072,12 @@ def testWalkDict():
     return
 
 def handleGhostbus(args):
-    gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
+    try:
+        gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
+    except YosysParsingError as err:
+        print("ERROR: (Yosys Parsing Error; message follows)")
+        print(err)
+        return 1
     trim = not args.notrim
     mods = gb.get_map()
     #bus = gb.getBusDict()
@@ -992,7 +1095,7 @@ def handleGhostbus(args):
                 gb.trim_hierarchy()
             for mem_map in gb.memory_maps:
                 jm = JSONMaker(mem_map, drops=args.ignore)
-            jm.write(args.json, path=args.dest, flat=args.flat, mangle=args.mangle)
+                jm.write(args.json, path=args.dest, flat=args.flat, mangle=args.mangle)
     except GhostbusException as e:
         print(e)
         return 1

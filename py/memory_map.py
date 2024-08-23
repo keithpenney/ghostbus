@@ -22,7 +22,8 @@ class Register():
     READ = 1
     WRITE = 2
     RW = READ | WRITE
-    _accessMask = RW
+    UNSPECIFIED = 4
+    _accessMask = RW | UNSPECIFIED
 
     @classmethod
     def accessToStr(cls, access):
@@ -30,6 +31,7 @@ class Register():
             cls.READ: "r",
             cls.WRITE: "w",
             cls.RW: "rw",
+            cls.UNSPECIFIED: "unknown",
         }
         return sd[access]
 
@@ -41,7 +43,8 @@ class Register():
         self._base_addr = base
         # A helpful bit of optional metadata
         self.meta = meta
-        self.access = int(access) & self._accessMask
+        #self.access = int(access) & self._accessMask
+        self.access = access
 
     def copy(self):
         return self.__class__(name=self._name, dw=self._data_width, base=self._base_addr,

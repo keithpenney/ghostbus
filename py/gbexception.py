@@ -2,8 +2,8 @@
 
 class GhostbusException(Exception):
     def __init__(self, s):
-        super().__init__(s)
+        super().__init__("Ghostbus ERROR: " + s)
 
 class GhostbusNameCollision(GhostbusException):
     def __init__(self, s):
-        super().__init__(s)
+        super().__init__("Ghostbus Name Collision: " + s)

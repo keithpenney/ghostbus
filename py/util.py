@@ -37,6 +37,11 @@ class enum():
     def str(self, val):
         return self._strs[val]
 
+    def get(self, item):
+        if hasattr(self, item):
+            return getattr(self, item)
+        return None
+
 def strip_empty(ll):
     """Remove the empty items from list 'll'"""
     result = []

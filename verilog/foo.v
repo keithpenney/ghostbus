@@ -30,6 +30,8 @@ reg [3:0] foo_reg=0;                            // Non-host-accessible register
 
 (* ghostbus_addr='h40 *)
 reg [3:0] foo_ram [0:RD-1];                        // Host-accessible RAM with pre-defined relative address (0x40)
+(* ghostbus *) wire [5:0] ima_wire;
+reg  [5:0] ima_reg;
 
 `ifdef GHOSTBUS_LIVE
 `GHOSTBUS_foo
@@ -174,5 +176,18 @@ bar #(
   `endif
 `endif
 );
+
+localparam GH_AW = 13;
+localparam GH_DW = 32;
+// Testing a third bus (routed nowhere right now)
+(* ghostbus_port="clk", ghostbus_name="greyhound" *)       wire hound_clk=clk;
+(* ghostbus_port="addr", ghostbus_name="greyhound" *)      reg [GH_AW-1:0] hound_addr=0;
+(* ghostbus_port="wdata", ghostbus_name="greyhound" *)     reg [GH_DW-1:0] hound_dout=0;
+(* ghostbus_port="rdata", ghostbus_name="greyhound" *)     wire [GH_DW-1:0] hound_din;
+(* ghostbus_port="we, wstb", ghostbus_name="greyhound" *)  reg hound_we=1'b0;
+(* ghostbus_port="rstb", ghostbus_name="greyhound" *)      reg hound_rstb=1'b0; // optional
+
+
+
 
 endmodule
