@@ -1050,6 +1050,7 @@ class ExternalModule():
         self.ghostbus = ghostbus
         self.extbus = extbus
         self.access = self.extbus.access
+        self.busname = UNASSIGNED
         self.manually_assigned = False
         if self.base is None:
             print(f"New external module: {name}; size = 0x{size:x}")
