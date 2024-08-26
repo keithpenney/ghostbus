@@ -182,7 +182,8 @@ def _findRangeStr(snippet, offset, get_type=True):
         slc = snippet[n:n+maxlen].replace('\n', ' ').replace('.', ' ')
         if slc.strip() in keywords:
             nettype = NetTypes.get(slc.strip())
-            rangestr = "0:0"
+            if rangestr is None:
+                rangestr = "0:0"
             break
         elif char == ']': # walking backwards
             if grouplevel == 0:

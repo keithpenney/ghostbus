@@ -639,7 +639,8 @@ class GhostBusser(VParser):
         return
 
     def trim_hierarchy(self):
-        self.memory_map.trim_hierarchy()
+        for busname, mem_map in self.memory_maps.items():
+            mem_map.trim_hierarchy()
         return
 
     def _handleBus(self, netname, vals, dw, source, busname=None):
@@ -888,8 +889,8 @@ class MetaRegister(Register):
     in the source code."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._rangeStr = None
-        self._depthstr = None
+        #self._rangeStr = None
+        #self._depthstr = None
         self.range = (None, None)
         self.depth = ('0', '0')
         self.initval = 0
@@ -904,10 +905,14 @@ class MetaRegister(Register):
 
     def copy(self):
         ref = super().copy()
+        ref.range = self.range
+        ref.depth = self.depth
         ref.initval = self.initval
         ref.strobe = self.strobe
         ref.write_strobes = self.write_strobes
         ref.read_strobes = self.read_strobes
+        ref.alias = self.alias
+        ref.signed = self.signed
         ref.manually_assigned = self.manually_assigned
         ref.net_type = self.net_type
         ref.busname = self.busname
@@ -916,12 +921,13 @@ class MetaRegister(Register):
         return ref
 
     def _readRangeDepth(self):
-        if self._rangeStr is not None:
-            return True
+        #if self._rangeStr is not None:
+        #    return True
         if self.meta is None:
             return False
         _range, _net_type = getUnparsedWidthRangeType(self.meta) # getUnparsedWidthRange(self.meta)
         if _range is not None:
+            print(f"))))))))))))))))))))))) {self.name} self.range = {_range}")
             self.range = _range
             self.net_type = _net_type
             # Apply default access assumptions
@@ -949,7 +955,7 @@ class MetaRegister(Register):
 class MetaMemory(Memory):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._rangeStr = None
+        #self._rangeStr = None
         self._depthStr = None
         self.range = (None, None)
         self.depth = (None, None)
@@ -961,8 +967,8 @@ class MetaMemory(Memory):
         self.access = self.RW
 
     def _readRangeDepth(self):
-        if self._rangeStr is not None:
-            return True
+        #if self._rangeStr is not None:
+        #    return True
         if self.meta is None:
             return False
         _pass = True
@@ -979,8 +985,13 @@ class MetaMemory(Memory):
 
     def copy(self):
         ref = super().copy()
-        if hasattr(self, "busname"):
-            ref.busname = self.busname
+        ref.range = self.range
+        ref.depth = self.depth
+        ref.alias = self.alias
+        ref.signed = self.signed
+        ref.manually_assigned = self.manually_assigned
+        ref.busname = self.busname
+        ref.access = self.access
         return ref
 
 
