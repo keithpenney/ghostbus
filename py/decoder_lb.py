@@ -3,7 +3,7 @@
 import os
 
 from memory_map import Register, MemoryRegion, bits
-from gbexception import GhostbusException
+from gbexception import GhostbusException, GhostbusFeatureRequest
 from util import enum, strDict, print_dict
 
 
@@ -217,7 +217,11 @@ class BusLB():
             # Get width of addr/data
             self._set_width(portname, width=portwidth, rangestr=rangestr)
         else:
-            raise GhostbusException("'ghostbus_port={}' already defined at {}".format(busval[0].strip().lower(), busval[1]))
+            if source != busval[1]:
+                raise GhostbusException("'ghostbus_port={}' defined at {} is already defined at {}".format(
+                    busval[0].strip().lower(), source, busval[1]))
+            else:
+                raise GhostbusFeatureRequest("Name-mangle a named bus if declared in a module that is instantiated more than once.")
         return
 
     def _set_width(self, name, width=1, rangestr=None):
@@ -273,7 +277,7 @@ class DecoderLB():
         else:
             self.bustop = False
         self.ghostbusses = ghostbusses
-        self.busdomain = None
+        self.busdomain = self.mod.busname
         # TODO - Enable all the ghostbusses
         self.ghostbus = self.ghostbusses[0]
         self.ghostbus_dict = {}
@@ -295,10 +299,10 @@ class DecoderLB():
         self.max_local = 0
         for start, stop, ref in memregion.get_entries():
             if isinstance(ref, csr_class):
-                ref._readRangeDepth()
+                #ref._readRangeDepth()
                 self.csrs.append(ref)
             elif isinstance(ref, ram_class):
-                ref._readRangeDepth()
+                #ref._readRangeDepth()
                 self.rams.append(ref)
             elif isinstance(ref, ext_class):
                 self.exts.append((start, ref))
@@ -314,6 +318,10 @@ class DecoderLB():
         self.local_aw = bits(self.max_local)
         self._def_file = "defs.vh"
         self.check_bus()
+        if self.busdomain is None:
+            print(f"DecoderLB {self.name} is in its parent's bus domain")
+        else:
+            print(f"DecoderLB {self.name} is in the {self.busdomain} bus domain")
 
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal

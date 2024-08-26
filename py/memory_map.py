@@ -159,13 +159,24 @@ class MemoryRegion():
         self.bustop = False
 
     def copy(self):
-        addr_range = (self._offset, self._top)
-        mr = MemoryRegion(addr_range=addr_range, label=self.label, hierarchy=self._hierarchy)
-        mr.map = self.map.copy()
+        addr_range = (self._offset, self._offset + self._top)
+        #print(f"        Copying (0x{addr_range[0]:x}, 0x{addr_range[1]:x}) {self.label}")
+        mr = self.__class__(addr_range=addr_range, label=self.label, hierarchy=self._hierarchy)
+        mr.map = []
+        # We need a SUPER deep copy here
+        for start, stop, ref in self.map:
+            if ref is not None and hasattr(ref, "copy"):
+                copy_ref = ref.copy()
+            else:
+                copy_ref = ref
+            mr.map.append((start, stop, copy_ref))
         mr.vacant = self.vacant.copy()
         mr._keepout = self._keepout.copy()
-        mr.refs = self.refs.copy()
+        mr.refs = self.refs.copy() # TODO DELETEME
         mr.bustop = self.bustop
+        # HACK ALERT - I need to purge my "ghostbusser" codebase of references to "MemoryRegion" directly
+        if hasattr(self, "busname"):
+            mr.busname = self.busname
         return mr
 
     def shrink(self):
@@ -176,9 +187,13 @@ class MemoryRegion():
         to the memory region after shrinking.  It should probably only
         be called after you're sure you're done adding entries."""
         hi_occupied = self.high_addr()
-        min_aw = bits(hi_occupied-1)
-        self._top = (1 << min_aw)
-        self._aw = min_aw
+        if hi_occupied > 0:
+            min_aw = bits(hi_occupied-1)
+            self._top = (1 << min_aw)
+            self._aw = min_aw
+        else:
+            self._top = 0
+            self._aw = 0
         # Also need to truncate the last entry in the "vacant" map
         if len(self.vacant) > 0:
             vacant = (self.vacant[-1][0], self._top)
@@ -246,6 +261,7 @@ class MemoryRegion():
 
     @base.setter
     def base(self, value):
+        #print(f"***************** base => {self._offset:x} -> {value:x} ({self._top:x})")
         self._offset = value
         for n in range(len(self.map)):
             start, end, ref = self.map[n]
@@ -313,6 +329,89 @@ class MemoryRegion():
             self._iv += 1
             return vac, self.TYPE_VACANT
 
+    def remove(self, addr):
+        """Remove an entry rooted at 'addr' (and return it to vacant)"""
+        print(f"      #### MemoryRegion.remove(0x{addr:x}) ####")
+        removed = False
+        for n in range(len(self.map)):
+            _start, _stop, _ref = self.map[n]
+            if _start == addr:
+                del self.map[n]
+                removed = True
+                break
+        vacated = False
+        if removed:
+            vacated = self._vacate(_start, _stop)
+            if not vacated:
+                # KEEF START HERE
+                print(f"WARNING! Failed to vacate 0x{addr:x}")
+        return (removed and vacated)
+
+    def _vacate(self, start, stop):
+        # Six cases:
+        #   0: start is before (and not adjacent to) the first vacant region, insert new region
+        #   1: start is before and adjacent to the first vacant region, merge with the first region
+        #   2: start, stop is between (and not adjacent to) two regions, insert new region
+        #   3: start is adjacent to the regions below and above (merge all three)
+        #   4: start is adjacent to the region below (merge with below)
+        #   5: stop is adjacent to the region above (merge with above)
+        base = start
+        end = stop
+        new_entry = (base, end)
+        success = False
+        print(f"Trying to vacate (0x{start:x}, 0x{stop:x})")
+        for n in range(len(self.vacant)-1):
+            this_entry = self.vacant[n]
+            next_entry = self.vacant[n+1]
+            this_base, this_end = this_entry
+            next_base, next_end = next_entry
+            if (n == 0):
+                #   0: start is before (and not adjacent to) the first vacant region, insert new region
+                if end < this_base:
+                    print(f"this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
+                    print(f"vacate 0: adding (0x{base:x}, 0x{end:x}) to the start")
+                    self.vacant.insert(0, new_entry)
+                    success = True
+                    break
+                #   1: start is before and adjacent to the first vacant region, merge with the first region
+                elif end == this_base:
+                    print(f"this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
+                    print(f"vacate 1 replacing (0x{self.vacant[0][0]:x}, 0x{self.vacant[0][1]:x}) with (0x{base:x}, 0x{this_end:x})")
+                    self.vacant[0] = (base, this_end)
+                    success = True
+                    break
+            #   2: start, stop is between (and not adjacent to) two regions, insert new region
+            if (base > this_end) and (end < next_base):
+                print(f"this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
+                print(f"vacate 2 inserting (0x{base:x}, 0x{end:x}) after (0x{self.vacant[n][0]:x}, 0x{self.vacant[n][1]:x})")
+                self.vacant.insert(n+1, new_entry)
+                success = True
+                break
+            #   3: start is adjacent to the regions below and above (merge all three)
+            if (base == this_end) and (end == next_base):
+                print(f"this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
+                print(f"vacate 3 replacing (0x{self.vacant[n][0]:x}, 0x{self.vacant[n][1]:x}) with (0x{this_base:x}, 0x{next_end:x})" + \
+                      f" and deleting (0x{self.vacant[n+1][0]:x}, 0x{self.vacant[n+1][1]:x})")
+                self.vacant[n] = (this_base, next_end)
+                del self.vacant[n+1]
+                success = True
+                break
+            #   4: start is adjacent to the region below (merge with below)
+            if (base == this_end):
+                print(f"this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
+                print(f"vacate 4 replacing (0x{self.vacant[n][0]:x}, 0x{self.vacant[n][1]:x}) with (0x{this_base:x}, 0x{end:x})")
+                self.vacant[n] = (this_base, end)
+                success = True
+                break
+            #   5: stop is adjacent to the region above (merge with above)
+            if (end == next_base):
+                print(f"this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
+                print(f"vacate 5 replacing (0x{self.vacant[n+1][0]:x}, 0x{self.vacant[n+1][1]:x}) with (0x{base:x}, 0x{next_end:x})")
+                self.vacant[n+1] = (base, next_end)
+                success = True
+                break
+        return success
+
     def add_item(self, item, offset=None, keep_base=False):
         """Raises an exception if 'item' has no 'width' property.
         If self has a hierarchy, it gets propagated to the item."""
@@ -355,6 +454,10 @@ class MemoryRegion():
             base, end = self._push(width, ref=ref)
         else:
             base, end = self._insert(addr, width, type=type, ref=ref)
+        refname = None
+        if ref is not None and hasattr(ref, "name"):
+            refname = ref.name
+        #print(f"------ Adding ({base}, {end}) name {refname}")
         # TODO DELETEME
         if (type == self.TYPE_MEM) and (base is not None) and (end is not None):
             self.refs.append((base, end, ref))
@@ -413,6 +516,7 @@ class MemoryRegion():
                     del self.vacant[n]
             # Add the memory region
             if type == self.TYPE_MEM:
+                #print(f"2222222222222 {base}, {end}")
                 self.map.append((base, end, ref))
             elif type == self.TYPE_KEEPOUT:
                 self._keepout.append((base, end))
@@ -452,6 +556,7 @@ class MemoryRegion():
                         # We occupied the exact size of this vacant region
                         del self.vacant[n]
                 # Add the memory region
+                #print(f"3333333333333 {aligned_start}, {mem_end}")
                 self.map.append((aligned_start, mem_end, ref))
                 base = aligned_start
                 end = mem_end
@@ -511,7 +616,9 @@ class MemoryRegion():
     def high_addr(self):
         """Return the highest occupied address + 1."""
         self.sort()
-        return self.map[-1][1]
+        if len(self.map) > 0:
+            return self.map[-1][1]
+        return 0
 
     def base_addr(self):
         """Return the base address of the memory region"""
@@ -812,14 +919,14 @@ def test_MemoryRegion():
         except Exception as e:
             print("EXCEPTION: " + str(e))
     # Create a second memory map
-    submr = MemoryRegion(label="foo")
+    submr = MemoryRegion(label="foo", hierarchy=("foo",))
     submr.add(0)
     submr.add(0)
     submr.add(4)
     submr.add(4)
     submr.add(6)
     # Create a third memory map
-    subsubmr = MemoryRegion(label="bar")
+    subsubmr = MemoryRegion(label="bar", hierarchy=("bar",))
     subsubmr.add(10)
     subsubmr.shrink() # Shrink now that we're done adding
     # Nest the structure
@@ -828,6 +935,12 @@ def test_MemoryRegion():
     mr.add_item(submr)
     #print(mr)
     mr.print(4)
+    copymr = mr.copy()
+    print("==================== Deleting ====================")
+    mr.remove(submr.base)
+    mr.print(4)
+    print("==================== The Copy ====================")
+    copymr.print(4)
     return
 
 if __name__ == "__main__":

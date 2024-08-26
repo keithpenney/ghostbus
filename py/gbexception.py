@@ -7,3 +7,7 @@ class GhostbusException(Exception):
 class GhostbusNameCollision(GhostbusException):
     def __init__(self, s):
         super().__init__("Ghostbus Name Collision: " + s)
+
+class GhostbusFeatureRequest(GhostbusException):
+    def __init__(self, s):
+        super().__init__("Ghostbus Unsupported Feature: " + s)

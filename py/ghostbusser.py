@@ -15,16 +15,19 @@ from gbexception import GhostbusException, GhostbusNameCollision
 from util import enum, strDict, print_dict, strip_empty
 
 # TODO: Multi-ghostbus hierarchy parsing
-#   1. If len(busnames) > 1:
+#   1. If nbusses > 1:
 #       All instantiated modules must be tagged with the "ghostbus_name" attribute.
 #       Raise Exception if any are not tagged or if the attribute value does not match
 #       any names in 'busnames'
-#   2. If len(busnames) > 1:
+#   2. If nbusses > 1:
 #       Tag all instantiated modules with the particular ghostbus that is to be routed
 #       into them.
 #       This attribute must be inherited throughout the hiearchy
-#   3. Break off branches of the MemoryTree starting which include the "bustop" level
-#       and isolate the bus domains.
+#       2a. The auto-generated hookup code for these modules should reflect the net names
+#           of the named bus
+#   3. Break off branches of the MemoryTree including the "bustop" level and isolate the
+#       bus domains.
+#       3a. Also delete any CSRs that don't have the same bus domain.
 #   4. Each of these MemoryTree branches should make its own JSON relative to base 0.
 #   5. An external tool can combine the JSONs and ensure the resulting memory map reflects
 #       the hand-wired combination of the ghostbusses.
@@ -47,6 +50,16 @@ from util import enum, strDict, print_dict, strip_empty
 # I'll need to keep these unique identifiers internally, but replace the hash stuff
 # with the hierarchy of the particular instance (which is also unique) before
 # generating the memory map.
+
+import random
+# I need a unique value that's not None that's basically impossible to collide
+# with anything the user might pass to an attribute. This scheme makes it dang
+# near impossible to do accidentally and also quite a pain to do intentionally
+class Unique():
+    def __init__(self):
+        self.val = random.randint(-(1<<31), (1<<31)-1)
+
+UNASSIGNED = Unique()
 
 class GhostbusInterface():
     _tokens = [
@@ -121,7 +134,7 @@ class GhostbusInterface():
         tokens.STROBE_R: lambda x: str(x),
         tokens.EXTERNAL: split_strs,
         tokens.ALIAS:    lambda x: str(x),
-        tokens.BUSNAME:  lambda x: str(x),
+        tokens.BUSNAME:  lambda x: x,
     }
 
     @classmethod
@@ -144,30 +157,6 @@ class GhostbusInterface():
             # Strobes are write-only
             rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA]("w")
         return rvals
-
-
-class ModuleInstance():
-    def __init__(self, module_type, inst_name, instances=()):
-        self.type = module_type
-        self.name = inst_name
-        self.instances = instances
-
-    def __str__(self):
-        instances = strDict(self.instances)
-        return f"ModuleInstance({self.type}, {self.name})"
-
-    def __repr__(self):
-        return self.__str__()
-
-    def items(self):
-        return self.instances.items()
-
-    def __len__(self):
-        return self.instances.__len__()
-
-    def __setitem__(self, key, value):
-        self.instances[key] = value
-        return
 
 
 class WalkDict():
@@ -294,11 +283,12 @@ class MemoryTree(WalkDict):
             module_name = get_modname(inst_hash)
         else:
             module_name = None
-        self._mr = MemoryRegionStager(label=module_name, hierarchy=hierarchy)
+        self._mr = GBMemoryRegionStager(label=module_name, hierarchy=hierarchy)
         self._label = None
         if hierarchy is not None:
             self._label = hierarchy[0]
         self._resolved = False
+        self._bus_distributed = False
 
     def __str__(self):
         if self._mr._hierarchy is not None:
@@ -340,6 +330,59 @@ class MemoryTree(WalkDict):
             self._mr.resolve()
         return self._mr
 
+    def distribute_busses(self):
+        if self._bus_distributed:
+            return
+        # For any module with declared busses, make sure all instantiated submodules specify their
+        # bus domain (if they don't, give them the default).
+        for key, node in self.walk():
+            if node is None:
+                print(f"WARNING! node is None! key = {key}")
+            if hasattr(node, "memory"):
+                if len(node.memory.declared_busses) > 0:
+                    # This MemoryRegion(Stager) has declared busses, so each instantiated
+                    # ghostmod needs to have the ghostbus_name
+                    print(f"Looking at {node.memory.name}")
+                    if hasattr(node.memory, "named_bus_insts"):
+                        print(f"  node.memory.named_bus_insts = {node.memory.named_bus_insts}")
+                    for (start, end, submod) in node.memory.map:
+                        if isinstance(submod, MemoryRegion):
+                            submod_name = submod.hierarchy[-1]
+                        else:
+                            submod_name = submod.name
+                        if submod.busname == UNASSIGNED:
+                            submod.busname = node.memory.named_bus_insts.get(submod_name, None)
+                            if submod.busname is None:
+                                print(f"Submodule {submod.name} has no busname; connecting to the default bus.")
+                        if submod.busname is not None:
+                            print(f"Submodule {submod.name} wants busname {submod.busname}")
+                            if submod.busname not in node.memory.declared_busses:
+                                err = f"Submodule {submod.name} wants busname {submod.busname}, which is " + \
+                                      f"not declared in module {node.memory.name}."
+                                raise GhostbusException(err)
+                else:
+                    # Make sure all busnames are assigned
+                    if node.memory.busname == UNASSIGNED:
+                        node.memory.busname = None
+                    for (start, end, submod) in node.memory.map:
+                        submod.busname = None
+            else:
+                print("node {node} has no memory")
+            if hasattr(node, "mark"):
+                node.mark()
+        # Finally assign default busname to remaining MemoryRegion instances
+        for key, node in self.walk():
+            if hasattr(node, "memory"):
+                if not hasattr(node.memory, "busname"):
+                    node.memory.busname = None
+            if hasattr(node, "mark"):
+                node.mark()
+        # For some damn reason the top doesn't show up in the walk?
+        if self.memory.busname == UNASSIGNED:
+            self.memory.busname = None
+        self._bus_distributed = True
+        return
+
     @property
     def memory(self):
         return self._mr
@@ -362,9 +405,7 @@ class GhostBusser(VParser):
         self.memory_map = None
         #self._top_bus = BusLB()
         self._ghostbusses = []
-        # TODO - There should be a separate memory map for each
-        #        ghostbus.  But how do I detect this...?
-        self.memory_maps = []
+        self.memory_maps = {}
         self._ext_dict = {}
 
     def get_map(self):
@@ -437,10 +478,12 @@ class GhostBusser(VParser):
                         reg.signed = signed
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
-                            mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
+                            mr = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,))
                             # print("created mr label {}".format(mr.label))
                         if addr is not None:
                             reg.manually_assigned = True
+                        # This may not be the best place for this step, but at least it gets done.
+                        reg._readRangeDepth()
                         mr.add(width=0, ref=reg, addr=addr)
                     elif exts is not None:
                         dw = len(net_dict['bits'])
@@ -475,10 +518,12 @@ class GhostBusser(VParser):
                         mem.signed = signed
                         if mr is None:
                             module_name = get_modname(mod_hash)
-                            mr = MemoryRegionStager(label=module_name, hierarchy=(module_name,))
+                            mr = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,))
                             print("created mr label {}".format(mr.label))
                         if addr is not None:
                             mem.manually_assigned = True
+                        # This may not be the best place for this step, but at least it gets done.
+                        mem._readRangeDepth()
                         mr.add(width=aw, ref=mem, addr=addr)
             if mr is not None:
                 for strobe_name, reg_type in associated_strobes.items():
@@ -526,44 +571,71 @@ class GhostBusser(VParser):
         memtree = self.build_memory_tree(modtree, ghostmods, multibus_dict)
         #print("***********************************************")
         self.memory_map = memtree.resolve()
+        self.check_memory_tree(memtree)
+        memtree.distribute_busses()
         self.memory_map.shrink()
         self.memory_map.print(4)
-        self.memory_maps = [self.memory_map]
+        self.memory_maps = {None: self.memory_map} # DELETEME
         self.splitMemoryMap()
         return ghostmods
 
     @classmethod
-    def getMultiBusRegion(cls, memregion):
+    def getMultiBusRegion(cls, memregion, busname=None):
+        if busname in memregion.declared_busses:
+            return memregion
         for start, stop, ref in memregion.get_entries():
             if isinstance(ref, MemoryRegion):
-                if len(ref.declared_busses) > 1:
+                if busname in ref.declared_busses:
                     return ref
                 else:
-                    newref = cls.getMultiBusRegion(ref)
+                    newref = cls.getMultiBusRegion(ref, busname)
                     if newref is not None:
                         return newref
         return None
 
-    def labelBusDomains(self):
-        # TODO - This currently only supports one multi-bus region
-        # KEEF - START HERE
-
-        # 0. Find the MemoryRegion with multiple busses
-        region = self.getMultiBusRegion(self.memory_map)
-        # 1. Enforce usage rules
-        # 2. Label instances with their bus domains
-        # 3. Make global list of bus domains
-        return
-
     def splitMemoryMap(self):
         # Start with empty self.memory_maps
+        memory_maps = {}
         # For each bus domain in the global list:
-        #   0. Make a copy of the memory map
-        #   1. Find the MemoryRegion where the bus is declared
-        #   2. For every instance declared in this region:
-        #       If inst.busdomain != target_busdomain:
-        #           delete the branch
-        #   3. Append the copy to self.memory_maps
+        for bus in self._ghostbusses:
+            busname = bus.name
+            print(f"  Building a map of {bus.name}")
+            #   0. Make a copy of the memory map
+            mmap = self.memory_map.copy()
+            # HACK ALERT! I added application-specific attributes, but the copy is incomplete
+            # TODO - Just subclass MemoryRegion already and add the damn app-specific attrs
+            #mmap.declared_busses = self.memory_map.declared_busses
+            #mmap.implicit_busses = self.memory_map.implicit_busses
+            #mmap.named_bus_insts = self.memory_map.named_bus_insts
+            #   1. Find the MemoryRegion where the bus is declared
+            region = self.getMultiBusRegion(mmap, busname)
+            if region is None:
+                print(f"  Can't find where {busname} is declared")
+                continue
+            else:
+                print(f"  {busname} is declared at {region.name}")
+            #   2. For every instance declared in this region:
+            delete_addrs = []
+            for (start, stop, ref) in region.map:
+                # If inst.busdomain != target_busdomain:
+                if hasattr(ref, 'busname') and ref.busname != busname:
+                    # delete the branch
+                    print(f"    I'm gonna chop off this {ref.busname} branch starting at {ref.name}!")
+                    delete_addrs.append(start)
+                elif not hasattr(ref, 'busname') and isinstance(ref, MemoryRegion):
+                    print(f"    Why {ref.name} has no busname?")
+                else:
+                    print(f"    I guess {ref.name} stays?")
+            for addr in delete_addrs:
+                region.remove(addr)
+            #   3. Append the copy to self.memory_maps
+            region.shrink()
+            memory_maps[busname] = region
+        for busname, _map in memory_maps.items():
+            print(f"=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ {busname} +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=")
+            #print(_map)
+            _map.print(4)
+        self.memory_maps = memory_maps
         return
 
     def trim_hierarchy(self):
@@ -752,16 +824,16 @@ class GhostBusser(VParser):
                 else:
                     # Update memory in-place
                     dd[module][dict_key] = inst
-        return ModuleInstance(top, top, dd[top])
+        return dd[top]
 
-    def build_memory_tree(self, modtree, ghostmods, busdict={}):
+    def build_memory_tree(self, modtree, ghostmods, multibus_dict={}):
         # First build an empty dict of MemoryRegions
         # Start from leaf,
         #print("++++++++++++++++++++++++++++++++++++++++++++")
-        modtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
+        memtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
         #print("////////////////////////////////////////////")
-        print("First walk")
-        for key, val in modtree.walk():
+        #print_dict(multibus_dict)
+        for key, val in memtree.walk():
             #print("{}: {}".format(key, val))
             if key is None:
                 break
@@ -778,40 +850,36 @@ class GhostBusser(VParser):
                 val.memory = mrcopy
             else:
                 #print(f"no {key} in ghostmods")
-                val.memory = MemoryRegion(label=module_name, hierarchy=hier)
-            _busdict = busdict.get(inst_hash, None)
+                val.memory = GBMemoryRegion(label=module_name, hierarchy=hier)
+            _busdict = multibus_dict.get(inst_hash, None)
+            print(f"  Handling {inst_hash}")
             if _busdict is not None:
                 busses_implicit = _busdict.get("implicit_busses", [])
                 busses_explicit = _busdict.get("explicit_busses", [])
                 insts = _busdict.get("insts", {})
-                val.memory.declared_busses = busses_explicit
-                val.memory.implicit_busses = busses_implicit
-                val.memory.named_bus_insts = insts
-                if len(val.memory.declared_busses) > 0:
-                    val.memory.bustop = True
+                del multibus_dict[inst_hash]
+            else:
+                busses_implicit = ()
+                busses_explicit = ()
+                insts = ()
+            val.memory.declared_busses = busses_explicit
+            val.memory.implicit_busses = busses_implicit
+            val.memory.named_bus_insts = insts
+            if len(val.memory.declared_busses) > 0:
+                val.memory.bustop = True
+        print(f"  #### Remaining multibus_dict: {multibus_dict}")
+        return memtree
 
-        return modtree
-        # Skip all this stuff for now
-        print("Second walk")
-        for key, val in modtree.walk():
-            name = val.memory.label
-            for start, stop, ref in val.memory.get_entries():
-                if isinstance(ref, MemoryRegion):
-                    inst = ref.hierarchy[-1]
-                    busname = insts.get(inst, None)
-                    if busname is None:
-                        print(f"WHUPS! No {inst} in {name}'s named_bus_insts")
-                        print_dict(val.memory.named_bus_insts)
-                        # raise GhostbusException("Boop bop.")
-                    else:
-                        if busname not in busses:
-                            raise GhostbusException(f"Inst {inst} in {name} is given busname {busname} " + \
-                                                    "which is not declared in the module itself. Module " + \
-                                                    f"{name} declares these busses: {busses}")
-                        print(f"POW! {inst} is connected to bus {busname}")
-                        ref.busdomain = busname
-        # If leaf is a ghostmod, add its MemoryRegion to its parent's MemoryRegion
-        return modtree
+    def check_memory_tree(self, memtree):
+        for key, val in memtree.walk():
+            if key is None:
+                break
+            if hasattr(val, "memory"):
+                if not hasattr(val.memory, "declared_busses"):
+                    print(f"@@@ {val.memory.name} has no declared_busses")
+            else:
+                print(f"### val {val} has no memory!")
+        return
 
 
 class MetaRegister(Register):
@@ -832,6 +900,7 @@ class MetaRegister(Register):
         self.signed = None
         self.manually_assigned = False
         self.net_type = None
+        self.busname = UNASSIGNED
 
     def copy(self):
         ref = super().copy()
@@ -841,6 +910,9 @@ class MetaRegister(Register):
         ref.read_strobes = self.read_strobes
         ref.manually_assigned = self.manually_assigned
         ref.net_type = self.net_type
+        ref.busname = self.busname
+        if ref.access == ref.UNSPECIFIED:
+            raise Exception(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
         return ref
 
     def _readRangeDepth(self):
@@ -863,7 +935,12 @@ class MetaRegister(Register):
                     err = f"Cannot have write access to net {self.name} of 'wire' type." + \
                           f" See: {self.meta}"
                     raise GhostbusException(err)
+            elif self.access == self.UNSPECIFIED:
+                # Can't leave the access unspecified
+                self.access = self.RW
+                raise Exception(f"Can't leave the access unspecified: {self.name}")
         else:
+            raise Exception(f"Couldn't find _range of {self.name}")
             return False
         return True
 
@@ -879,6 +956,9 @@ class MetaMemory(Memory):
         self.alias = None
         self.signed = None
         self.manually_assigned = False
+        self.busname = UNASSIGNED
+        # TODO - Is there any reason why this wouldn't be so? Maybe ROM?
+        self.access = self.RW
 
     def _readRangeDepth(self):
         if self._rangeStr is not None:
@@ -896,6 +976,50 @@ class MetaMemory(Memory):
         else:
             _pass = False
         return _pass
+
+    def copy(self):
+        ref = super().copy()
+        if hasattr(self, "busname"):
+            ref.busname = self.busname
+        return ref
+
+
+class GBMemoryRegion(MemoryRegion):
+    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
+        super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
+        self.bustop = False
+        self.declared_busses = ()
+        self.implicit_busses = ()
+        self.named_bus_insts = ()
+        self.busname = UNASSIGNED
+
+    def copy(self):
+        cp = super().copy()
+        cp.bustop = self.bustop
+        cp.declared_busses = self.declared_busses
+        cp.implicit_busses = self.implicit_busses
+        cp.named_bus_insts = self.named_bus_insts
+        cp.busname = self.busname
+        return cp
+
+
+class GBMemoryRegionStager(MemoryRegionStager):
+    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
+        super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
+        self.bustop = False
+        self.declared_busses = ()
+        self.implicit_busses = ()
+        self.named_bus_insts = ()
+        self.busname = UNASSIGNED
+
+    def copy(self):
+        cp = super().copy()
+        cp.bustop = self.bustop
+        cp.declared_busses = self.declared_busses
+        cp.implicit_busses = self.implicit_busses
+        cp.named_bus_insts = self.named_bus_insts
+        cp.busname = self.busname
+        return cp
 
 
 class ExternalModule():
@@ -1093,9 +1217,18 @@ def handleGhostbus(args):
             # JSON
             if trim:
                 gb.trim_hierarchy()
-            for mem_map in gb.memory_maps:
+            single_bus = True
+            if len(gb.memory_maps) > 1:
+                single_bus = False
+            for busname, mem_map in gb.memory_maps.items():
                 jm = JSONMaker(mem_map, drops=args.ignore)
-                jm.write(args.json, path=args.dest, flat=args.flat, mangle=args.mangle)
+                if busname is None or single_bus:
+                    filename = str(args.json)
+                else:
+                    import os
+                    fname, ext = os.path.splitext(args.json)
+                    filename = fname + f".{busname}" + ext
+                jm.write(filename, path=args.dest, flat=args.flat, mangle=args.mangle)
     except GhostbusException as e:
         print(e)
         return 1

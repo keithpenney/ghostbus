@@ -28,8 +28,7 @@ reg [3:0] foo_reg=0;                            // Non-host-accessible register
 (* ghostbus_rs="foo_ha_reg" *) reg foo_ha_reg_read_strobe=1'b0;  // Associated read-strobe; will strobe high when foo_ha_reg is read
 //(* ghostbus_strobe *) reg foo_strobe=1'b0;  // A strobe (write-only; value is ignored; pulse high for one clock cycle on write)
 
-(* ghostbus_addr='h40 *)
-reg [3:0] foo_ram [0:RD-1];                        // Host-accessible RAM with pre-defined relative address (0x40)
+(* ghostbus_addr='h40 *) reg [3:0] foo_ram [0:RD-1]; // Host-accessible RAM with pre-defined relative address (0x40)
 (* ghostbus *) wire [5:0] ima_wire;
 reg  [5:0] ima_reg;
 
@@ -186,8 +185,5 @@ localparam GH_DW = 32;
 (* ghostbus_port="rdata", ghostbus_name="greyhound" *)     wire [GH_DW-1:0] hound_din;
 (* ghostbus_port="we, wstb", ghostbus_name="greyhound" *)  reg hound_we=1'b0;
 (* ghostbus_port="rstb", ghostbus_name="greyhound" *)      reg hound_rstb=1'b0; // optional
-
-
-
 
 endmodule
