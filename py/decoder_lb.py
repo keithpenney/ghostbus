@@ -810,6 +810,8 @@ class DecoderLB():
         end = base_rel + (1<<mod.aw) - 1
         # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
         #        to 'vhex' or do some tricky concatenation
+        if divwidth == 0:
+            return f"wire en_{mod.inst} = 1'b1; // 0x{base_rel:x}-0x{end:x}"
         return f"wire en_{mod.inst} = {addr_net}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
 
     @staticmethod
@@ -822,6 +824,8 @@ class DecoderLB():
         else:
             addr_net = portdict['addr']
         divwidth = busaw - mod.aw
+        if divwidth == 0:
+            return f"wire [{busaw-1}:0] {portdict['addr']}_{mod.inst} = {addr_net}[{mod.aw-1}:0]; // address relative to own base (0x0)"
         return f"wire [{busaw-1}:0] {portdict['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
 
     def _wen(self, mod, parent_bustop):
