@@ -57,6 +57,17 @@ foo_tb:  $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES) $(AUTOGEN_DIR)/mmap.vh $(AU
 foo.vcd: foo_tb
 	$(VERILOG_SIM) +vcd $(VCD_ARGS)
 
+
+# =================== Stepchild Test ===================
+STEPAUTO_DIR=_autostep
+STEPCHILD_SOURCES=$(VERILOG_DIR)/stepchild_tb.v $(VERILOG_DIR)/bus_glue.v
+$(STEPAUTO_DIR)/defs.vh $(STEPAUTO_DIR)/regmap.json: $(STEPCHILD_SOURCES)
+	mkdir -p $(STEPAUTO_DIR)
+	$(PYTHON) $(PY_DIR)/ghostbusser.py --live --json regmap.json --dest $(STEPAUTO_DIR) -t stepchild_tb --flat --mangle $^
+
+.PHONY: step
+step: $(STEPAUTO_DIR)/regmap.json
+
 .PHONY: clean
 clean:
 	$(RM) $(AUTOGEN_DIR) foo_tb foo.vcd

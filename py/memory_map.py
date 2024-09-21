@@ -679,7 +679,7 @@ class MemoryRegion():
         pass #1 sets the first len(common) items of each MemoryRegion's hierarchy to empty
         strings."""
         common = self._collectCommon()
-        if len(common) == 0:
+        if common is None or len(common) == 0:
             # print("    No common root. Done")
             return
         else:

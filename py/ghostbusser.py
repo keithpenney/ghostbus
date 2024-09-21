@@ -72,6 +72,7 @@ class GhostbusInterface():
         "EXTERNAL",
         "ALIAS",
         "BUSNAME",
+        "SUB",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -89,6 +90,8 @@ class GhostbusInterface():
         "ghostbus_ext":         tokens.EXTERNAL,
         "ghostbus_alias":       tokens.ALIAS,
         "ghostbus_name":        tokens.BUSNAME,
+        # HACK ALERT! I really want to remove this one
+        "ghostbus_sub":         tokens.SUB,
     }
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -135,6 +138,7 @@ class GhostbusInterface():
         tokens.EXTERNAL: split_strs,
         tokens.ALIAS:    lambda x: str(x),
         tokens.BUSNAME:  lambda x: x,
+        tokens.SUB:      lambda x: x,
     }
 
     @classmethod
@@ -461,6 +465,7 @@ class GhostBusser(VParser):
                     read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
                     exts = token_dict.get(GhostbusInterface.tokens.EXTERNAL, None)
                     alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
+                    busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if write_strobe is not None:
                         # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
@@ -476,6 +481,7 @@ class GhostBusser(VParser):
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
                         reg.alias = alias
                         reg.signed = signed
+                        reg.busname = busname
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mr is None:
                             mr = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,))
@@ -490,7 +496,9 @@ class GhostBusser(VParser):
                         if module_name not in handledExtModules:
                             self._handleExt(module_name, netname, exts, dw, source, addr=addr)
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
-                    busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
+                    subname = token_dict.get(GhostbusInterface.tokens.SUB, None)
+                    if subname is not None:
+                        print(f"  stepchild: {netname} subname = {subname}")
                     if ports is not None:
                         bustop = True
                         dw = len(net_dict['bits'])
@@ -509,6 +517,7 @@ class GhostBusser(VParser):
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
+                    busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if access is not None:
                         source = mem_dict['attributes']['src']
                         dw = int(mem_dict["width"])
@@ -516,6 +525,7 @@ class GhostBusser(VParser):
                         aw = math.ceil(math.log2(size))
                         mem = MetaMemory(name=memname, dw=dw, aw=aw, meta=source)
                         mem.signed = signed
+                        mem.busname = busname
                         if mr is None:
                             module_name = get_modname(mod_hash)
                             mr = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,))
@@ -712,6 +722,8 @@ class GhostBusser(VParser):
             busses = self._resolveExtModule(module, data)
             #self._ext_modules[module] = []
             for instname, bus in busses.items():
+                print(bus.name)
+                print(bus)
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
                 added = False
                 for mod_hash, mr in ghostmods.items():
@@ -751,14 +763,14 @@ class GhostBusser(VParser):
                 # print(f"instname = {instname}")
                 bus = busses.get(instname, None)
                 if bus is None:
-                    # print("    New bus")
+                    print("    New bus")
                     bus = BusLB()
                 else:
-                    # print("    Got bus")
+                    print("    Got bus")
                     pass
-                # print(f"len(data) = {len(data)}")
+                print(f"len(data) = {len(data)}")
                 for datum in data:
-                    # print(f"  datum = {datum}")
+                    print(f"  datum = {datum}")
                     netname, dw, portnames, instnames, source, addr = datum
                     rangestr = getUnparsedWidthRange(source)
                     if len(instnames) == 0 and universal_inst is not None:
@@ -766,7 +778,7 @@ class GhostBusser(VParser):
                     for net_instname in instnames:
                         if net_instname == instname:
                             for portname in portnames:
-                                # print(f"  instname = {instname}, netname = {netname}, portname = {portname}")
+                                print(f"  instname = {instname}, netname = {netname}, portname = {portname}")
                                 bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
                             if addr is not None:
                                 # print(f"addr is not None: datum = {datum}")
