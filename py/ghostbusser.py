@@ -612,11 +612,6 @@ class GhostBusser(VParser):
             print(f"  Building a map of {bus.name}")
             #   0. Make a copy of the memory map
             mmap = self.memory_map.copy()
-            # HACK ALERT! I added application-specific attributes, but the copy is incomplete
-            # TODO - Just subclass MemoryRegion already and add the damn app-specific attrs
-            #mmap.declared_busses = self.memory_map.declared_busses
-            #mmap.implicit_busses = self.memory_map.implicit_busses
-            #mmap.named_bus_insts = self.memory_map.named_bus_insts
             #   1. Find the MemoryRegion where the bus is declared
             region = self.getMultiBusRegion(mmap, busname)
             if region is None:
@@ -638,8 +633,12 @@ class GhostBusser(VParser):
                     print(f"    I guess {ref.name} stays?")
             for addr in delete_addrs:
                 region.remove(addr)
-            #   3. Append the copy to self.memory_maps
+            #   3. Unstage and re-resolve to ensure memory is tightly packed
+            #print(region)
+            region.unstage()
+            region.resolve()
             region.shrink()
+            #   4. Append the copy to self.memory_maps
             memory_maps[busname] = region
         for busname, _map in memory_maps.items():
             print(f"=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ {busname} +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=")

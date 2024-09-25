@@ -99,6 +99,12 @@ class Memory(Register):
                               base=self._base_addr, meta=self.meta, access=self.access)
 
 
+def hexlist(ll):
+    if not hasattr(ll, "__len__"):
+        return hex(ll)
+    return [hexlist(x) for x in ll]
+
+
 class MemoryRegion():
     """A memory allocator.
     * Has no de-allocation.
@@ -137,6 +143,7 @@ class MemoryRegion():
             'label' can be used to identify the memory region per application
             'hierarchy' can be used to keep track of region hierarchy
         """
+        self._init_addr_range = addr_range
         self._offset = addr_range[0]
         # -1 because the upper address is not inclusive
         self._aw = bits((addr_range[1]-addr_range[0])-1)
@@ -158,6 +165,20 @@ class MemoryRegion():
         # If I end up with more of these, I'll just subclass it.
         self.bustop = False
 
+    def reset(self):
+        """Empty the memory region (start fresh with no allocated items)."""
+        addr_range = self._init_addr_range
+        self._offset = addr_range[0]
+        # -1 because the upper address is not inclusive
+        self._aw = bits((addr_range[1]-addr_range[0])-1)
+        # Its own memory map will be defined relative to the base (not absolute addresses)
+        self._top = (1 << self._aw)
+        # Each entry is (start, end+1, ref) where 'ref' is either None or a Python object reference
+        self.map = []
+        self.vacant = [list(addr_range)]
+        self._keepout = []
+        return
+
     def copy(self):
         addr_range = (self._offset, self._offset + self._top)
         #print(f"        Copying (0x{addr_range[0]:x}, 0x{addr_range[1]:x}) {self.label}")
@@ -171,6 +192,7 @@ class MemoryRegion():
                 copy_ref = ref
             mr.map.append((start, stop, copy_ref))
         mr.vacant = self.vacant.copy()
+        #print(f"                           mr.vacant = {hexlist(mr.vacant)}")
         mr._keepout = self._keepout.copy()
         mr.refs = self.refs.copy() # TODO DELETEME
         mr.bustop = self.bustop
@@ -194,13 +216,15 @@ class MemoryRegion():
         else:
             self._top = 0
             self._aw = 0
-        # Also need to truncate the last entry in the "vacant" map
         if len(self.vacant) > 0:
-            vacant = (self.vacant[-1][0], self._top)
-            if vacant[1] == vacant[0]:
-                self.vacant.pop()
-            else:
-                self.vacant[-1] = (self.vacant[-1][0], self._top)
+            # If the top vacant is > self._top, we also need to truncate the last entry
+            # in the "vacant" map
+            if self.vacant[-1][1] > self._top:
+                vacant = (self.vacant[-1][0], self._top)
+                if vacant[1] == vacant[0]:
+                    self.vacant.pop()
+                else:
+                    self.vacant[-1] = vacant
         return
 
     def grow(self, high, absolute=False):
@@ -343,7 +367,6 @@ class MemoryRegion():
         if removed:
             vacated = self._vacate(_start, _stop)
             if not vacated:
-                # KEEF START HERE
                 print(f"WARNING! Failed to vacate 0x{addr:x}")
         return (removed and vacated)
 
@@ -360,11 +383,15 @@ class MemoryRegion():
         new_entry = (base, end)
         success = False
         print(f"Trying to vacate (0x{start:x}, 0x{stop:x})")
-        for n in range(len(self.vacant)-1):
+        for n in range(len(self.vacant)):
             this_entry = self.vacant[n]
-            next_entry = self.vacant[n+1]
+            if n == len(self.vacant) - 1:
+                next_entry = (-1, -1)
+            else:
+                next_entry = self.vacant[n+1]
             this_base, this_end = this_entry
             next_base, next_end = next_entry
+            #print(f"           this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
             if (n == 0):
                 #   0: start is before (and not adjacent to) the first vacant region, insert new region
                 if end < this_base:
@@ -706,65 +733,128 @@ class MemoryRegionStager(MemoryRegion):
     """Uses a near-indentical API as class MemoryRegion, but doesn't actually compose
     the map until you call 'resolve()' which adds explicit-address entries first, then
     the implicit-address entries."""
+    UNRESOLVED = False
+    RESOLVED = True
     def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
         super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
         # Each entry = (item, addr, addr_width, type)
-        self._staged_items = []
+        self._entries = []
+        self._keepouts = []
+        self._explicits = []
+
+    def copy(self):
+        cp = super().copy()
+        cp._entries = self._entries.copy()
+        cp._keepouts = self._keepouts.copy()
+        cp._explicits = self._explicits.copy()
+        return cp
 
     def add_item(self, item, offset=None, keep_base=False):
         """Overloaded to Stage-only"""
         addr_width = None
         if hasattr(item, 'aw'):
             addr_width = item.aw
-        self._staged_items.append((item, offset, addr_width, self.TYPE_MEM))
+        if offset is not None:
+            self._explicits.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
+        else:
+            self._entries.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
         return
 
     def add(self, width=0, ref=None, addr=None):
         """Overloaded to Stage-only"""
-        self._staged_items.append((ref, addr, width, self.TYPE_MEM))
+        if addr is not None:
+            self._explicits.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
+        else:
+            self._entries.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
         return
 
     def keepout(self, addr, width=0):
         """Overloaded to Stage-only"""
-        self._staged_items.append((None, addr, width, self.TYPE_KEEPOUT))
+        self._keepouts.append((None, addr, width, self.TYPE_KEEPOUT, self.UNRESOLVED))
         return
+
+    def remove(self, addr):
+        lists = (self._keepouts, self._explicits, self._entries)
+        removed = False
+        for _list in lists:
+            for n in range(len(_list)):
+                ref, base, aw, _type, resolved = _list[n]
+                if base == addr:
+                    del _list[n]
+                    #print(f"                                    Deleting {ref}")
+                    removed = True
+                    break
+            if removed:
+                break
+        if not removed:
+            print(f"                           Failed to remove {addr}")
+        return super().remove(addr)
 
     def resolve(self):
         """Allocate the staged items in an explicit memory map.  Items staged with
         explicit addresses get priority."""
         # First pass, keepouts
-        for n in range(len(self._staged_items)):
-            ref, base, aw, _type = self._staged_items[n]
-            if _type == self.TYPE_KEEPOUT:
+        #print(f"REEESOLVE: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)}")
+        for n in range(len(self._keepouts)):
+            ref, base, aw, _type, resolved = self._keepouts[n]
+            if resolved != self.RESOLVED:
                 super().keepout(base, aw)
-                self._staged_items[n] = None
+                self._keepouts[n] = (ref, base, aw, _type, self.RESOLVED)
         # Second pass, add any with explicit addresses
-        for n in range(len(self._staged_items)):
-            data = self._staged_items[n]
+        for n in range(len(self._explicits)):
+            data = self._explicits[n]
             if data is None:
                 continue
-            ref, base, aw, _type = data
-            if _type == self.TYPE_MEM and base is not None:
-                name = None
-                if ref is not None:
-                    name = ref.name
+            ref, base, aw, _type, resolved = data
+            name = None
+            if ref is not None:
+                name = ref.name
+            if resolved != self.RESOLVED:
                 print(f"Adding {name} to addr 0x{base:x}")
                 super().add(aw, ref=ref, addr=base)
-                self._staged_items[n] = None
+                self._explicits[n] = (ref, base, aw, _type, self.RESOLVED)
         # Third pass, add everything else
-        for n in range(len(self._staged_items)):
-            data = self._staged_items[n]
+        for n in range(len(self._entries)):
+            data = self._entries[n]
             if data is None:
                 continue
-            ref, base, aw, _type = data
-            if _type == self.TYPE_MEM:
-                name = None
-                if ref is not None:
-                    name = ref.name
+            ref, base, aw, _type, resolved = data
+            name = None
+            if ref is not None:
+                name = ref.name
+            if resolved != self.RESOLVED:
                 print(f"Adding {name} to anywhere ({base})")
-                super().add(aw, ref=ref, addr=base)
-        self._staged_items = []
+                newbase = super().add(aw, ref=ref, addr=None)
+                self._entries[n] = (ref, newbase, aw, _type, self.RESOLVED)
         return
+
+    def unstage(self):
+        """Unstage everything so you can resolve() again (presumably after
+        the memory map has been modified in some way)."""
+        #print(f"{self.name} unstaging", end="")
+        #print(f"{self.name} unstaging: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)}")
+        self.reset()
+        lists = (self._keepouts, self._explicits, self._entries)
+        #print(f" len(_list) = {len(_list)}", end="")
+        for m in range(len(lists)):
+            for n in range(len(lists[m])):
+                x = lists[m][n]
+                lists[m][n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
+        #for n in range(len(self._keepouts)):
+        #    #print(f"  {_list[0]} unresolving")
+        #    x = self._keepouts[n]
+        #    self._keepouts[n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
+        #for n in range(len(self._explicits)):
+        #    #print(f"  {_list[0]} unresolving")
+        #    x = self._explicits[n]
+        #    self._explicits[n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
+        #for n in range(len(self._entries)):
+        #    #print(f"  {_list[0]} unresolving")
+        #    x = self._entries[n]
+        #    self._entries[n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
+        #print()
+        return
+
 
 class Addrspace():
     @staticmethod
