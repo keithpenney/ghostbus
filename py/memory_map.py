@@ -107,7 +107,7 @@ def hexlist(ll):
 
 class MemoryRegion():
     """A memory allocator.
-    * Has no de-allocation.
+    * De-allocation by address
     * Only allows memory segments to be added at addresses aligned to their width, meaning:
         assert(addr % (1<<width) == 0)
     * Optionally keeps track of references (i.e. pointers) for convenient ordered access
@@ -124,6 +124,8 @@ class MemoryRegion():
         mr.add(width, addr=address)
       or to the first available address simply with:
         mr.add(width)
+    * If you need to collect items, then assign by priority, use class MemoryRegionStager,
+      which also provides the ability to de-allocate and re-allocate.
     """
     TYPE_VACANT = 0
     TYPE_MEM = 1
@@ -153,7 +155,6 @@ class MemoryRegion():
         self.map = []
         self.vacant = [list(addr_range)]
         self._keepout = []
-        self.refs = []
         self._hierarchy = hierarchy
         if label is None:
             self.label = "MemoryRegion" + str(self._nregion)
@@ -164,6 +165,28 @@ class MemoryRegion():
         # NOTE: self.bustop is an annoying application-specific hook and I'm being lazy.
         # If I end up with more of these, I'll just subclass it.
         self.bustop = False
+
+    def check_complete(self):
+        """Verify that the memory map is complete (contiguous, non-overlapping regions of any type)."""
+        last_entry = None
+        for entry, _type in self: # Iterator magic
+            if last_entry is None:
+                if entry[0] != 0:
+                    raise Exception(f"MemoryRegion({self.name}) does not begin at zero! ({entry[0]}, {entry[1]})")
+            else:
+                if last_entry[1] != entry[0]:
+                    raise Exception(f"MemoryRegion({self.name}) entries are not contiguous ({last_entry[0]}, {last_entry[1]}), ({entry[0]}, {entry[1]})")
+            last_entry = entry
+        return
+
+    # Custom decorator
+    def completed(fn):
+        def wrapper(self, *args, **kw):
+            # Call the function
+            output = fn(self, *args, **kw)
+            self.check_complete()
+            return output
+        return wrapper
 
     def reset(self):
         """Empty the memory region (start fresh with no allocated items)."""
@@ -194,13 +217,13 @@ class MemoryRegion():
         mr.vacant = self.vacant.copy()
         #print(f"                           mr.vacant = {hexlist(mr.vacant)}")
         mr._keepout = self._keepout.copy()
-        mr.refs = self.refs.copy() # TODO DELETEME
         mr.bustop = self.bustop
         # HACK ALERT - I need to purge my "ghostbusser" codebase of references to "MemoryRegion" directly
         if hasattr(self, "busname"):
             mr.busname = self.busname
         return mr
 
+    @completed
     def shrink(self):
         """Reduce address range to the minimum aligned range containing
         the occupied portions of the map.  Note that it only scales the
@@ -227,6 +250,7 @@ class MemoryRegion():
                     self.vacant[-1] = vacant
         return
 
+    @completed
     def grow(self, high, absolute=False):
         """If high is an address greater than the current max address,
         extend the memory range to the next aligned point including that
@@ -324,11 +348,13 @@ class MemoryRegion():
         self.sort()
         self._im = 0
         self._iv = 0
+        self._ik = 0
         return self
 
     def __next__(self):
         mempty = False
         vempty = False
+        kempty = False
         if self._im < len(self.map):
             mem = self.map[self._im]
         else:
@@ -338,18 +364,46 @@ class MemoryRegion():
             vac = (vac[0], vac[1], None) # Same shape as 'mem'
         else:
             vempty = True
-        if mempty and vempty:
-            raise StopIteration
-        elif vempty:
-            self._im += 1
-            return mem, self.TYPE_MEM
-        elif mempty:
-            self._iv += 1
-            return vac, self.TYPE_VACANT
-        elif mem[0] < vac[0]:
-            self._im += 1
-            return mem, self.TYPE_MEM
+        if self._ik < len(self._keepout):
+            ko = self._keepout[self._ik]
         else:
+            kempty = True
+        if mempty and vempty and kempty:
+            raise StopIteration
+        elif kempty:
+            if vempty:
+                self._im += 1
+                return mem, self.TYPE_MEM
+            elif mempty:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+            elif mem[0] < vac[0]:
+                self._im += 1
+                return mem, self.TYPE_MEM
+            else:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+        elif mempty:
+            if vempty or ko[0] < vac[0]:
+                self._ik += 1
+                return ko, self.TYPE_KEEPOUT
+            else:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+        elif vempty:
+            if mempty or ko[0] < mem[0]:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+            else:
+                self._im += 1
+                return mem, self.TYPE_MEM
+        elif ko[0] < min(mem[0], vac[0]):
+            self._ik += 1
+            return ko, self.TYPE_KEEPOUT
+        elif mem[0] < min(ko[0], vac[0]):
+            self._im += 1
+            return mem, self.TYPE_MEM
+        else: # vac[0] < min(ko[0], mem[0]):
             self._iv += 1
             return vac, self.TYPE_VACANT
 
@@ -370,6 +424,7 @@ class MemoryRegion():
                 print(f"WARNING! Failed to vacate 0x{addr:x}")
         return (removed and vacated)
 
+    @completed
     def _vacate(self, start, stop):
         # Six cases:
         #   0: start is before (and not adjacent to) the first vacant region, insert new region
@@ -468,6 +523,7 @@ class MemoryRegion():
     def keepout(self, addr, width=0):
         return self._add(width, ref=None, addr=addr, type=self.TYPE_KEEPOUT)
 
+    @completed
     def _add(self, width=0, ref=None, addr=None, type=TYPE_MEM):
         """Add a memory element of address width 'width' that can optionally
         be referenced by 'ref' (e.g. a variable identifier (pointer))
@@ -484,10 +540,6 @@ class MemoryRegion():
         refname = None
         if ref is not None and hasattr(ref, "name"):
             refname = ref.name
-        #print(f"------ Adding ({base}, {end}) name {refname}")
-        # TODO DELETEME
-        if (type == self.TYPE_MEM) and (base is not None) and (end is not None):
-            self.refs.append((base, end, ref))
         return base
 
     def _insert(self, addr, width=0, type=TYPE_MEM, ref=None):
@@ -543,10 +595,9 @@ class MemoryRegion():
                     del self.vacant[n]
             # Add the memory region
             if type == self.TYPE_MEM:
-                #print(f"2222222222222 {base}, {end}")
                 self.map.append((base, end, ref))
             elif type == self.TYPE_KEEPOUT:
-                self._keepout.append((base, end))
+                self._keepout.append((base, end, None))
             else:
                 raise Exception("Invalid type {} to add to memory".format(type))
             break
@@ -583,7 +634,6 @@ class MemoryRegion():
                         # We occupied the exact size of this vacant region
                         del self.vacant[n]
                 # Add the memory region
-                #print(f"3333333333333 {aligned_start}, {mem_end}")
                 self.map.append((aligned_start, mem_end, ref))
                 base = aligned_start
                 end = mem_end
@@ -595,7 +645,6 @@ class MemoryRegion():
     def sort(self):
         self.map.sort(key=lambda x: x[0])
         self.vacant.sort(key=lambda x: x[0])
-        self.refs.sort(key=lambda x: x[0])
         return
 
     def __str__(self):
@@ -629,8 +678,11 @@ class MemoryRegion():
                 elemstr = " {:8x}-{:8x} ".format(self.base + entry[0], self.base + entry[1])
                 if _type == self.TYPE_MEM:
                     ordered = (elemstr, empty)
-                else: # _type == self.TYPE_VACANT
+                elif _type == self.TYPE_VACANT:
                     ordered = (empty, elemstr)
+                else: # _type == self.TYPE_KEEPOUT
+                    # Not printing keepouts for now
+                    continue
                 ss.append("|{}|{}|".format(*ordered))
         sindent = "\n" + " "*indent
         return " "*indent + sindent.join(ss)
@@ -840,19 +892,6 @@ class MemoryRegionStager(MemoryRegion):
             for n in range(len(lists[m])):
                 x = lists[m][n]
                 lists[m][n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
-        #for n in range(len(self._keepouts)):
-        #    #print(f"  {_list[0]} unresolving")
-        #    x = self._keepouts[n]
-        #    self._keepouts[n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
-        #for n in range(len(self._explicits)):
-        #    #print(f"  {_list[0]} unresolving")
-        #    x = self._explicits[n]
-        #    self._explicits[n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
-        #for n in range(len(self._entries)):
-        #    #print(f"  {_list[0]} unresolving")
-        #    x = self._entries[n]
-        #    self._entries[n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
-        #print()
         return
 
 
