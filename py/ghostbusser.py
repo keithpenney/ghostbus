@@ -489,6 +489,8 @@ class GhostBusser(VParser):
                         dw = len(net_dict['bits'])
                         if module_name not in handledExtModules:
                             self._handleExt(module_name, netname, exts, dw, source, addr=addr)
+                            if mr is None:
+                                mr = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,))
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
                     busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if ports is not None:
@@ -720,6 +722,7 @@ class GhostBusser(VParser):
                         added = True
                 if not added:
                     serr = f"Ext module somehow references a non-existant module {module}?"
+                    print(f"ghostmods.keys() = {[x for x in ghostmods.keys()]}")
                     raise GhostbusException(serr)
         return
 
