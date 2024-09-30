@@ -917,7 +917,8 @@ class MetaRegister(Register):
         ref.net_type = self.net_type
         ref.busname = self.busname
         if ref.access == ref.UNSPECIFIED:
-            raise Exception(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
+            #raise Exception(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
+            print(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
         return ref
 
     def _readRangeDepth(self):
@@ -927,15 +928,17 @@ class MetaRegister(Register):
             return False
         _range, _net_type = getUnparsedWidthRangeType(self.meta) # getUnparsedWidthRange(self.meta)
         if _range is not None:
-            print(f"))))))))))))))))))))))) {self.name} self.range = {_range}")
+            # print(f"))))))))))))))))))))))) {self.name} self.range = {_range}")
             self.range = _range
             self.net_type = _net_type
             # Apply default access assumptions
             if self.access == self.UNSPECIFIED and _net_type is not None:
                 if _net_type == NetTypes.reg:
                     self.access = self.RW
-                elif _net_type == NetTypes.wire:
+                elif _net_type == (NetTypes.wire, NetTypes.output, NetTypes.input):
                     self.access = self.READ
+                else:
+                    print(f"_net_type = {_net_type}")
             elif (self.access & self.WRITE):
                 if _net_type == NetTypes.wire:
                     err = f"Cannot have write access to net {self.name} of 'wire' type." + \
@@ -945,6 +948,9 @@ class MetaRegister(Register):
                 # Can't leave the access unspecified
                 self.access = self.RW
                 raise Exception(f"Can't leave the access unspecified: {self.name}")
+            else:
+                # print(f"What happened here? {self.accessToStr(self.access)} {ns}")
+                pass
         else:
             raise Exception(f"Couldn't find _range of {self.name}")
             return False

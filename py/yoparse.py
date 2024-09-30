@@ -165,6 +165,11 @@ def _getSourceSnippet(yosrc, size=1024):
         return None, None
     return snippet, offset
 
+def _matchKw(ss):
+    for kw in _net_keywords:
+        if ss.startswith(kw):
+            return kw
+    return None
 
 def _findRangeStr(snippet, offset, get_type=True):
     """Start at char offset. Read backwards. Look for ']' to open a range.
@@ -180,8 +185,9 @@ def _findRangeStr(snippet, offset, get_type=True):
         char = snippet[n]
         # Room for whitespace+'r'+'e'+'g'+whitespace
         slc = snippet[n:n+maxlen].replace('\n', ' ').replace('.', ' ')
-        if slc.strip() in keywords:
-            nettype = NetTypes.get(slc.strip())
+        kw = _matchKw(slc.strip())
+        if kw is not None:
+            nettype = NetTypes.get(kw)
             if rangestr is None:
                 rangestr = "0:0"
             break
@@ -195,6 +201,8 @@ def _findRangeStr(snippet, offset, get_type=True):
                 rangestr = snippet[n+1:endix]
                 if not get_type:
                     break
+        if n == 0:
+            raise Exception("Reached 0 looking for a keyword from netname {snippet[offset:offset+10]}")
     return (rangestr, nettype)
 
 
