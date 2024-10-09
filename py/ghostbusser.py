@@ -90,6 +90,7 @@ class GhostbusInterface():
         "ghostbus_ext":         tokens.EXTERNAL,
         "ghostbus_alias":       tokens.ALIAS,
         "ghostbus_name":        tokens.BUSNAME,
+        "ghostbus_domain":      tokens.BUSNAME,
         # HACK ALERT! I really want to remove this one
         "ghostbus_sub":         tokens.SUB,
     }
@@ -503,7 +504,7 @@ class GhostBusser(VParser):
                         bustop = True
                         dw = len(net_dict['bits'])
                         # print(f"     About to _handleBus for {mod_hash}")
-                        self._handleBus(netname, ports, dw, source, busname)
+                        self._handleBus(netname, ports, dw, source, busname, alias=alias)
                         if busname not in busnames_explicit:
                             busnames_explicit.append(busname)
             # Check for RAMs
@@ -652,7 +653,7 @@ class GhostBusser(VParser):
             mem_map.trim_hierarchy()
         return
 
-    def _handleBus(self, netname, vals, dw, source, busname=None):
+    def _handleBus(self, netname, vals, dw, source, busname=None, alias=None):
         rangestr = getUnparsedWidthRange(source)
         for val in vals:
             hit = False
@@ -661,6 +662,12 @@ class GhostBusser(VParser):
                     print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname} from source {source}")
                     bus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
                     hit = True
+                if alias is not None:
+                    if bus.alias is not None:
+                        if alias != bus.alias:
+                            raise GhostbusException(f"Cannot give multiple aliases to the same bus ({alias} and {bus.alias}).")
+                    else:
+                        bus.alias = alias
             if not hit:
                 print(f"&&&&&&&&&&&&&&&&&&& _handleBus: New bus {busname}; adding {netname}")
                 newbus = BusLB(busname)

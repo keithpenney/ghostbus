@@ -4,25 +4,6 @@ A new auto-bus-decoder based on the successes of Newad and Gang Huang's SystemVe
 __The name__: the decoding happens via a bus that's instantiated but not routed
 ("invisible") until after preprocessing.
 
-## Feature Branch `stepchild`
-I need a new construct that creates a relationship between a conjured bus (`ghostbus_ext`) and
-a ghostbus (`ghostbus_port`).  This relationship functions the same as a ghostmod, and would
-add one ghostbus to the memory map of a parent, but requires an alternate pathway to specify
-that.
-
-Issues to consider:
-1. Multiple ghostbusses need to be of the same width (see "Multiple Ghostbusses" below) but
-   a conjured bus occupies space in the memory map in accordance with its width (`2**AW`).
-   Thus an object that were simultaneously a ghostbus and a conjured bus would take up the
-   whole memory map.  We need to instead communicate somehow that this is a special bus
-   that belongs on the memory map, but only the lowest `N` bits of address should be driven,
-   with `N` calculated based on the total size of its portion of the tree.
-2. Can this special design case be communicated with the existing API (attributes)?  I would
-   hate to add to the API unless absolutely necessary.
-3. Remember to stick to the design philosophy and avoid heuristics or implied design intent.
-   The API should be explicit and as simple as possible while maintaining perfectly valid
-   Verilog (PVV).
-
 ## Core Features
 1. Automatically decode bus transactions for register/memory reads/writes
 2. Automatically manage the memory map, allowing easy, maintainable scaling of codebase.

@@ -77,6 +77,7 @@ class BusLB():
         # Is this a fully-defined bus? See self.validate
         self._valid = False
         self._base = None
+        self.alias = None
 
     def __str__(self):
         return strDict(self._bus)
