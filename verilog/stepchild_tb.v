@@ -25,11 +25,11 @@ always #5 gb_clk <= ~gb_clk;
 // But that "MAGIC_AW" value is magically divined by Ghostbus, not known to the author
 // TODO - How to I tell it that this ext mod is to be trimmed?
 `ifdef LETS_EXT
-(* ghostbus_ext="parent" *) wire parent_clk;
-(* ghostbus_ext="parent" *) wire [AW-1:0] parent_addr;
-(* ghostbus_ext="parent" *) wire [DW-1:0] parent_wdata;
-(* ghostbus_ext="parent" *) wire [DW-1:0] parent_rdata;
-(* ghostbus_ext="parent" *) wire parent_wstb;
+(* ghostbus_ext="parent, clk"   *) wire parent_clk;
+(* ghostbus_ext="parent, addr"  *) wire [AW-1:0] parent_addr;
+(* ghostbus_ext="parent, wdata" *) wire [DW-1:0] parent_wdata;
+(* ghostbus_ext="parent, rdata" *) wire [DW-1:0] parent_rdata;
+(* ghostbus_ext="parent, wstb"  *) wire parent_wstb;
 `else
 wire parent_clk;
 wire [AW-1:0] parent_addr;
