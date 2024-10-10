@@ -938,7 +938,7 @@ class MetaRegister(Register):
             if self.access == self.UNSPECIFIED and _net_type is not None:
                 if _net_type == NetTypes.reg:
                     self.access = self.RW
-                elif _net_type == (NetTypes.wire, NetTypes.output, NetTypes.input):
+                elif _net_type in (NetTypes.wire, NetTypes.output, NetTypes.input):
                     self.access = self.READ
                 else:
                     print(f"_net_type = {_net_type}")
