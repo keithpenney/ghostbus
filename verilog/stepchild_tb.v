@@ -11,6 +11,9 @@ localparam DW = 32;
     3. parent_bus should only have the lowest N bits of addr driven
 */
 
+//`define TEST_1C
+`define TEST_2C
+
 (* ghostbus_port="clk" *)   reg gb_clk=1'b1;
 (* ghostbus_port="addr" *)  wire [AW-1:0] gb_addr;
 (* ghostbus_port="wdata" *) wire [DW-1:0] gb_wdata;
@@ -21,33 +24,43 @@ always #5 gb_clk <= ~gb_clk;
 
 // See actual usage in: uspas_llrf/llrf_dsp/llrf_shell.v
 
+localparam CHILD_AW = AW-2;
 // Conjured bus (but special...). It needs to officially be "MAGIC_AW" in width according to the memory map
 // But that "MAGIC_AW" value is magically divined by Ghostbus, not known to the author
 // TODO - How to I tell it that this ext mod is to be trimmed?
-`ifdef LETS_EXT
+`ifdef TEST_2C
+(* ghostbus_ext="parent, clk",   ghostbus_branch="child" *) wire parent_clk;
+(* ghostbus_ext="parent, addr",  ghostbus_branch="child" *) wire [AW-1:0] parent_addr;
+(* ghostbus_ext="parent, wdata", ghostbus_branch="child" *) wire [DW-1:0] parent_wdata;
+(* ghostbus_ext="parent, rdata", ghostbus_branch="child" *) wire [DW-1:0] parent_rdata;
+(* ghostbus_ext="parent, wstb",  ghostbus_branch="child" *) wire parent_wstb;
+`else
 (* ghostbus_ext="parent, clk"   *) wire parent_clk;
 (* ghostbus_ext="parent, addr"  *) wire [AW-1:0] parent_addr;
 (* ghostbus_ext="parent, wdata" *) wire [DW-1:0] parent_wdata;
 (* ghostbus_ext="parent, rdata" *) wire [DW-1:0] parent_rdata;
 (* ghostbus_ext="parent, wstb"  *) wire parent_wstb;
-`else
-wire parent_clk;
-wire [AW-1:0] parent_addr;
-wire [DW-1:0] parent_wdata;
-wire [DW-1:0] parent_rdata;
-wire parent_wstb;
 `endif
-
 
 // Ghostbus
 // HACK ALERT! Testing a new API 'ghostbus_sub'! I'd love to avoid this.
 //   Syntax: ghostbus_sub="bus_name" (where "bus_name" can be omitted if there's only one other ghostbus)
 //           Indicates that this bus is a sub-bus of the named (or implied) parent bus
-(* ghostbus_port="clk",       ghostbus_name="child", ghostbus_alias="parent" *) wire child_clk;
-(* ghostbus_port="addr",      ghostbus_name="child", ghostbus_alias="parent" *) wire [AW-1:0] child_addr;
-(* ghostbus_port="wdata",     ghostbus_name="child", ghostbus_alias="parent" *) wire [DW-1:0] child_wdata;
-(* ghostbus_port="rdata",     ghostbus_name="child", ghostbus_alias="parent" *) wire [DW-1:0] child_rdata;
-(* ghostbus_port="wstb, wen", ghostbus_name="child", ghostbus_alias="parent" *) wire child_wstb;
+`ifdef TEST_1C
+(* ghostbus_port="clk",       ghostbus_name="child", ghostbus_branch="parent" *) wire child_clk;
+(* ghostbus_port="addr",      ghostbus_name="child", ghostbus_branch="parent" *) wire [CHILD_AW-1:0] child_addr;
+(* ghostbus_port="wdata",     ghostbus_name="child", ghostbus_branch="parent" *) wire [DW-1:0] child_wdata;
+(* ghostbus_port="rdata",     ghostbus_name="child", ghostbus_branch="parent" *) wire [DW-1:0] child_rdata;
+(* ghostbus_port="wstb, wen", ghostbus_name="child", ghostbus_branch="parent" *) wire child_wstb;
+`else
+(* ghostbus_port="clk",       ghostbus_name="child" *) wire child_clk;
+(* ghostbus_port="addr",      ghostbus_name="child" *) wire [CHILD_AW-1:0] child_addr;
+(* ghostbus_port="wdata",     ghostbus_name="child" *) wire [DW-1:0] child_wdata;
+(* ghostbus_port="rdata",     ghostbus_name="child" *) wire [DW-1:0] child_rdata;
+(* ghostbus_port="wstb, wen", ghostbus_name="child" *) wire child_wstb;
+`endif
+wire [AW-1:0] child_addr_w;
+assign child_addr = child_addr_w[CHILD_AW-1:0];
 
 /*
 // Transfer p_bus to c_clk domain
@@ -76,7 +89,7 @@ bus_glue #(
   .i_rdata(parent_rdata), // output [DW-1:0]
   .i_wstb(parent_wstb), // input
   .o_clk(child_clk), // input
-  .o_addr(child_addr), // output [AW-1:0]
+  .o_addr(child_addr_w), // output [AW-1:0]
   .o_wdata(child_wdata), // output [DW-1:0]
   .o_rdata(child_rdata), // input [DW-1:0]
   .o_wstb(child_wstb) // output

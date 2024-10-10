@@ -71,10 +71,11 @@ Syntax options:
       ```verilog
       // Conjure the extmod as usual
       (* ghostbus_ext="papa, addr" *) wire [AW-1:0] papa_addr;
-      // Create a named bus create a new attribute "ghostbus_inherit" to point to the extmod that owns it
-      (* ghostbus_port="addr", ghostbus_name="bebe", ghostbus_inherit="papa" *) wire [AW-1:0] bebe_addr;
+      // Create a named bus create a new attribute "ghostbus_branch" to point to the extmod that owns it
+      (* ghostbus_port="addr", ghostbus_name="bebe", ghostbus_branch="papa" *) wire [AW-1:0] bebe_addr;
       ```
       Pros:
+        * Keeps usage of each attribute simple
       Cons:
         * Creating a new attribute adds complexity for specific/rare use case.
   II)  Tell the extmod that it owns the bus

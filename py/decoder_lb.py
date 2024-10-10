@@ -77,7 +77,18 @@ class BusLB():
         # Is this a fully-defined bus? See self.validate
         self._valid = False
         self._base = None
+        self._sub = None
         self.alias = None
+
+    @property
+    def sub(self):
+        return self._sub
+
+    @sub.setter
+    def sub(self, val):
+        print(f"@@@@@@@@@@@@@@ {self.name} = {val}")
+        self._sub = val
+        return
 
     def __str__(self):
         return strDict(self._bus)

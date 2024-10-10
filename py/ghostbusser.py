@@ -93,6 +93,7 @@ class GhostbusInterface():
         "ghostbus_domain":      tokens.BUSNAME,
         # HACK ALERT! I really want to remove this one
         "ghostbus_sub":         tokens.SUB,
+        "ghostbus_branch":      tokens.SUB,
     }
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -467,6 +468,7 @@ class GhostBusser(VParser):
                     exts = token_dict.get(GhostbusInterface.tokens.EXTERNAL, None)
                     alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
                     busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
+                    subname = token_dict.get(GhostbusInterface.tokens.SUB, None)
                     if write_strobe is not None:
                         # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
@@ -495,11 +497,10 @@ class GhostBusser(VParser):
                     elif exts is not None:
                         dw = len(net_dict['bits'])
                         if module_name not in handledExtModules:
-                            self._handleExt(module_name, netname, exts, dw, source, addr=addr)
+                            self._handleExt(module_name, netname, exts, dw, source, addr=addr, sub=subname)
                             if mr is None:
                                 mr = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,))
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
-                    subname = token_dict.get(GhostbusInterface.tokens.SUB, None)
                     if subname is not None:
                         print(f"  stepchild: {netname} subname = {subname}")
                     if ports is not None:
@@ -677,7 +678,7 @@ class GhostBusser(VParser):
                 self._ghostbusses.append(newbus)
         return
 
-    def _handleExt(self, module, netname, vals, dw, source, addr=None):
+    def _handleExt(self, module, netname, vals, dw, source, addr=None, sub=None):
         if self._ext_dict.get(module, None) is None:
             self._ext_dict[module] = []
         portnames = []
@@ -700,12 +701,12 @@ class GhostBusser(VParser):
                 if val not in instnames:
                     instnames.append(val)
         if len(instnames) > 1:
-            if 'dout' in portnames:
+            if 'dout' in portnames or 'wdata' in portnames:
                 serr = "The 'dout' vector cannot be shared between multiple instances " + \
                       f"({instnames}). See: {source}"
                 raise GhostbusException(serr)
         # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
-        self._ext_dict[module].append((netname, dw, portnames, instnames, source, addr))
+        self._ext_dict[module].append((netname, dw, portnames, instnames, source, addr, sub))
         return
 
     def _getRefByAttr(self, name, attr):
@@ -733,16 +734,30 @@ class GhostBusser(VParser):
                 print(bus.name)
                 print(bus)
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
+                if extinst._needs_aw:
+                    sub_bus = self.findBusByName(self._ghostbusses, bus.sub)
+                    if sub_bus is not None:
+                        print(f"$$$$$$$$$$$$$$$$$ Found the sub_bus {sub_bus.name} which has AW = {sub_bus.aw}")
+                        extinst.aw = sub_bus.aw
+                    else:
+                        print(f"$$$$$$$$$$$$$$$$$ Failed to find {bus.sub} in {self._ghostbusses}")
                 added = False
                 for mod_hash, mr in ghostmods.items():
                     if mr.label == module:
-                        mr.add(width=bus['aw'], ref=extinst, addr=extinst.base)
+                        mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
                         added = True
                 if not added:
                     serr = f"Ext module somehow references a non-existant module {module}?"
                     print(f"ghostmods.keys() = {[x for x in ghostmods.keys()]}")
                     raise GhostbusException(serr)
         return
+
+    @staticmethod
+    def findBusByName(busses, busname):
+        for bus in busses:
+            if bus.name == busname:
+                return bus
+        return None
 
     def _resolveExtModule(self, module, data):
         ext_advice = "If there's only a " + \
@@ -772,22 +787,24 @@ class GhostBusser(VParser):
                 # print(f"instname = {instname}")
                 bus = busses.get(instname, None)
                 if bus is None:
-                    print("    New bus")
+                    #print("    New bus")
                     bus = BusLB()
                 else:
-                    print("    Got bus")
+                    #print("    Got bus")
                     pass
-                print(f"len(data) = {len(data)}")
+                #print(f"len(data) = {len(data)}")
                 for datum in data:
-                    print(f"  datum = {datum}")
-                    netname, dw, portnames, instnames, source, addr = datum
+                    #print(f"  datum = {datum}")
+                    netname, dw, portnames, instnames, source, addr, sub = datum
                     rangestr = getUnparsedWidthRange(source)
                     if len(instnames) == 0 and universal_inst is not None:
                         instnames.append(universal_inst)
+                    if sub is not None and bus.sub is None:
+                        bus.sub = sub
                     for net_instname in instnames:
                         if net_instname == instname:
                             for portname in portnames:
-                                print(f"  instname = {instname}, netname = {netname}, portname = {portname}")
+                                #print(f"  instname = {instname}, netname = {netname}, portname = {portname}")
                                 bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
                             if addr is not None:
                                 # print(f"addr is not None: datum = {datum}")
@@ -872,7 +889,7 @@ class GhostBusser(VParser):
                 val.memory = mrcopy
             else:
                 #print(f"no {key} in ghostmods")
-                val.memory = GBMemoryRegion(label=module_name, hierarchy=hier)
+                val.memory = GBMemoryRegionStager(label=module_name, hierarchy=hier)
             _busdict = multibus_dict.get(inst_hash, None)
             print(f"  Handling {inst_hash}")
             if _busdict is not None:
@@ -956,7 +973,7 @@ class MetaRegister(Register):
             if self.access == self.UNSPECIFIED and _net_type is not None:
                 if _net_type == NetTypes.reg:
                     self.access = self.RW
-                elif _net_type == (NetTypes.wire, NetTypes.output, NetTypes.input):
+                elif _net_type in (NetTypes.wire, NetTypes.output, NetTypes.input):
                     self.access = self.READ
                 else:
                     print(f"_net_type = {_net_type}")
@@ -1076,6 +1093,11 @@ class ExternalModule():
         self.inst = name # alias
         self.ghostbus = ghostbus
         self.extbus = extbus
+        self._aw = self.extbus.aw
+        self._needs_aw = False
+        if extbus.sub is not None:
+            print(f"######################## {self.name}. I need to get my 'AW' from a ghostbus named {extbus.sub}")
+            self._needs_aw = True
         self.access = self.extbus.access
         self.busname = UNASSIGNED
         self.manually_assigned = False
@@ -1097,7 +1119,12 @@ class ExternalModule():
 
     @property
     def aw(self):
-        return self.extbus.aw
+        return self._aw
+
+    @aw.setter
+    def aw(self, val):
+        self._aw = val
+        return
 
     @property
     def base(self):
