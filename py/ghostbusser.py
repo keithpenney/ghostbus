@@ -662,7 +662,7 @@ class GhostBusser(VParser):
             hit = False
             for bus in self._ghostbusses:
                 if bus.name == busname:
-                    print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname} from source {source}")
+                    #print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname} from source {source}")
                     bus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
                     hit = True
                 if alias is not None:
@@ -672,7 +672,7 @@ class GhostBusser(VParser):
                     else:
                         bus.alias = alias
             if not hit:
-                print(f"&&&&&&&&&&&&&&&&&&& _handleBus: New bus {busname}; adding {netname}")
+                #print(f"&&&&&&&&&&&&&&&&&&& _handleBus: New bus {busname}; adding {netname}")
                 newbus = BusLB(busname)
                 newbus.set_port(val, netname, portwidth=dw, rangestr=rangestr, source=source)
                 self._ghostbusses.append(newbus)
@@ -723,6 +723,12 @@ class GhostBusser(VParser):
     def _getRefByLabel(self, label):
         return self._getRefByAttr(label, 'label')
 
+    def findBusByName(self, busname):
+        for bus in self._ghostbusses:
+            if bus.name == busname:
+                return bus
+        return None
+
     def _resolveExt(self, ghostmods):
         #self._ext_modules = {}
         #ghostbus = self._top_bus
@@ -734,11 +740,12 @@ class GhostBusser(VParser):
                 print(bus.name)
                 print(bus)
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
-                if extinst._needs_aw:
-                    sub_bus = self.findBusByName(self._ghostbusses, bus.sub)
+                if bus.sub is not None:
+                    print(f"######################## {self.name}. I need to get my 'AW' from a ghostbus named {bus.sub}")
+                    sub_bus = self.findBusByName(bus.sub)
                     if sub_bus is not None:
-                        print(f"$$$$$$$$$$$$$$$$$ Found the sub_bus {sub_bus.name} which has AW = {sub_bus.aw}")
-                        extinst.aw = sub_bus.aw
+                        print(f"$$$$$$$$$$$$$$$$$ Found the sub_bus {sub_bus.name}")
+                        extinst.sub_bus = sub_bus
                     else:
                         print(f"$$$$$$$$$$$$$$$$$ Failed to find {bus.sub} in {self._ghostbusses}")
                 added = False
@@ -751,13 +758,6 @@ class GhostBusser(VParser):
                     print(f"ghostmods.keys() = {[x for x in ghostmods.keys()]}")
                     raise GhostbusException(serr)
         return
-
-    @staticmethod
-    def findBusByName(busses, busname):
-        for bus in busses:
-            if bus.name == busname:
-                return bus
-        return None
 
     def _resolveExtModule(self, module, data):
         ext_advice = "If there's only a " + \
@@ -1078,6 +1078,9 @@ class GBMemoryRegionStager(MemoryRegionStager):
 
 
 class ExternalModule():
+    """NOTE! This class must have some of the API of GBMemoryRegionStager because it can
+    be linked to a ghostbus which signals an out-of-band inheritance that we need to
+    shoe-horn into the memory map resolver."""
     def __init__(self, name, ghostbus, extbus):
         size = 1<<extbus.aw
         if extbus.aw > ghostbus.aw:
@@ -1094,10 +1097,6 @@ class ExternalModule():
         self.ghostbus = ghostbus
         self.extbus = extbus
         self._aw = self.extbus.aw
-        self._needs_aw = False
-        if extbus.sub is not None:
-            print(f"######################## {self.name}. I need to get my 'AW' from a ghostbus named {extbus.sub}")
-            self._needs_aw = True
         self.access = self.extbus.access
         self.busname = UNASSIGNED
         self.manually_assigned = False
@@ -1106,6 +1105,9 @@ class ExternalModule():
         else:
             self.manually_assigned = True
             print(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
+        # New additions for the 'stepchild' feature
+        self.sub_bus = None
+        self.sub_mr = None
 
     def getDoutPort(self):
         return self.extbus['dout']
@@ -1135,6 +1137,21 @@ class ExternalModule():
         # Ignoring this. Can only set via the bus
         # Need a setter here for reasons...
         return
+
+    def resolve(self):
+        """If returns False, a larger-scope module needs to find the GBMemoryRegionStager instance
+        associated with bus self.sub_bus and assign it to self.sub_mr. This is outside of the scope
+        of what an ExternalModule instance can do but the memory map cannot be resolved until this
+        happens."""
+        if self.sub_bus is None:
+            # Nothing to do
+            return True
+        if self.sub_mr is None:
+            # Still need to find reference to sub_mr via sub_bus
+            return False
+        if hasattr(self.sub_mr, "resolve"):
+            return self.sub_mr.resolve()
+        return True
 
 
 class JSONMaker():

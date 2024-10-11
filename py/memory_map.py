@@ -339,7 +339,7 @@ class MemoryRegion():
         if addr % size:
             raise Exception("Address 0x{:x} is not aligned to width {}".format(addr, width))
         if addr + size > self.top:
-            raise Exception("Adding element of size {} rooted at address 0x{:x}".format(size, addr) \
+            raise Exception("Adding element of size {} rooted at address 0x{:x} ".format(size, addr) \
                     + "would exceed bounds of memory region [0x{:x}->0x{:x})".format(self.base, self.top))
         return True
 
@@ -409,7 +409,7 @@ class MemoryRegion():
 
     def remove(self, addr):
         """Remove an entry rooted at 'addr' (and return it to vacant)"""
-        print(f"      #### MemoryRegion.remove(0x{addr:x}) ####")
+        #print(f"      #### MemoryRegion.remove(0x{addr:x}) ####")
         removed = False
         for n in range(len(self.map)):
             _start, _stop, _ref = self.map[n]
@@ -421,7 +421,8 @@ class MemoryRegion():
         if removed:
             vacated = self._vacate(_start, _stop)
             if not vacated:
-                print(f"WARNING! Failed to vacate 0x{addr:x}")
+                #print(f"WARNING! Failed to vacate 0x{addr:x}")
+                pass
         return (removed and vacated)
 
     @completed
@@ -643,6 +644,7 @@ class MemoryRegion():
         return base, end
 
     def sort(self):
+        # TODO - Is this even needed? Maybe make a decorator that checks for map and vacant unsorted
         self.map.sort(key=lambda x: x[0])
         self.vacant.sort(key=lambda x: x[0])
         return
@@ -793,6 +795,7 @@ class MemoryRegionStager(MemoryRegion):
         self._entries = []
         self._keepouts = []
         self._explicits = []
+        self._resolved = False
 
     def copy(self):
         cp = super().copy()
@@ -810,6 +813,7 @@ class MemoryRegionStager(MemoryRegion):
             self._explicits.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
         else:
             self._entries.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
+        self._resolved = False
         return
 
     def add(self, width=0, ref=None, addr=None):
@@ -818,11 +822,13 @@ class MemoryRegionStager(MemoryRegion):
             self._explicits.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
         else:
             self._entries.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
+        self._resolved = False
         return
 
     def keepout(self, addr, width=0):
         """Overloaded to Stage-only"""
         self._keepouts.append((None, addr, width, self.TYPE_KEEPOUT, self.UNRESOLVED))
+        self._resolved = False
         return
 
     def remove(self, addr):
@@ -839,16 +845,29 @@ class MemoryRegionStager(MemoryRegion):
             if removed:
                 break
         if not removed:
-            print(f"                           Failed to remove {addr}")
+            #print(f"                           Failed to remove {addr}")
+            pass
         return super().remove(addr)
+
+    @staticmethod
+    def _resolve_ref(ref, aw):
+        if hasattr(ref, "resolve"):
+            ref.resolve()
+        if hasattr(ref, 'shrink'):
+            ref.shrink()
+        if hasattr(ref, 'aw'):
+            aw = ref.aw
+        return aw
 
     def resolve(self):
         """Allocate the staged items in an explicit memory map.  Items staged with
         explicit addresses get priority."""
         # First pass, keepouts
-        #print(f"REEESOLVE: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)}")
+        #print(f"RESOLVE: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)}")
         for n in range(len(self._keepouts)):
             ref, base, aw, _type, resolved = self._keepouts[n]
+            # This is probably not useful, but maybe I'll find a use for keepouts with 'ref's?
+            aw = self._resolve_ref(ref, aw)
             if resolved != self.RESOLVED:
                 super().keepout(base, aw)
                 self._keepouts[n] = (ref, base, aw, _type, self.RESOLVED)
@@ -858,6 +877,7 @@ class MemoryRegionStager(MemoryRegion):
             if data is None:
                 continue
             ref, base, aw, _type, resolved = data
+            aw = self._resolve_ref(ref, aw)
             name = None
             if ref is not None:
                 name = ref.name
@@ -871,6 +891,7 @@ class MemoryRegionStager(MemoryRegion):
             if data is None:
                 continue
             ref, base, aw, _type, resolved = data
+            aw = self._resolve_ref(ref, aw)
             name = None
             if ref is not None:
                 name = ref.name
@@ -878,7 +899,8 @@ class MemoryRegionStager(MemoryRegion):
                 print(f"Adding {name} to anywhere ({base})")
                 newbase = super().add(aw, ref=ref, addr=None)
                 self._entries[n] = (ref, newbase, aw, _type, self.RESOLVED)
-        return
+        self._resolved = True
+        return True
 
     def unstage(self):
         """Unstage everything so you can resolve() again (presumably after
@@ -892,7 +914,13 @@ class MemoryRegionStager(MemoryRegion):
             for n in range(len(lists[m])):
                 x = lists[m][n]
                 lists[m][n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
+        self._resolved = False
         return
+
+    def shrink(self):
+        if not self._resolved:
+            self.resolve()
+        return super().shrink()
 
 
 class Addrspace():
@@ -1030,6 +1058,25 @@ class Addrspace():
                     base = region_end
         return
 
+
+def test_Register():
+    reg = Register(name="foo", dw=8, base=0x100, meta="some additional info", access=Register.RW)
+    copy = reg.copy()
+    for attr in dir(reg):
+        if attr.startswith('__'):
+            continue
+        ra = getattr(reg, attr)
+        ca = getattr(copy, attr)
+        if callable(ra):
+            continue
+            #rv = ra()
+            #cv = ca()
+            #assert rv==cv, f"reg.{attr}() = {rv} != copy.{attr}() = {cv}"
+        else:
+            assert ra==ca, f"reg.{attr} = {ra} != copy.{attr} = {ca}"
+    return
+
+
 def test_MemoryRegion():
     mr = MemoryRegion(hierarchy=("top",))
     # Set some keep-out regions
@@ -1063,14 +1110,76 @@ def test_MemoryRegion():
     submr.shrink() # Shrink now that we're done adding
     mr.add_item(submr)
     #print(mr)
-    mr.print(4)
+    #mr.print(4)
     copymr = mr.copy()
-    print("==================== Deleting ====================")
+    #print("==================== Deleting ====================")
     mr.remove(submr.base)
-    mr.print(4)
-    print("==================== The Copy ====================")
-    copymr.print(4)
+    #mr.print(4)
+    #print("==================== The Copy ====================")
+    #copymr.print(4)
     return
 
+def test_MemoryRegionStager():
+    mr = MemoryRegionStager(hierarchy=("top",))
+    # Set some keep-out regions
+    mr.keepout(0x100, width=8)
+    widths = [0, 0, 0, 2, 2, 8, 4, 8, 0, 0, 0, 0, 1, 2]
+    for w in widths:
+        mr.add(w)
+        print("Adding {} to staging area".format(w))
+    #mr.sort()
+    # Add a few to specific addresses
+    addr_widths = [(0x40, 4), (0x300, 8)]
+    for addr, w in addr_widths:
+        try:
+            base = mr.add(w, addr=addr)
+            print("Adding {} to 0x{:x}".format(w, base))
+        except Exception as e:
+            print("EXCEPTION: " + str(e))
+    # Create a second memory map
+    submr = MemoryRegionStager(label="foo", hierarchy=("foo",))
+    submr.add(0)
+    submr.add(0)
+    submr.add(4)
+    submr.add(4)
+    submr.add(6)
+    # Create a third memory map
+    subsubmr = MemoryRegionStager(label="bar", hierarchy=("bar",))
+    subsubmr.add(10)
+    # Nest the structure
+    submr.add_item(subsubmr)
+    mr.add_item(submr)
+    mr.resolve()
+    #print(mr)
+    #mr.print(4)
+    copymr = mr.copy()
+    #print("==================== Deleting ====================")
+    mr.remove(submr.base)
+    #mr.print(4)
+    #print("==================== The Copy ====================")
+    #copymr.print(4)
+    return
+
+def doTests():
+    fails = 0
+    tests = (
+        test_Register,
+        test_MemoryRegion,
+        test_MemoryRegionStager,
+    )
+
+    for test in tests:
+        try:
+            test()
+        except Exception as err:
+            print(err)
+            fails += 1
+    if fails == 0:
+        print("PASS")
+    else:
+        print(f"FAIL: count = {fails}")
+    return fails
+
 if __name__ == "__main__":
-    test_MemoryRegion()
+    import sys
+    sys.exit(doTests())
