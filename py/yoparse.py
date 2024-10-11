@@ -20,7 +20,6 @@ def srcParse(s):
     filepath, linestart, charstart, lineend, charend = _match.groups()
     return (filepath, int(linestart), int(charstart), int(lineend), int(charend))
 
-
 def ismodule(s):
     restr = r"^\$(\w+)[\$\\]"
     _match = re.search(restr, s)
@@ -36,10 +35,17 @@ def ismodule(s):
 
 
 def get_modname(s):
+    # format 0
     restr = r"^\$(\w+)\$([0-9a-fA-F]+)\\(\w+)"
     _match = re.search(restr, s)
     if _match:
         modname = _match.groups()[2]
+        return modname
+    # format 1
+    restr = r"^\$(\w+)\\([^\\]+)\\([^\\]+)"
+    _match = re.search(restr, s)
+    if _match:
+        modname = _match.groups()[1]
         return modname
     return s
 
@@ -510,5 +516,18 @@ class VParser():
             trace.pop() # So we can pop the key from the trace and continue the loop
         return True
 
+
+def test_get_modname():
+    td = {
+        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : "axi_lb",
+        r"$paramod\nco_control\NDACS=s32'00000000000000000000000000000011" : "nco_control",
+    }
+    for ss, name in td.items():
+        modname = get_modname(ss)
+        if modname != name:
+            raise Exception(f"get_modname({ss}) = {modname} != {name}")
+    return True
+
+
 if __name__ == "__main__":
-    pass
+    test_get_modname()
