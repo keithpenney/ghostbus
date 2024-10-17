@@ -315,6 +315,8 @@ class MemoryTree(WalkDict):
         return self._label
 
     def resolve(self):
+        """Walk the hierarchy dict from leaf to trunk, resolving the size in memory of every node
+        and nesting MemoryRegion instances to complete the hierarchy."""
         if not self._resolved:
             for key, node in self.walk():
                 if node is None:
@@ -337,10 +339,10 @@ class MemoryTree(WalkDict):
         return self._mr
 
     def distribute_busses(self):
+        """For any module with declared busses, make sure all instantiated submodules specify their
+        bus domain (if they don't, give them the default)."""
         if self._bus_distributed:
             return
-        # For any module with declared busses, make sure all instantiated submodules specify their
-        # bus domain (if they don't, give them the default).
         for key, node in self.walk():
             if node is None:
                 print(f"WARNING! node is None! key = {key}")
@@ -414,15 +416,15 @@ class GhostBusser(VParser):
         self.memory_maps = {}
         self._ext_dict = {}
 
-    def get_map(self):
-        ghostmods = {}
+    def digest(self):
+        #ghostmods = {}
         modtree = {}
         top_mod = None
         top_dict = self._dict["modules"]
         handledExtModules = []
         # Keep track of where a ghostbus is instantiated
-        bustops = {}
-        multibus_dict = {}
+        #bustops = {}
+        module_info = {}
         for mod_hash, mod_dict in top_dict.items():
             associated_strobes = {}
             module_name = get_modname(mod_hash)
@@ -433,7 +435,7 @@ class GhostBusser(VParser):
                     top_mod = mod_hash
             # Check for instantiated modules
             modtree[mod_hash] = {}
-            multibus_dict[mod_hash] = {"insts": {}}
+            module_info[mod_hash] = {"insts": {}}
             cells = mod_dict.get("cells")
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
@@ -443,7 +445,7 @@ class GhostBusser(VParser):
                         busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                         if busname is not None:
                             print(f"Harumph! Instance {inst_name} in {module_name} hooks up to bus {busname}.")
-                            multibus_dict[mod_hash]["insts"][inst_name] = busname
+                            module_info[mod_hash]["insts"][inst_name] = busname
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             mr = None
             # Check for regs
@@ -551,18 +553,19 @@ class GhostBusser(VParser):
                             else:
                                 register.write_strobes.append(strobe_name)
                 mr.bustop = bustop
-                ghostmods[mod_hash] = mr
+                #ghostmods[mod_hash] = mr
                 # Any ghostmod has an implied ghostbus coming in
                 if None not in busnames_implicit:
                     busnames_implicit.append(None)
-            multibus_dict[mod_hash]["explicit_busses"] = busnames_explicit
-            multibus_dict[mod_hash]["implicit_busses"] = busnames_implicit
+                module_info[mod_hash]["memory"] = mr
+            module_info[mod_hash]["explicit_busses"] = busnames_explicit
+            module_info[mod_hash]["implicit_busses"] = busnames_implicit
             if bustop:
                 # There are two cases where we could have a multi-bus module:
                 #   Case 0: Two or more busses are declared in the same module
                 #   Case 1: A single bus is declared inside a ghostmod (the ghostbus coming into the
                 #           ghostmod is the other bus).
-                bustops[module_name] = True
+                #bustops[module_name] = True
                 nbusses = len(busnames_implicit) + len(busnames_explicit)
                 plural = ""
                 if nbusses > 1:
@@ -574,15 +577,20 @@ class GhostBusser(VParser):
             valid = bus.validate()
             if not valid:
                 self._busValid = False
-        #print_dict(multibus_dict)
+        if len(self._ghostbusses) == 0:
+            raise GhostbusException("No ghostbus found in codebase.")
+        #print_dict(module_info)
         #self._busValid = self._top_bus.validate()
         self._top = top_mod
-        self._resolveExt(ghostmods)
+        self._resolveExt(module_info)
         #print_dict(modtree)
         modtree = self.build_modtree(modtree)
-        #print("===============================================")
-        #print_dict(modtree)
-        memtree = self.build_memory_tree(modtree, ghostmods, multibus_dict)
+        print("===============================================")
+        print_dict(modtree)
+        #for key, val in module_info.items():
+        #    print(f"{key}: {type(val)}")
+        print_dict(module_info)
+        memtree = self.build_memory_tree(modtree, module_info)
         #print("***********************************************")
         self.memory_map = memtree.resolve()
         self.check_memory_tree(memtree)
@@ -591,6 +599,11 @@ class GhostBusser(VParser):
         self.memory_map.print(4)
         self.memory_maps = {None: self.memory_map} # DELETEME
         self.splitMemoryMap()
+        ghostmods = {}
+        for key, _info in module_info.items():
+            mr = _info.get("memory", None)
+            if mr is not None:
+                ghostmods[key] = mr
         return ghostmods
 
     @classmethod
@@ -613,6 +626,9 @@ class GhostBusser(VParser):
         # For each bus domain in the global list:
         for bus in self._ghostbusses:
             busname = bus.name
+            if bus.sub is not None:
+                print(f"  Skipping {busname} since it's not a top bus")
+                continue
             print(f"  Building a map of {bus.name}")
             #   0. Make a copy of the memory map
             mmap = self.memory_map.copy()
@@ -729,7 +745,7 @@ class GhostBusser(VParser):
                 return bus
         return None
 
-    def _resolveExt(self, ghostmods):
+    def _resolveExt(self, module_info):
         #self._ext_modules = {}
         #ghostbus = self._top_bus
         ghostbus = self.getBusDict()
@@ -741,7 +757,7 @@ class GhostBusser(VParser):
                 print(bus)
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
                 if bus.sub is not None:
-                    print(f"######################## {self.name}. I need to get my 'AW' from a ghostbus named {bus.sub}")
+                    print(f"######################## {extinst.name}. I need to get my 'AW' from a ghostbus named {bus.sub}")
                     sub_bus = self.findBusByName(bus.sub)
                     if sub_bus is not None:
                         print(f"$$$$$$$$$$$$$$$$$ Found the sub_bus {sub_bus.name}")
@@ -749,13 +765,16 @@ class GhostBusser(VParser):
                     else:
                         print(f"$$$$$$$$$$$$$$$$$ Failed to find {bus.sub} in {self._ghostbusses}")
                 added = False
-                for mod_hash, mr in ghostmods.items():
+                for mod_hash, infodict in module_info.items():
+                    mr = infodict.get("memory", None)
+                    if mr is None:
+                        continue
                     if mr.label == module:
                         mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
                         added = True
                 if not added:
                     serr = f"Ext module somehow references a non-existant module {module}?"
-                    print(f"ghostmods.keys() = {[x for x in ghostmods.keys()]}")
+                    print(f"module_info.keys() = {[x for x in module_info.keys()]}")
                     raise GhostbusException(serr)
         return
 
@@ -865,24 +884,45 @@ class GhostBusser(VParser):
                     dd[module][dict_key] = inst
         return dd[top]
 
-    def build_memory_tree(self, modtree, ghostmods, multibus_dict={}):
-        # First build an empty dict of MemoryRegions
+    def build_memory_tree(self, modtree, module_info):
+        """First build a MemoryTree() as a dict of MemoryRegions.
+        @params:
+            dict modtree:
+              Mapping of {(verilog_inst_name, yosys_inst_hash) : some_dict } TODO
+            dict ghostmods
+              Mapping of {yosys_inst_hash : GBMemoryRegionStager}
+            dict module_info:
+              Mapping of {yosys_inst_hash : instance_dict}
+              where `instance_dict` is:
+                { 'insts' : {}, // Module instances instantiated within `yosys_inst_name`
+                  'explicit_busses' : [], // Ghostbusses explicitly declared within `yosys_inst_name`
+                  'implicit_busses' : [], // Ghostbusses allowed in via macro magic (should only be one) in `yosys_inst_name`
+                  'memory': GBMemoryRegionStager
+                }
+        """
         # Start from leaf,
+        # KEEF NOTE: This may be a good spot to connect a stepchild (bus-rooted MemoryRegion) to its parent
+        # (ExternalModule instance).
         #print("++++++++++++++++++++++++++++++++++++++++++++")
         memtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
         #print("////////////////////////////////////////////")
-        #print_dict(multibus_dict)
+        #print_dict(module_info)
         for key, val in memtree.walk():
             #print("{}: {}".format(key, val))
             if key is None:
                 break
             inst_name, inst_hash = key
+            #mr = ghostmods.get(inst_hash, None)
+            _busdict = module_info.get(inst_hash, None)
+            if _busdict is None:
+                continue
             module_name = get_modname(inst_hash)
-            mr = ghostmods.get(inst_hash, None)
+            mr = _busdict.get("memory", None)
             hier = (inst_name,)
             if mr is not None and hasattr(val, "memory"):
                 if hasattr(mr, "resolve"):
-                    mr.resolve()
+                    if not mr.resolve():
+                        raise Exception(f"    {mr.name} resists resolving. Care to explain?")
                 mrcopy = mr.copy()
                 mrcopy.label = module_name
                 mrcopy.hierarchy = hier
@@ -890,13 +930,12 @@ class GhostBusser(VParser):
             else:
                 #print(f"no {key} in ghostmods")
                 val.memory = GBMemoryRegionStager(label=module_name, hierarchy=hier)
-            _busdict = multibus_dict.get(inst_hash, None)
-            print(f"  Handling {inst_hash}")
+            #print(f"  Handling {inst_hash}")
             if _busdict is not None:
                 busses_implicit = _busdict.get("implicit_busses", [])
                 busses_explicit = _busdict.get("explicit_busses", [])
                 insts = _busdict.get("insts", {})
-                del multibus_dict[inst_hash]
+                del module_info[inst_hash]
             else:
                 busses_implicit = ()
                 busses_explicit = ()
@@ -906,7 +945,7 @@ class GhostBusser(VParser):
             val.memory.named_bus_insts = insts
             if len(val.memory.declared_busses) > 0:
                 val.memory.bustop = True
-        print(f"  #### Remaining multibus_dict: {multibus_dict}")
+        print(f"  #### Remaining module_info: {module_info}")
         return memtree
 
     def check_memory_tree(self, memtree):
@@ -1148,10 +1187,19 @@ class ExternalModule():
             return True
         if self.sub_mr is None:
             # Still need to find reference to sub_mr via sub_bus
+            raise Exception("Resolve me!")
             return False
         if hasattr(self.sub_mr, "resolve"):
             return self.sub_mr.resolve()
         return True
+
+    def shrink(self):
+        if hasattr(self.sub_mr, "aw"):
+            aw = self.sub_mr.aw
+        else:
+            aw = self.sub_mr
+        print(f"    {self.name} SHRINKY DINKY! {self.aw} - {aw}")
+        return
 
 
 class JSONMaker():
@@ -1286,7 +1334,7 @@ def handleGhostbus(args):
         print(err)
         return 1
     trim = not args.notrim
-    mods = gb.get_map()
+    mods = gb.digest()
     #bus = gb.getBusDict()
     gbusses = gb.getBusDicts()
     try:
