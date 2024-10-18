@@ -284,7 +284,8 @@ class DecoderLB():
     _defs = []
     def __init__(self, memregion, ghostbusses, csr_class, ram_class, ext_class):
         self.mod = memregion
-        if len(self.mod.declared_busses) > 0:
+        #if len(self.mod.declared_busses) > 0:
+        if False: # TODO - FIXME
             self.bustop = True
         else:
             self.bustop = False

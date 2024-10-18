@@ -650,7 +650,10 @@ class MemoryRegion():
         return
 
     def __str__(self):
-        return self.str()
+        if self._hierarchy is not None:
+            return f"MemoryRegion({self._hierarchy})"
+        else:
+            return f"MemoryRegion({self.label})"
 
     def __repr__(self):
         return self.__str__()

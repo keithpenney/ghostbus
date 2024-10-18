@@ -9,7 +9,7 @@
   `define GHOSTBUS_submod_baz_bar_1
 `endif
 
-module baz #(
+module submod_baz #(
   parameter AW = 24,
   parameter DW = 32
 ) (
@@ -39,6 +39,6 @@ submod_bar #(
   `GHOSTBUS_submod_baz_bar_1
 );
 
-`GHOSTBUS_baz
+`GHOSTBUS_submod_baz
 
 endmodule
