@@ -57,6 +57,16 @@ foo_tb:  $(VERILOG_DIR)/foo_tb.v $(GHOSTBUS_SOURCES) $(AUTOGEN_DIR)/mmap.vh $(AU
 foo.vcd: foo_tb
 	$(VERILOG_SIM) +vcd $(VCD_ARGS)
 
+.PHONY: statictests
+statictests:
+	$(PYTHON) $(PY_DIR)/statictests.py
+
+.PHONY: mem_map_test
+mem_map_test:
+	$(PYTHON) $(PY_DIR)/memory_map.py
+
+.PHONY: tests
+tests: mem_map_test statictests
 
 # =================== Stepchild Test ===================
 STEPAUTO_DIR=_autostep

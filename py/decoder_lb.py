@@ -78,7 +78,10 @@ class BusLB():
         self._valid = False
         self._base = None
         self._sub = None
-        self.alias = None
+        self.alias = None # TODO Is this even used?
+        # 'extmod_name' is used for pseudo-bus domains which are associated with an extmod
+        # declared in the same module
+        self.extmod_name = None
 
     @property
     def sub(self):

@@ -19,7 +19,8 @@ localparam FOO_RD = 8;
 (* ghostbus_port="addr" *) wire [23:0] gb_addr;
 (* ghostbus_port="wdata"*) wire [31:0] gb_wdata;
 (* ghostbus_port="rdata"*) wire [31:0] gb_rdata;
-(* ghostbus_port="wen"*)   wire gb_wen;
+(* ghostbus_port="wen, wstb"*)   wire gb_wen;
+(* ghostbus_port="rstb"*)   wire gb_rstb;
 
 submod_foo #(
   .AW(FOO_AW),
@@ -40,6 +41,10 @@ submod_foo #(
   .clk(clk)
   `GHOSTBUS_submod_foo_1
 );
+
+// Host-accessible register (will be auto-decoded)
+// Global alias "holiday_pasta"
+(* ghostbus, ghostbus_alias="holiday_pasta" *) reg [7:0] top_ha_reg=8'h42;
 
 `GHOSTBUS_top
 

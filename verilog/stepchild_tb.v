@@ -44,7 +44,7 @@ localparam CHILD_AW = AW-2;
 
 // Ghostbus
 // HACK ALERT! Testing a new API 'ghostbus_sub'! I'd love to avoid this.
-//   Syntax: ghostbus_sub="bus_name" (where "bus_name" can be omitted if there's only one other ghostbus)
+//   Syntax: ghostbus_branch="bus_name" (where "bus_name" can be omitted if there's only one other ghostbus)
 //           Indicates that this bus is a sub-bus of the named (or implied) parent bus
 `ifdef TEST_1C
 (* ghostbus_port="clk",       ghostbus_name="child", ghostbus_branch="parent" *) wire child_clk;

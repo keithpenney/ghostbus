@@ -4,7 +4,6 @@
   `define GHOSTBUSPORTS
   `define GHOSTBUS_submod_foo
   `define GHOSTBUS_submod_foo_bar_0
-  `define GHOSTBUS_submod_foo_baz_0
 `endif
 
 module submod_foo #(
@@ -27,15 +26,6 @@ reg [3:0] foo_reg=0;                            // Non-host-accessible register
 (* ghostbus_addr='h40 *) reg [3:0] foo_ram [0:RD-1]; // Host-accessible RAM with pre-defined relative address (0x40)
 (* ghostbus *) wire [5:0] ima_wire;
 reg  [5:0] ima_reg;
-
-submod_baz #(
-  .AW(AW),
-  .DW(DW)
-) baz_0 (
-  .clk(clk),
-  .demo_sig(foo_reg[0])
-  `GHOSTBUS_submod_foo_baz_0
-);
 
 submod_bar #(
   .AW(AW),
