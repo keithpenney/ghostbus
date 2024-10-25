@@ -87,6 +87,7 @@ class GhostbusInterface():
         "ALIAS",
         "BUSNAME",
         "SUB",
+        "TOP",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -108,6 +109,9 @@ class GhostbusInterface():
         # HACK ALERT! I really want to remove this one
         "ghostbus_sub":         tokens.SUB,
         "ghostbus_branch":      tokens.SUB,
+        # This one will hopefully be rarely needed.
+        # It is to be added to a module instantiation and means "No ghostbusses pass through the top-level ports of this module"
+        "ghostbus_top":         tokens.TOP,
     }
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -155,6 +159,7 @@ class GhostbusInterface():
         tokens.ALIAS:    lambda x: str(x),
         tokens.BUSNAME:  lambda x: x,
         tokens.SUB:      lambda x: x,
+        tokens.TOP:      lambda x: True,
     }
 
     @classmethod
@@ -291,6 +296,7 @@ class MemoryTree(WalkDict):
         self._parent = parent
         self.memories = []
         self.domain_map = {}
+        self.toptag_map = {}
         # Transform whole structure into a MemoryTree
         for key, inst_dict in self._dd.items():
             #print(f"key, inst_dict = {key}, {inst_dict}")
@@ -480,6 +486,8 @@ class MemoryTree(WalkDict):
                                             aw = node.memories[mem_index].aw
                                             print(f"Setting {ref.name}.aw to {aw} (from {node.memories[mem_index].label}.{node.memories[mem_index].domain})")
                                             ref.aw = aw
+                                            # Here I need to give 'ref' a reference to the memory region node.memories[mem_index]
+                                            ref.sub_mr = node.memories[mem_index]
                                             del extmod_map[ref.name]
                                         else:
                                             print(f" *** Can't find mem_index in extmod_map {extmod_map}")
@@ -493,6 +501,7 @@ class MemoryTree(WalkDict):
                                 # that matches 'node', then add 'node' to the memory corresponding to the correct 'domain'
                                 # Deliberately fail if this is not found in the map; something went wrong earlier
                                 parent_domain = node._parent.domain_map[node.label]
+                                toptag = node._parent.toptag_map[node.label]
                                 for m in range(len(node._parent.memories)):
                                     if node._parent.memories[m].domain == parent_domain:
                                         print("                           Adding {} to {}".format(node.label, node._parent.label))
@@ -503,7 +512,12 @@ class MemoryTree(WalkDict):
                                         hierarchy=self._hierarchy, domain=parent_domain))
                                     printd("                     Created a new place to add {} anywhere".format(node.label))
                             else:
+                                toptag = True # If we have no parent, we're top so might as well pretend like toptag was assigned
                                 printd(f"                    {node.label} has no _parent")
+                            # Add 'toptag' to each module instance listed in toptag_map
+                            # For lack of a better structure, I guess we'll add the "toptag" to every domain (every MemoryRegion)
+                            for n in range(len(node.memories)):
+                                node.memories[n].toptag = toptag
                     else:
                         printd(f"Node {node.label} has memsize {node.memsize}")
                         pass
@@ -538,6 +552,7 @@ class MemoryTree(WalkDict):
         return domain_memories
 
     def distribute_busses(self):
+        # TODO Unused
         """For any module with declared busses, make sure all instantiated submodules specify their
         bus domain (if they don't, give them the default)."""
         if self._bus_distributed:
@@ -643,7 +658,9 @@ class GhostBusser(VParser):
                         attr_dict = inst_dict["attributes"]
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
                         busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
-                        module_info[mod_hash]["insts"][inst_name] = busname
+                        toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
+                        #module_info[mod_hash]["insts"][inst_name] = busname
+                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             #mr = None
             mrs = {}
@@ -982,7 +999,7 @@ class GhostBusser(VParser):
                         continue
                     for busname, mr in mrs.items():
                         if mr.label == module and mr.domain == extinst.busname:
-                            # TODO - I need to not just ensure I'm adding to the right module, but also the right domain!
+                            # I need to not just ensure I'm adding to the right module, but also the right domain!
                             mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
                             special_mod_hash = mod_hash
                             special_busname = busname
@@ -1137,8 +1154,10 @@ class GhostBusser(VParser):
             #mr = instdict.get("memory", None)
             hier = (inst_name,)
             insts = instdict.get("insts")
-            memtree_node.domain_map = insts
+            memtree_node.domain_map = {inst_name: insts[inst_name]["busname"] for inst_name in insts.keys()}
+            memtree_node.toptag_map = {inst_name: insts[inst_name]["toptag"] for inst_name in insts.keys()}
             mrs = instdict.get("memory")
+            busses_explicit = instdict.get("explicit_busses", [])
             if len(mrs) > 0:
                 #if mr is not None and hasattr(memtree_node, "memory"):
                 for busname, mr in mrs.items():
@@ -1151,6 +1170,12 @@ class GhostBusser(VParser):
                     #memtree_node.memory = mrcopy
                     print(f"                                   {memtree_node.label}.memories.append({mrcopy.label})")
                     memtree_node.memories.append(mrcopy)
+                for n in range(len(memtree_node.memories)):
+                    # TODO - Should I instead of telling all domains about all busses, distribute each bus only to its domain?
+                    memtree_node.memories[n].declared_busses = busses_explicit
+                    # I shouldn't need this step below, it should be handled in Ghostbusser.digest()
+                    #if len(busses_explicit) > 0:
+                    #    memtree_node.memories[n].bustop = True
             else:
                 printd(f"no {key} in ghostmods")
                 #memtree_node.memory = GBMemoryRegionStager(label=module_name, hierarchy=hier)

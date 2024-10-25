@@ -170,9 +170,6 @@ class MemoryRegion():
             self.label = label
         print(f"MemoryRegion({self.label}) addr_range ({addr_range})")
         self._delta_indent = 0 # see self.print()
-        # NOTE: self.bustop is an annoying application-specific hook and I'm being lazy.
-        # If I end up with more of these, I'll just subclass it.
-        self.bustop = False
 
     def check_complete(self):
         """Verify that the memory map is complete (contiguous, non-overlapping regions of any type)."""
@@ -230,10 +227,6 @@ class MemoryRegion():
         mr._keepout = []
         for start, stop, ref in self._keepout:
             mr._keepout.append([start, stop, ref])
-        mr.bustop = self.bustop
-        # HACK ALERT - I need to purge my "ghostbusser" codebase of references to "MemoryRegion" directly
-        if hasattr(self, "busname"):
-            mr.busname = self.busname
         return mr
 
     @completed

@@ -89,7 +89,6 @@ class BusLB():
 
     @sub.setter
     def sub(self, val):
-        print(f"@@@@@@@@@@@@@@ {self.name} = {val}")
         self._sub = val
         return
 
@@ -155,9 +154,9 @@ class BusLB():
 
     def get_width(self, portname):
         for key, value in self._derived.items():
-            if portname in value and hasattr(self, key+"_str"):
-                return getattr(self, key+"_str")
-        return None
+            if portname in value:
+                return self._bus.get(key+"_str")[0]
+        return 1
 
     def __getitem__(self, key):
         item = self._bus.__getitem__(key)
@@ -286,33 +285,65 @@ class DecoderLB():
     # defined by any instance
     _defs = []
     def __init__(self, memregion, ghostbusses, csr_class, ram_class, ext_class):
+        self.bustop = False
         self.mod = memregion
-        #if len(self.mod.declared_busses) > 0:
-        if False: # TODO - FIXME
-            self.bustop = True
-        else:
-            self.bustop = False
-        self.ghostbusses = ghostbusses
+        # Keep a list of all known ghostbusses (global, could be anywhere)
+        self._ghostbusses = ghostbusses
+        # TODO FIXME - We now have multiple possible domains per DecoderLB
         self.busdomain = self.mod.busname
         # TODO - Enable all the ghostbusses
-        self.ghostbus = self.ghostbusses[0]
+        self.ghostbus = ghostbusses[0]
         self.ghostbus_dict = {}
-        for bus in self.ghostbusses:
+        for bus in self._ghostbusses:
             self.ghostbus_dict[bus.name] = bus
         self.aw = self.mod.aw
         self.inst = self.mod.hierarchy[-1]
         self.name = self.mod.label
+        if self.mod.toptag:
+            # If the toptag is set, no implied busses coming in
+            implied_busses = ()
+        else:
+            implied_busses = (self.mod.busname,)
+        memregion.implicit_busses = implied_busses
+        # ========================================= Cute print formatting - DELETEME
+        print(f"DecoderLB({self.name})", end="")
+        if len(memregion.declared_busses) > 0:
+            print(f" declares ghostbusses {memregion.declared_busses}", end="")
+            if len(implied_busses) > 0:
+                print(" and", end="")
+        if len(implied_busses) > 0:
+            implied_bus = implied_busses[0]
+            if implied_bus is None:
+                print(f" lets in the default bus", end="")
+            else:
+                print(f" lets in {implied_bus}.", end="")
+        print()
+        # ===========================================================================
         #self.nbusses = len(self.mod.declared_busses)
         self.nbusses = len(self.mod.declared_busses) + len(self.mod.implicit_busses)
-        if self.bustop:
-            print(f"This DecoderLB is a bustop! {self.name}")
-            #self._validateBusDistribution()
+        if len(memregion.declared_busses) > 0:
+            self.bustop = True
         self.base = self.mod.base
         self.submods = []
         self.rams = []
         self.csrs = []
         self.exts = []
         self.max_local = 0
+        self._parseMemoryRegion(memregion, csr_class=csr_class, ram_class=ram_class, ext_class=ext_class)
+
+        if self.max_local == 0:
+            self.no_local = True
+        else:
+            self.no_local = False
+        self.local_aw = bits(self.max_local)
+        self._def_file = "defs.vh"
+        self.check_bus()
+        #if self.busdomain is None:
+        #    print(f"DecoderLB {self.name} is in its parent's bus domain")
+        #else:
+        #    print(f"DecoderLB {self.name} is in the {self.busdomain} bus domain")
+
+    def _parseMemoryRegion(self, memregion, csr_class, ram_class, ext_class):
         for start, stop, ref in memregion.get_entries():
             if isinstance(ref, csr_class):
                 #ref._readRangeDepth()
@@ -322,22 +353,16 @@ class DecoderLB():
                 self.rams.append(ref)
             elif isinstance(ref, ext_class):
                 self.exts.append((start, ref))
+                # Check for a special MemoryRegion associated with ref
+                if ref.sub_mr is not None:
+                    print(f"################### Parsing {ref.sub_mr} from 0x{start:x}")
+                    #self.submods.append((start, self.__class__(ref.sub_mr, ghostbusses, csr_class, ram_class, ext_class)))
+                    self._parseMemoryRegion(ref.sub_mr, csr_class, ram_class, ext_class)
             elif isinstance(ref, MemoryRegion):
-                self.submods.append((start, self.__class__(ref, ghostbusses, csr_class, ram_class, ext_class)))
+                self.submods.append((start, self.__class__(ref, self._ghostbusses, csr_class, ram_class, ext_class)))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
                     self.max_local = stop
-        if self.max_local == 0:
-            self.no_local = True
-        else:
-            self.no_local = False
-        self.local_aw = bits(self.max_local)
-        self._def_file = "defs.vh"
-        self.check_bus()
-        if self.busdomain is None:
-            print(f"DecoderLB {self.name} is in its parent's bus domain")
-        else:
-            print(f"DecoderLB {self.name} is in the {self.busdomain} bus domain")
 
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal
@@ -382,27 +407,6 @@ class DecoderLB():
         else:
             self._bus_re = f"~{namemap['we']}"
             self._asynch_read = True
-        return
-
-    def _validateBusDistribution(self):
-        # TODO - This may belong elsewhere, but the nested structure of DecoderLB makes it very convenient to do it here
-        if len(self.mod.declared_busses) < 2:
-            return True
-        for start, stop, ref in self.mod.get_entries():
-            if isinstance(ref, MemoryRegion):
-                inst = ref.hierarchy[-1]
-                busname = self.mod.named_bus_insts.get(inst, None)
-                if busname is None:
-                    print(f"WHUPS! No {inst} in {self.name}'s named_bus_insts")
-                    print_dict(self.mod.named_bus_insts)
-                    # raise GhostbusException("Boop bop.")
-                else:
-                    if busname not in self.mod.declared_busses:
-                        raise GhostbusException(f"Inst {inst} in {self.name} is given busname {busname} " + \
-                                                "which is not declared in the module itself. Module " + \
-                                                f"{self.name} declares these busses: {self.mod.declared_busses}")
-                    print(f"POW! {inst} is connected to bus {busname}")
-                    ref.busdomain = busname
         return
 
     def getGhostbus(self, name=None):
@@ -793,8 +797,15 @@ class DecoderLB():
             ss.append(submod.submodInitStr(base, parent_bustop=self.bustop))
         for base_rel, ext in self.exts:
             ss.append(f"// External Module Instance {ext.name}")
+            # Here I need to make a slight change:
+            # From:
+            #   assign extmod_addr = GBPORT_addr[aw-1:0];
+            # To:
+            #   assign extmod_addr = {{true_aw-aw{1'b0}}, GBPORT_addr[aw-1:0]};
+            #ss.append(self._addrHit(base_rel, ext, parent_bustop=self.bustop))
             ss.append(self._addrHit(base_rel, ext, parent_bustop=self.bustop))
             ss.append(self.busHookup(ext))
+
         return "\n".join(ss)
 
     def _ramInit(self, mod, local_aw=None):
@@ -896,6 +907,7 @@ class DecoderLB():
         return "\n".join(ss)
 
     def dinRouting(self):
+        # FIXME I need a din routing for EACH domain in the module
         # assign gb_din = en_baz_0 ? gb_din_baz_0 :
         #                 en_bar_0 ? gb_din_bar_0 :
         #                 en_local ? local_din :
@@ -1136,12 +1148,22 @@ class DecoderLB():
                 gb_port = extmod.ghostbus[portname]
             else:
                 gb_port = portdict[portname]
-            #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
-            _range = extmod.extbus.get_range(portname)
-            if _range is not None:
-                _s, _e = _range
-                ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+            if (ext_port == extmod.extbus._bus["addr"][0]) and (extmod.aw != extmod.true_aw):
+                # Oddball case of 'addr' doesn't fit the pattern
+                # From:
+                #   assign extmod_addr = GBPORT_addr[aw-1:0];
+                # To:
+                #   assign extmod_addr = {{true_aw-aw{1'b0}}, GBPORT_addr[aw-1:0]};
+                # TODO - I need a true_aw_str!
+                true_aw_str = extmod.extbus.get_width(portname)
+                ss.append(f"assign {ext_port} = {{{{{true_aw_str}-{extmod.aw}{{1'b0}}}}, {gb_port}[{extmod.aw}-1:0]}};")
             else:
-                ss.append(f"assign {ext_port} = {gb_port} & en_{extmod.name};")
+                #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
+                _range = extmod.extbus.get_range(portname)
+                if _range is not None:
+                    _s, _e = _range
+                    ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+                else:
+                    ss.append(f"assign {ext_port} = {gb_port} & en_{extmod.name};")
         return "\n".join(ss)
 

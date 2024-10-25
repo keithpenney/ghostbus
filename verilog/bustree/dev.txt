@@ -1,0 +1,82 @@
+
+241025:
+  I got the extmod addr decoding correct (I think), using true_aw as well as aw.
+  I'm currently missing the following from _autogen/ghostbus_top.vh:
+    // submodule submod_foo_bottom
+    wire GBPORT_clk_submod_foo_bottom = GBPORT_clk;
+    wire [31:0] GBPORT_din_submod_foo_bottom;
+    wire [31:0] GBPORT_dout_submod_foo_bottom = GBPORT_dout;
+    wire en_submod_foo_bottom = GBPORT_addr[23:10] == ???
+    wire [23:0] GBPORT_addr_submod_foo_bottom = {14'h000, GBPORT_addr[9:0]}; // address relative to own base (0x0)
+    wire GBPORT_we_submod_foo_bottom=GBPORT_we & en_submod_foo_bottom;
+    wire GBPORT_rstb_submod_foo_bottom=GBPORT_rstb & en_submod_foo_bottom;
+  TODO: Find out why it generated for submod_foo_top, but not for submod_foo_bottom (obviously it's about
+        bus domains, but figure it out in code and fix it!).
+
+  Ok, I got the ports generated, but they're in the wrong domain:
+    wire GBPORT_clk_submod_foo_top = GBPORT_clk;
+    wire [31:0] GBPORT_din_submod_foo_top;
+    wire [31:0] GBPORT_dout_submod_foo_top = GBPORT_dout;
+    wire en_submod_foo_top = GBPORT_addr[23:10] == 14'h001; // 0x400-0x7ff
+    wire [23:0] GBPORT_addr_submod_foo_top = {14'h000, GBPORT_addr[9:0]}; // address relative to own base (0x0)
+    wire GBPORT_we_submod_foo_top=GBPORT_we & en_submod_foo_top;
+    wire GBPORT_rstb_submod_foo_top=GBPORT_rstb & en_submod_foo_top;
+
+  Here's a major problem:
+    Suppose we have a top module "trout" which declares a ghostbus "troutbus"
+    Inside "trout", another module "bear" is instantiated. "bear" declares a ghostbus "bearbus" which is intended
+    to be a separate domain from "trout" and "trout" should NOT enter "bear".  That last point is easy, just don't
+    use the auto-generated "`GHOSTBUS_trout_bear_i" macro.  But anything hooked up to "bearbus" inside "bear" will
+    need to know that it should be hooked up to the locally-declared "bearbus" not to the implicit (non-existant)
+    "`GHOSTBUSPORTS".  CSRs inside "bear" without a domain should be hooked up to "bearbus".
+
+    Now suppose there's a third module "snake" which is instantiated inside "trout".  Similarly, "snake" declares
+    bus "snakebus" BUT also allows "troutbus" in via "`GHOSTBUS_trout_snake_i".
+    CSRs inside "snake" without a domain should be hooked up to "troutbus", not "snakebus"!
+
+    How do I distinguish between these cases?!?!  The design intent is communicated/executed via macros.
+    Yosys won't tell me anything about macros.  I would absolutely HATE to manually parse yet another detail
+    out of the Verilog (especially with all the tricks that can be played with macros).
+
+    My only thought is to require instances of module "bear" to be labeled with another Verilog attribute.
+    But... EVERY instance would need to be labeled with it!  There's no way to auto-generate code that works
+    for two different use cases of "bear" (one where "trout" comes in and one where it doesn't).  But it's already
+    an error to declare a ghostbus with the same name as an existing ghostbus, so we already can't have more than
+    one instance of module "bear".
+
+    Ok, that's hopefully going to be a rarely needed feature, but use (* ghostbus_top *) on the oddball module
+    instance like "bear"
+
+Big change:
+  I need a big change to DecoderLB()
+  Current situation:
+    Each instance of DecoderLB() has a single MemoryRegion associated with it and some shenanigans are played to try
+    to suss out which CSRs/RAMs/ExtMods/SubMods are associated with each bus domain.  I'm not sure how well this
+    works.  I recall it solving the problem of getting the decoding working properly at the top level (where the
+    ghostbus nets are locally instantiated and have arbitrary names) as well as in ghostmods (where the ghostbus ports
+    have a globally unique name, i.e. "GHOSTBUSPORT_addr")
+
+    So I want to keep that feature working, but also solve the problem of multiple domains.
+
+  End goal:
+    Each instance of DecoderLB() has a dict of {domain: MemoryRegion,...}.  In most cases, this dict will be length 1
+    and so should fall back to the current situation.
+
+    In the case of a DecoderLB() instance with more than one bus (both implied and declared), we will have more than
+    one entry in that dict.
+
+    I'm pretty sure the following will need to change too:
+        def __init__(self, memregion, ghostbusses, ...) -> def __init__(self, mr_dict, ghostbusses, ...)
+        # where 'mr_dict' is the {domain: MemoryRegion,...} mentioned earlier
+
+        self.busdomain = self.mod.busname   -> self.busdomains = [domain for domain in mr_dict.keys()]
+        self.base = self.mod.base           -> self.bases = {domain: mod.base for domain, mod in mr_dict.items()}
+        self.csrs ->
+        self.rams ->
+        ...
+
+    Man, this is a ton of work.  Can I just keep the existing one-DecoderLB-per-domain situation and make a larger
+    structure which keeps track of:
+        {domain: DecoderLB(mr_dict[domain]),...}
+
+    Recall that self.submods = [base, DecoderLB(...) ,... ] so that will need to change as well.
