@@ -1,3 +1,13 @@
+241030:
+
+241029:
+  Split DecoderLB() into separate DecoderDomainLB() instances
+  Currently, some code is being generated in the wrong domain and some code is still missing
+  * ghostbus_top.vh is still only generating code for submod_foo_top, not submod_foo_bottom
+    (i.e. it fails to declare the nets used for hookup in ghostbus_top_submod_foo_bottom.vh)
+  * ghostbus_top.vh fails to generate code for local decoding in the "glue_bottom" domain, i.e. bottom_ha_reg
+
+  Aha! I need to fix DecoderDomainLB.GhostbusDecoding() somehow
 
 241025:
   I got the extmod addr decoding correct (I think), using true_aw as well as aw.

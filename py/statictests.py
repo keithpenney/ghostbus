@@ -47,18 +47,21 @@ def test_WalkDict():
         }
     }
     top = WalkDict(dd, key="top")
-    items = []
-    for key, val in top.walk():
-        #print("{}".format(key), end="")
-        items.append(key)
-    # test the order
     rval = 0
-    print(items)
-    for n in range(len(items)-1):
-        if items[n+1] == "top":
-            break
-        if ord(items[n]) >= ord(items[n+1]):
-            rval = 1
+    # Do it twice
+    for n in range(2):
+        print(f"Pass #{n+1}")
+        items = []
+        for key, val in top.walk():
+            #print("{}".format(key), end="")
+            items.append(key)
+        # test the order
+        print(items)
+        for n in range(len(items)-1):
+            if items[n+1] == "top":
+                break
+            if ord(items[n]) >= ord(items[n+1]):
+                rval = 1
     return rval
 
 def doStaticTests():

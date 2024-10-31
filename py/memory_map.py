@@ -161,14 +161,12 @@ class MemoryRegion():
         self.map = []
         self.vacant = [list(addr_range)]
         self._keepout = []
-        #print(f"MemoryRegion.__init__(hierarchy = {hierarchy})")
         self._hierarchy = hierarchy
         if label is None:
             self.label = "MemoryRegion" + str(self._nregion)
             self._inc()
         else:
             self.label = label
-        print(f"MemoryRegion({self.label}) addr_range ({addr_range})")
         self._delta_indent = 0 # see self.print()
 
     def check_complete(self):
@@ -182,7 +180,7 @@ class MemoryRegion():
                 if last_entry[1] != entry[0]:
                     raise Exception(f"MemoryRegion({self.name}) entries are not contiguous ({last_entry[0]}, {last_entry[1]}), ({entry[0]}, {entry[1]})")
             last_entry = entry
-        if last_entry[1] != (1<<self.width):
+        if (last_entry is not None) and (last_entry[1] != (1<<self.width)):
             raise Exception(f"{self.label} Memory map has broken. last_entry = {last_entry}, self.width = {self.width}")
         return
 
@@ -237,7 +235,7 @@ class MemoryRegion():
         Note that this could cause problems if you try to add more items
         to the memory region after shrinking.  It should probably only
         be called after you're sure you're done adding entries."""
-        #print(f"    {self.label} I'm shriiiiiiinkiiiiiinnnngggggg!")
+        #print(f"{self.label} shrinking from {self._top}", end="")
         hi_occupied = self.high_addr()
         if hi_occupied > 0:
             min_aw = bits(hi_occupied-1)
@@ -255,6 +253,7 @@ class MemoryRegion():
                     self.vacant.pop()
                 else:
                     self.vacant[-1] = vacant
+        #print(f" to {self._top}")
         return
 
     @completed
@@ -567,11 +566,11 @@ class MemoryRegion():
         base = addr
         end = addr + (1<<width)
         fit_elem = None
-        print(f"  _insert: {self.label} I have a width of {self.width} and vacant[-1] = {self.vacant[-1]}")
+        #print(f"  _insert: {self.label} I have a width of {self.width} and vacant[-1] = {self.vacant[-1]}")
         # First find whether 'addr' is within an occupied or vacant region
         for entry, _type in self: # Iterator magic
             e_base, e_end, e_ref = entry
-            print(f" _insert: walking 0x{e_base:x}:0x{e_end} ({e_ref}) ({_type})")
+            #print(f" _insert: walking 0x{e_base:x}:0x{e_end} ({e_ref}) ({_type})")
             if (base >= e_base) and (base < e_end):
                 # 'addr' is in this element
                 if _type != self.TYPE_VACANT:
@@ -609,21 +608,21 @@ class MemoryRegion():
             old_end = self.vacant[n][1]
             if self.vacant[n][0] < base:
                 # Truncate downward the existing vacant region
-                print(f"---{self.label} self.vacant[{n}][1] -> {base}")
+                #print(f"---{self.label} self.vacant[{n}][1] -> {base}")
                 self.vacant[n][1] = base
                 if old_end > end:
                     # Add a new vacancy region above the occupied section
-                    print(f"---{self.label} self.vacant.insert({n+1}, {[end, old_end]})")
+                    #print(f"---{self.label} self.vacant.insert({n+1}, {[end, old_end]})")
                     self.vacant.insert(n+1, [end, old_end])
             else:
                 # Truncate upward the existing vacant region
                 if old_end > end:
                     # Still some vacancy above the occupied section
-                    print(f"---{self.label} self.vacant[{n}] = {[end, old_end]}")
+                    #print(f"---{self.label} self.vacant[{n}] = {[end, old_end]}")
                     self.vacant[n] = [end, old_end]
                 else:
                     # We occupied the exact size of this vacant region
-                    print(f"---{self.label} del self.vacant[{n}]")
+                    #print(f"---{self.label} del self.vacant[{n}]")
                     del self.vacant[n]
             # Add the memory region
             if type == self.TYPE_MEM:
@@ -941,7 +940,7 @@ class MemoryRegionStager(MemoryRegion):
             if ref is not None:
                 name = ref.name
             if resolved != self.RESOLVED:
-                print(f"Adding {name} to addr 0x{base:x}")
+                #print(f"{self.label}: Adding {name} to addr 0x{base:x}")
                 super().add(aw, ref=ref, addr=base)
                 self._explicits[n] = (ref, base, aw, _type, self.RESOLVED)
         # Third pass, add everything else
@@ -955,7 +954,7 @@ class MemoryRegionStager(MemoryRegion):
             if ref is not None:
                 name = ref.name
             if resolved != self.RESOLVED:
-                print(f"Adding {name} ({aw} bits) to anywhere ({base})")
+                #print(f"{self.label}: Adding {name} ({aw} bits) to anywhere ({base})")
                 newbase = super().add(aw, ref=ref, addr=None)
                 self._entries[n] = (ref, newbase, aw, _type, self.RESOLVED)
         self._resolved = True

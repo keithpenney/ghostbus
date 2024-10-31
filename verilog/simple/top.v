@@ -7,7 +7,12 @@
 `endif
 
 module top (
-  input clk
+  (* ghostbus_port="clk"  *) input  gb_clk,
+  (* ghostbus_port="addr" *) input  [23:0] gb_addr,
+  (* ghostbus_port="wdata"*) input  [31:0] gb_wdata,
+  (* ghostbus_port="rdata"*) output [31:0] gb_rdata,
+  (* ghostbus_port="wen, wstb"*) input gb_wen,
+  (* ghostbus_port="rstb"*)  input gb_rstb
 );
 
 localparam FOO_AW = 24;
@@ -15,20 +20,13 @@ localparam FOO_DW = 32;
 localparam FOO_GW = 8;
 localparam FOO_RD = 8;
 
-(* ghostbus_port="clk"  *) wire gb_clk;
-(* ghostbus_port="addr" *) wire [23:0] gb_addr;
-(* ghostbus_port="wdata"*) wire [31:0] gb_wdata;
-(* ghostbus_port="rdata"*) wire [31:0] gb_rdata;
-(* ghostbus_port="wen, wstb"*)   wire gb_wen;
-(* ghostbus_port="rstb"*)   wire gb_rstb;
-
 submod_foo #(
   .AW(FOO_AW),
   .DW(FOO_DW),
   .GW(FOO_GW),
   .RD(FOO_RD)
 ) submod_foo_0 (
-  .clk(clk)
+  .clk(gb_clk)
   `GHOSTBUS_submod_foo_0
 );
 
@@ -38,7 +36,7 @@ submod_foo #(
   .GW(FOO_GW),
   .RD(FOO_RD)
 ) submod_foo_1 (
-  .clk(clk)
+  .clk(gb_clk)
   `GHOSTBUS_submod_foo_1
 );
 
