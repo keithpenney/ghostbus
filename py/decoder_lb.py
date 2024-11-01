@@ -447,7 +447,9 @@ class DecoderLB():
             # the parent's memory associated with this domain until we find a reference to the exact same object
             target = node.get_memory_by_domain(None) # It has to be the default domain here
             if target is None:
-                raise Exception(f"Failed to find memory by domain {domain} in node {node}")
+                #raise Exception(f"Failed to find memory by domain {domain} in node {node}")
+                print(f"Skipping {node.label}")
+                continue
             parent_mem = memorytree.get_memory_by_domain(domain)
             if parent_mem is None:
                 raise Exception(f"Failed to find memory by domain {domain} in {memorytree}")
@@ -504,9 +506,9 @@ class DecoderLB():
             decoder._collectRAMs(ramlist)
         return
 
-    def submodInitStr(self, base_rel, parent_bustop=False):
+    def submodInitStr(self, base_rel, parent):
         # the declaration of ports that get hooked up in GhostbusSubmodMap
-        return self.parent_domain_decoder.submodInitStr(base_rel, parent_bustop)
+        return self.parent_domain_decoder.submodInitStr(base_rel, parent)
 
     def _WriteGhostbusSubmodMap(self, dest_dir, parentname):
         return self.parent_domain_decoder._WriteGhostbusSubmodMap(dest_dir, parentname)
@@ -979,7 +981,7 @@ class DecoderDomainLB():
         with open(os.path.join(dest_dir, fname), "w") as fd:
             fd.write(ss)
             print(f"Wrote to {fname}")
-        self._addGhostbusDef(dest_dir, f"{self.name}_{self.inst}")
+        self._addGhostbusDef(dest_dir, f"{parentname}_{self.inst}")
         return
 
     def _GhostbusSubmodMap(self):
@@ -1023,11 +1025,11 @@ class DecoderDomainLB():
     def submodsTopInit(self):
         ss = []
         for base, submod in self.submods:
-            ss.append(submod.submodInitStr(base, self.ghostbus))
+            ss.append(submod.submodInitStr(base, self))
         for base_rel, ext in self.exts:
             ss.append(f"// External Module Instance {ext.name}")
-            ss.append(self._addrHit(base_rel, ext))
-            ss.append(self.busHookup(ext))
+            ss.append(self._addrHit(base_rel, ext, self))
+            ss.append(self.busHookup(ext, self))
         return "\n".join(ss)
 
     def _ramInit(self, mod, local_aw=None):
@@ -1044,8 +1046,11 @@ class DecoderDomainLB():
         return "\n".join(ss)
 
     @staticmethod
-    def _addrHit(base_rel, mod):
-        bus = mod.ghostbus
+    def _addrHit(base_rel, mod, parent=None):
+        if parent is None:
+            bus = mod.ghostbus
+        else:
+            bus = parent.ghostbus
         busaw = bus['aw']
         addr_net = bus['addr']
         divwidth = busaw - mod.aw
@@ -1057,14 +1062,17 @@ class DecoderDomainLB():
         return f"wire addrhit_{mod.inst} = {addr_net}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
 
     @staticmethod
-    def _addrMask(mod):
-        bus = mod.ghostbus
+    def _addrMask(mod, parent):
+        if parent is None:
+            bus = mod.ghostbus
+        else:
+            bus = parent.ghostbus
         busaw = bus['aw']
         addr_net = bus['addr']
         divwidth = busaw - mod.aw
         if divwidth == 0:
-            return f"wire [{busaw-1}:0] {bus['addr']}_{mod.inst} = {addr_net}[{mod.aw-1}:0]; // address relative to own base (0x0)"
-        return f"wire [{busaw-1}:0] {bus['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
+            return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {addr_net}[{mod.aw-1}:0]; // address relative to own base (0x0)"
+        return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
 
     def _wen(self, mod, parent_bustop):
         return self._andPort(mod, "we", parent_bustop=parent_bustop)
@@ -1078,19 +1086,20 @@ class DecoderDomainLB():
             parent_signal = signal
         return f"wire {signal}_{mod.inst}={parent_signal} & addrhit_{mod.inst};"
 
-    def submodInitStr(self, base_rel, parentbus):
+    def submodInitStr(self, base_rel, parent):
         """Declare and assign the nets required to attach a submod to the ghostbus.
-        'parentbus' is the bus in the parent's domain that hooks up to this submod.
-        For a multi-domain codebase, it's possible that 'parentbus' does not use all
+        'parent' is the module in which the submodule is instantiated.
+        For a multi-domain codebase, it's possible that parent.ghostbus does not use all
         the nets in the ghostbus.  In this case, unused nets are still declared.
         Unused inputs into the submod are tied low (assigned to 0).
         """
         #ports = parentbus.getPortDict()
+        parentbus = parent.ghostbus
         gbports = self.gbportbus
         #netlist = parentbus.getPortList() # (key, name, rangestr, dirstr)
         netlist = self.gbportbus.getPortList() # (key, name, rangestr, dirstr)
-        addrHit = self._addrHit(base_rel, self)
-        addrMask = self._addrMask(self)
+        addrHit = self._addrHit(base_rel, self, parent)
+        addrMask = self._addrMask(self, parent)
         ss = [f"// submodule {self.inst}"]
         ss.append(addrHit)
         for net in netlist:
@@ -1341,12 +1350,16 @@ class DecoderDomainLB():
             ss.append("end")
         return "\n".join(ss)
 
-    def busHookup(self, extmod):
+    def busHookup(self, extmod, parent=None):
+        if parent is None:
+            ghostbus = extmod.ghostbus
+        else:
+            ghostbus = parent.ghostbus
         ss = []
         for portname, ext_port in extmod.extbus.outputs_and_clock().items():
             if ext_port is None:
                 continue
-            gb_port = extmod.ghostbus[portname]
+            gb_port = ghostbus[portname]
             if (ext_port == extmod.extbus._bus["addr"][0]) and (extmod.aw != extmod.true_aw):
                 # Oddball case of 'addr' doesn't fit the pattern
                 # From:

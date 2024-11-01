@@ -307,6 +307,10 @@ class MemoryRegion():
         return self.high_addr()
 
     @property
+    def empty(self):
+        return self.size == 0
+
+    @property
     def base(self):
         return self._offset
 

@@ -107,7 +107,6 @@ class GhostbusInterface():
         "ghostbus_alias":       tokens.ALIAS,
         "ghostbus_name":        tokens.BUSNAME,
         "ghostbus_domain":      tokens.BUSNAME,
-        # HACK ALERT! I really want to remove this one
         "ghostbus_sub":         tokens.SUB,
         "ghostbus_branch":      tokens.SUB,
         # This one will hopefully be rarely needed.
@@ -472,13 +471,25 @@ class MemoryTree(WalkDict):
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
+        top_memories = []
         if not self._resolved:
             for key, node in self.walk():
                 if node is None:
                     print(f"WARNING! node is None! key = {key}")
                 printv(f" $$$$$$$$ Considering {key}: {node.label}")
                 if hasattr(node, "memories"):
-                    #if node.memsize > 0:
+                    if node._parent is None:
+                        toptag = True
+                    if node._parent is not None:
+                        toptag = node._parent.toptag_map[node.label]
+                    # =========================================================
+                    # At this point, a module with a declared bus but no implied bus will have
+                    # a MemoryRegion object incorrectly associated with domain 'None'.
+                    # This MemoryRegion should be found and have its domain updated accordingly.
+                    # =========================================================
+                    #if toptag:
+                    #    if len(
+
                     nmems, extmod_map = self._getMemoryOrder(node.memories, module_name=node.label)
                     printv(" *** Parsing in this order:", end="")
                     for nmem in nmems:
@@ -508,22 +519,26 @@ class MemoryTree(WalkDict):
                             node.memories[n].resolve()
                         node.memories[n].shrink()
                         printv(f"Shrunk {node.memories[n].label}.{node.memories[n].domain} to {node.memories[n].aw} bits")
+                        if node.memories[n].empty:
+                            continue
                         if node._parent is not None:
                             added = False
                             # Here I need to get the inst->domain mapping from the parent, find the correct 'inst'
                             # that matches 'node', then add 'node' to the memory corresponding to the correct 'domain'
                             # Deliberately fail if this is not found in the map; something went wrong earlier
                             parent_domain = node._parent.domain_map[node.label]
-                            toptag = node._parent.toptag_map[node.label]
+
                             for m in range(len(node._parent.memories)):
                                 if node._parent.memories[m].domain == parent_domain:
                                     printv("                           Adding {} to {}".format(node.label, node._parent.label))
                                     node._parent.memories[m].add_item(node.memories[n])
                                     added = True
                             if not added:
-                                node._parent.memories.append(GBMemoryRegionStager(label=self._module_name,
-                                    hierarchy=self._hierarchy, domain=parent_domain))
-                                printv("                     Created a new place to add {} anywhere".format(node.label))
+                                # Probably an item was found referencing a new domain
+                                #node._parent.memories.append(GBMemoryRegionStager(label=self._module_name,
+                                #    hierarchy=self._hierarchy, domain=parent_domain))
+                                #print("                     Created a new place to add {} anywhere".format(node.label))
+                                toptag = True
                             # Keep track of this
                             node.parent_domain = parent_domain
                         else:
@@ -531,14 +546,24 @@ class MemoryTree(WalkDict):
                             printd(f"                    {node.label} has no _parent")
                         # Add 'toptag' to each module instance listed in toptag_map
                         # For lack of a better structure, I guess we'll add the "toptag" to every domain (every MemoryRegion)
-                        for n in range(len(node.memories)):
-                            node.memories[n].toptag = toptag
+                        node.memories[n].toptag = toptag
+                        if toptag:
+                            top_memories.append(node.memories[n])
                 else:
                     printd(f"       node {node.label} has no memories")
         for mem in self.memories:
             if hasattr(mem, "resolve"):
                 mem.resolve()
-        return self.memories
+        # Delete any zero-sized memories (they weren't added anyhow)
+        for key, node in self.walk():
+            todelete = []
+            for n in range(len(node.memories)):
+                node.memories[n].shrink()
+                if node.memories[n].size == 0:
+                    todelete.append(n)
+            for n in todelete:
+                del node.memories[n]
+        return top_memories
 
     def print(self):
         print("Walking:")
@@ -640,6 +665,7 @@ class GhostBusser(VParser):
                     elif access is not None:
                         dw = len(net_dict['bits'])
                         initval = get_value(net_dict['bits'])
+                        #print(f"New CSR: {netname}")
                         reg = GBRegister(name=netname, dw=dw, meta=source, access=access)
                         reg.initval = initval
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
@@ -649,7 +675,7 @@ class GhostBusser(VParser):
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mrs.get(busname, None) is None:
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                            print("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                         if addr is not None:
                             reg.manually_assigned = True
                         # This may not be the best place for this step, but at least it gets done.
@@ -659,9 +685,9 @@ class GhostBusser(VParser):
                         dw = len(net_dict['bits'])
                         if module_name not in handledExtModules:
                             self._handleExt(module_name, netname, exts, dw, source, addr=addr, sub=subname)
-                            if mrs.get(busname, None) is not None:
-                                printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                            if mrs.get(busname, None) is None:
                                 mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                                print("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -695,7 +721,7 @@ class GhostBusser(VParser):
                         if mrs.get(busname, None) is None:
                             module_name = get_modname(mod_hash)
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("1: created mr label {} ({})".format(mrs[busname].label, mod_hash))
+                            print("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
                         if addr is not None:
                             mem.manually_assigned = True
                         # This may not be the best place for this step, but at least it gets done.
@@ -734,9 +760,16 @@ class GhostBusser(VParser):
         #self._busValid = self._top_bus.validate()
         self._top = top_mod
         self._resolveExt(module_info)
+        #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
+        #print_dict(modtree, dohash=True)
+        #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
         modtree = self.build_modtree(modtree)
+        #print("=================================================")
+        #print_dict(modtree, dohash=True)
+        #print("=================================================")
         memtree = self.build_memory_tree(modtree, module_info)
-        self.memory_maps = memtree.resolve(verbose=False)
+        self.memory_maps = memtree.resolve(verbose=True)
+        print(f"Number of independent memory maps: {len(self.memory_maps)}")
         #for mmap in self.memory_maps:
         #    mmap.shrink()
         #memtree.distribute_busses()
@@ -1031,21 +1064,25 @@ class GhostBusser(VParser):
         dd_keys = [key for key in dd.keys()]
         for module in dd_keys:
             instances_dict = dd[module]
-            # print(f"               Processing: {module}")
+            #print(f"    Processing: {module}")
             instance_keys = [key for key in instances_dict.keys()]
+            #if len(instances_dict) == 0:
+            #    print("      Empty instances_dict!")
             for inst_name in instance_keys:
                 inst_key = instances_dict[inst_name]
                 dict_key = (inst_name, inst_key)
-                # print(f"                   Instance key: {dict_key}")
                 inst = dd.get(inst_key, None)
+                #print(f"      Instance key: {dict_key}; dd[inst_key] = {inst}")
                 del instances_dict[inst_name]
                 if inst is None:
                     print(f"WARNING: Unknown module {inst_key}. Treating as black box.")
                 else:
                     # Update memory in-place
-                    cp = deep_copy(inst)
-                    dd[module][dict_key] = cp
-        return dd[top]
+                    #cp = deep_copy(inst)
+                    #print(f"        Adding dict entry {dict_key}: {cp}")
+                    #dd[module][dict_key] = cp
+                    dd[module][dict_key] = inst
+        return deep_copy(dd[top])
 
     def build_memory_tree(self, modtree, module_info):
         """First build a MemoryTree() as a dict of MemoryRegions.
@@ -1083,6 +1120,7 @@ class GhostBusser(VParser):
             memtree_node.toptag_map = {inst_name: insts[inst_name]["toptag"] for inst_name in insts.keys()}
             mrs = instdict.get("memory")
             busses_explicit = instdict.get("explicit_busses", [])
+            memtree_node.declared_busses = busses_explicit
             if len(mrs) > 0:
                 #if mr is not None and hasattr(memtree_node, "memory"):
                 for busname, mr in mrs.items():
@@ -1102,7 +1140,7 @@ class GhostBusser(VParser):
                     #if len(busses_explicit) > 0:
                     #    memtree_node.memories[n].bustop = True
             else:
-                printd(f"no {key} in ghostmods")
+                #print(f"no {key} in ghostmods")
                 #memtree_node.memory = GBMemoryRegionStager(label=module_name, hierarchy=hier)
                 memtree_node.memories.append(GBMemoryRegionStager(label=module_name, hierarchy=hier))
         #print(f"Done building: visited {nodes_visited} nodes")
@@ -1242,7 +1280,7 @@ def handleGhostbus(args):
             if len(gb.memory_maps) > 1:
                 single_bus = False
             for mem_map in gb.memory_maps:
-                busname = None # TODO FIXME
+                busname = mem_map.domain
                 jm = JSONMaker(mem_map, drops=args.ignore)
                 if busname is None or single_bus:
                     filename = str(args.json)

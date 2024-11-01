@@ -6,19 +6,17 @@
   `define GHOSTBUS_submod_foo_bottom
 `endif
 
-module top (
-  input clk
+module top #(
+  parameter GB_AW = 24,
+  parameter GB_DW = 32
+) (
+  (* ghostbus_port="clk"  *)      input  gb_clk,
+  (* ghostbus_port="addr" *)      input  [GB_AW-1:0] gb_addr,
+  (* ghostbus_port="wdata"*)      input  [GB_DW-1:0] gb_wdata,
+  (* ghostbus_port="rdata"*)      output [GB_DW-1:0] gb_rdata,
+  (* ghostbus_port="wen, wstb"*)  input  gb_wen,
+  (* ghostbus_port="rstb"*)       input  gb_rstb
 );
-
-localparam GB_AW = 24;
-localparam GB_DW = 32;
-
-(* ghostbus_port="clk"  *) wire gb_clk;
-(* ghostbus_port="addr" *) wire [GB_AW-1:0] gb_addr;
-(* ghostbus_port="wdata"*) wire [GB_DW-1:0] gb_wdata;
-(* ghostbus_port="rdata"*) wire [GB_DW-1:0] gb_rdata;
-(* ghostbus_port="wen, wstb"*)   wire gb_wen;
-(* ghostbus_port="rstb"*)   wire gb_rstb;
 
 (* ghostbus_ext="glue_top, clk"   *) wire gluetop_clk;
 // This address width is fake! It will get its aw from "glue_bottom"
@@ -43,7 +41,7 @@ bus_glue #(
   .i_rdata(gluetop_rdata), // output [DW-1:0]
   .i_wstb(gluetop_wstb), // input
   .o_clk(gluebottom_clk), // input
-  .o_addr(gluebottom_addr_w), // output [AW-1:0]
+  .o_addr(gluebottom_addr), // output [AW-1:0]
   .o_wdata(gluebottom_wdata), // output [DW-1:0]
   .o_rdata(gluebottom_rdata), // input [DW-1:0]
   .o_wstb(gluebottom_wstb) // output
@@ -53,6 +51,7 @@ localparam FOO_GW = 8;
 localparam FOO_RD_TOP = 8;
 localparam FOO_RD_BOTTOM = 16;
 
+wire clk = gb_clk;
 // submod_foo_top lives in the default domain
 submod_foo #(
   .AW(GB_AW),

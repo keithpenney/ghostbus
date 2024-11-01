@@ -127,9 +127,9 @@ class GBMemoryRegion(MemoryRegion):
     def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
         super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
         self.bustop = False # FIXME DEPRECATED
-        self.declared_busses = () # FIXME DEPRECATED
-        self.implicit_busses = () # FIXME DEPRECATED
-        self.named_bus_insts = () # FIXME DEPRECATED
+        self.declared_busses = ()
+        self.implicit_busses = ()
+        self.named_bus_insts = ()
         self.busname = None
 
     def copy(self):
@@ -148,7 +148,6 @@ class GBMemoryRegionStager(MemoryRegionStager):
         self.bustop = False
         self.declared_busses = ()
         self.implicit_busses = ()
-        self.named_bus_insts = ()
         self.busname = None
         self.domain = domain
         # A pseudo-domain is one that looks like a bus domain top, but is actually
@@ -156,16 +155,17 @@ class GBMemoryRegionStager(MemoryRegionStager):
         # If 'pseudo_domain' is not None, it should be the name of an ExternalModule
         # declared in the same scope
         self.pseudo_domain = None
+        self.toptag = False
 
     def copy(self):
         cp = super().copy()
         cp.bustop = self.bustop
         cp.declared_busses = self.declared_busses
         cp.implicit_busses = self.implicit_busses
-        cp.named_bus_insts = self.named_bus_insts
         cp.busname = self.busname
         cp.domain = self.domain
         cp.pseudo_domain = self.pseudo_domain
+        cp.toptag = self.toptag
         return cp
 
 
