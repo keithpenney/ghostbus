@@ -365,7 +365,7 @@ class MemoryTree(WalkDict):
         for nmem in range(len(memories)):
             if memories[nmem].pseudo_domain is not None:
                 # Need to find its associated extmod and make sure the extmod's memory is resolved AFTER this one
-                pseudo_name_map[nmem] = memories[nmem].pseudo_domain # KEEF
+                pseudo_name_map[nmem] = memories[nmem].pseudo_domain
         # If no pseudo-bus domains, resolve the memories in any order
         if len(pseudo_name_map) == 0:
             return [n for n in range(len(memories))], {}
@@ -487,9 +487,18 @@ class MemoryTree(WalkDict):
                     # a MemoryRegion object incorrectly associated with domain 'None'.
                     # This MemoryRegion should be found and have its domain updated accordingly.
                     # =========================================================
-                    #if toptag:
-                    #    if len(
-
+                    if toptag:
+                        ldb = len(node.declared_busses)
+                        if ldb == 1:
+                            print(f"Clobbering {node.memories[0].label}.domain from {node.memories[0].domain} to {node.declared_busses[0]}")
+                            node.memories[0].domain = node.declared_busses[0]
+                        elif ldb > 1:
+                            for mem in node.memories:
+                                if mem.domain is None and mem.size > 0:
+                                    err = f"Module {node.label} declares {ldb} busses and has no implied busses." \
+                                        + " In such a case, every CSR, RAM, submodule, and external module needs to be disambiguated" \
+                                        + " with the (* ghostbus_domain=\"domain_name\" *) attribute which indicates the inteded domain."
+                                    raise GhostbusException(err)
                     nmems, extmod_map = self._getMemoryOrder(node.memories, module_name=node.label)
                     printv(" *** Parsing in this order:", end="")
                     for nmem in nmems:
@@ -521,13 +530,12 @@ class MemoryTree(WalkDict):
                         printv(f"Shrunk {node.memories[n].label}.{node.memories[n].domain} to {node.memories[n].aw} bits")
                         if node.memories[n].empty:
                             continue
-                        if node._parent is not None:
+                        if not toptag and node._parent is not None:
                             added = False
                             # Here I need to get the inst->domain mapping from the parent, find the correct 'inst'
                             # that matches 'node', then add 'node' to the memory corresponding to the correct 'domain'
                             # Deliberately fail if this is not found in the map; something went wrong earlier
                             parent_domain = node._parent.domain_map[node.label]
-
                             for m in range(len(node._parent.memories)):
                                 if node._parent.memories[m].domain == parent_domain:
                                     printv("                           Adding {} to {}".format(node.label, node._parent.label))
@@ -1120,6 +1128,8 @@ class GhostBusser(VParser):
             memtree_node.toptag_map = {inst_name: insts[inst_name]["toptag"] for inst_name in insts.keys()}
             mrs = instdict.get("memory")
             busses_explicit = instdict.get("explicit_busses", [])
+            # NOTE: Redundant 'declared_busses' is currently stored and used in both the node and each of its
+            #       memory instances.  I'd like to make store it only at the node.
             memtree_node.declared_busses = busses_explicit
             if len(mrs) > 0:
                 #if mr is not None and hasattr(memtree_node, "memory"):
@@ -1158,7 +1168,7 @@ class JSONMaker():
         self._drops = drops
 
     @classmethod
-    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=()):
+    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=(), short=True):
         """ Returns a dict ready for JSON-ification using our preferred memory map style:
         // Example
         {
@@ -1183,14 +1193,14 @@ class JSONMaker():
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
-                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops)
+                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False)
                 if flat:
                     update_without_collision(dd, subdd)
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, ExternalModule) and ref.sub_mr is not None:
                 # If this extmod is a gluemod, I need to collect its branch like a submodule
-                subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops)
+                subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False)
                 if flat:
                     update_without_collision(dd, subdd)
                 else:
@@ -1213,18 +1223,81 @@ class JSONMaker():
                     hierarchy = list(top_hierarchy)
                     hierarchy.append(ref.name)
                     printd(f"{mem.name}: {mem.hierarchy}, {ref.name}: hierarchy = {hierarchy}")
-                    if mangle_names:
-                        hier_str = "_".join(strip_empty(hierarchy))
-                    else:
+                    if short or not mangle_names:
                         hier_str = ".".join(strip_empty(hierarchy))
+                    else:
+                        hier_str = "_".join(strip_empty(hierarchy))
                 else:
                     hier_str = ref.name
                 if hier_str not in drops:
                     dd[hier_str] = entry
             else:
                 print(f"What is this? {ref}")
+        if flat and short:
+            dd = cls._shortenNames(dd)
         return dd
 
+
+    @classmethod
+    def _shortenNames(cls, dd):
+        """Replace hierarchical names with the shortest version that remains unique for each."""
+        namedict = {}
+        # First pass: {short: longs}
+        conflicts = []
+        for key in dd.keys():
+            short = key.split('.')[-1]
+            if namedict.get(short) is None:
+                namedict[short] = [key]
+            else:
+                namedict[short].append(key)
+                conflicts.append(short)
+        # Second pass: handle conflicts
+        longmap = {}
+        for short in conflicts:
+            longs = namedict.get(short)
+            if longs is None:
+                # Already handled
+                continue
+            n = 1
+            newshortlist = None
+            while True:
+                # No one gets to stay short (otherwise we couldn't predict which one is correct)
+                newshorts = []
+                isdone = False
+                for long in longs:
+                    newshort, isdone = cls._flatten(long, n)
+                    longmap[newshort] = long
+                    newshorts.append(newshort)
+                good = True
+                for newshort in newshorts:
+                    if newshorts.count(newshort) > 1:
+                        good = False
+                if good:
+                    newshortlist = newshorts
+                    break
+                if isdone:
+                    raise GhostbusNameCollision(f"Could not disambiguate {longs}")
+                n += 1
+            if newshortlist is None:
+                raise Exception("How did this happen?")
+            del namedict[short]
+            for newshort in newshorts:
+                namedict[newshort] = [longmap[newshort]]
+        newdd = {}
+        for short, longs in namedict.items():
+            newdd[short] = dd[longs[0]]
+        return newdd
+
+    @staticmethod
+    def _flatten(ss, n=0):
+        """Change 'a.b.c.d' to 'd' if n==0, 'c_d' if n==1, 'b_c_d' if n==2, 'a_b_c_d' if n >= 3"""
+        subs = ss.split('.')
+        done = False
+        if n > len(subs) - 1:
+            done = True
+            n = len(subs)-1
+        n = -(n+1)
+        return '_'.join(subs[n:]), done
 
     def write(self, filename, path="_auto", flat=False, mangle=False):
         import os
@@ -1288,7 +1361,7 @@ def handleGhostbus(args):
                     import os
                     fname, ext = os.path.splitext(args.json)
                     filename = fname + f".{busname}" + ext
-                jm.write(filename, path=args.dest, flat=args.flat, mangle=args.mangle)
+                jm.write(filename, path=args.dest, flat=args.flat, mangle=args.mangle, short=args.short)
     except GhostbusException as e:
         print(e)
         return 1
@@ -1306,6 +1379,7 @@ def doGhostbus():
     parser.add_argument("--flat",   default=False, action="store_true", help="Yield a flat JSON, rather than hierarchical.")
     parser.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
     parser.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
+    parser.add_argument("--short",  default=False, action="store_true", help="Names are maximally shortened (remaining unique).")
     parser.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
     parser.add_argument("files",    default=[], action="append", nargs="+", help="Source files.")
     args = parser.parse_args()

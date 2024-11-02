@@ -842,11 +842,6 @@ class DecoderDomainLB():
                 self.rams.append(ref)
             elif isinstance(ref, ExternalModule):
                 self.exts.append((start, ref))
-                # TODO FIXME - I don't think this is needed anymore, right?
-                # Check for a special MemoryRegion associated with ref
-                #if ref.sub_mr is not None:
-                #    print(f"################### Parsing {ref.sub_mr} from 0x{start:x}")
-                #    self._parseMemoryRegion(ref.sub_mr)
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
                     self.max_local = stop
@@ -883,10 +878,7 @@ class DecoderDomainLB():
                     raise Exception(serr)
         # Make some decoding definitions here to save checks later
         portdict = self.ghostbus.getPortDict()
-        if self.bustop:
-            namemap = self.ghostbus
-        else:
-            namemap = portdict
+        namemap = self.ghostbus
         if (self.ghostbus['wstb'] is None) or (self.ghostbus['we'] == self.ghostbus['wstb']):
             self._bus_we = namemap['we']
         else:
@@ -946,34 +938,6 @@ class DecoderDomainLB():
         for base, submod in self.submods:
             submod._collectRAMs(ramlist)
         return ramlist
-
-    # NOTE Disabled; hopefully can be deleted?
-    def foo_GhostbusDoSubmods(self, dest_dir):
-        decode = self.GhostbusDecoding()
-        fname = f"ghostbus_{self.name}.vh"
-        with open(os.path.join(dest_dir, fname), "w") as fd:
-            fd.write(decode)
-            print(f"Wrote to {fname}")
-        self._addGhostbusDef(dest_dir, self.name)
-        for base, submod in self.submods:
-            fname = f"ghostbus_{self.name}_{submod.inst}.vh"
-            ss = submod.GhostbusSubmodMap()
-            with open(os.path.join(dest_dir, fname), "w") as fd:
-                fd.write(ss)
-                print(f"Wrote to {fname}")
-            self._addGhostbusDef(dest_dir, f"{self.name}_{submod.inst}")
-            submod._GhostbusDoSubmods(dest_dir)
-        return
-
-    # NOTE Disabled; hopefully can be deleted?
-    def fooGhostbusDecoding(self):
-        """Generate the bus decoding logic for this instance."""
-        ss = []
-        ss.append(self.localInit())
-        ss.append(self.submodsTopInit())
-        ss.append(self.dinRouting())
-        ss.append(self.busDecoding())
-        return "\n".join(ss)
 
     def _WriteGhostbusSubmodMap(self, dest_dir, parentname):
         fname = f"ghostbus_{parentname}_{self.inst}.vh"

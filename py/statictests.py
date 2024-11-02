@@ -1,5 +1,5 @@
 
-from ghostbusser import MemoryTree, WalkDict
+from ghostbusser import MemoryTree, WalkDict, JSONMaker
 
 def test_MemoryTree_orderDependencies():
     dd = {
@@ -64,10 +64,58 @@ def test_WalkDict():
                 rval = 1
     return rval
 
+def test_JSONMaker_flatten():
+    ll = (
+        ("foo.bumpy.baz.flop", 0, "flop"),
+        ("foo.bumpy.baz.flop", 1, "baz_flop"),
+        ("foo.bumpy.baz.flop", 2, "bumpy_baz_flop"),
+        ("foo.bumpy.baz.flop", 3, "foo_bumpy_baz_flop"),
+        ("foo.bumpy.baz.flop", 4, "foo_bumpy_baz_flop"),
+        ("foo.bumpy.baz.flop", -1, "foo_bumpy_baz_flop"),
+    )
+    fails = []
+    for m in range(len(ll)):
+        a, n, y = ll[m]
+        b, done = JSONMaker._flatten(a, n)
+        if b != y:
+            fails.append((a, n, y, b))
+    if len(fails) > 0:
+        print("FAIL:")
+        for fail in fails:
+            a, n, y, b = fail
+            print(f"  {a}, {n} expected {y}, got {b}")
+        return 1
+    else:
+        print("PASS")
+        return 0
+
+def test_JSONMaker_shortenNames():
+    dd = {
+        "foo.bar.baz": "foo_bar_baz",
+        "zip.bar.baz": "zip_bar_baz",
+        "foo.bar.bof": "bar_bof",
+        "zip.bif.bof": "bif_bof",
+        "fad.tap.hog": "hog",
+        "cop.wop.pig": "pig",
+    }
+    nd = JSONMaker._shortenNames(dd)
+    missing = []
+    for short in dd.values():
+        if short not in nd.keys():
+            missing.append(short)
+    if len(missing) > 0:
+        print(f"FAIL: missing {missing}")
+        print([key for key in nd.keys()])
+        return 1
+    print("PASS")
+    return 0
+
 def doStaticTests():
     tests = (
         test_MemoryTree_orderDependencies,
         test_WalkDict,
+        test_JSONMaker_flatten,
+        test_JSONMaker_shortenNames,
     )
     rval = 0
     fails = []
