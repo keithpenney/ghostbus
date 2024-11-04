@@ -4,6 +4,11 @@ from yoparse import getUnparsedWidthAndDepthRange, getUnparsedWidthRangeType, Ne
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory
 from gbexception import GhostbusException
 
+_DEBUG_PRINT=False
+def printd(*args, **kwargs):
+    if _DEBUG_PRINT:
+        print(*args, **kwargs)
+
 class GBRegister(Register):
     """This class expands on the Register class by including not just its
     resolved aw/dw, but also the unresolved strings used to declare aw/dw
@@ -188,13 +193,16 @@ class ExternalModule():
         self._aw = self.extbus.aw # This is clobbered during resolution if the extmod is connected to a pseudo-domain
         self.true_aw = self.extbus.aw # This will always show the number of address bits as specified in the source
         self.access = self.extbus.access
+        self.READ = self.extbus.READ
+        self.WRITE = self.extbus.WRITE
+        self.RW = self.extbus.RW
         self.busname = None
         self.manually_assigned = False
         if self.base is None:
-            print(f"New external module: {name}; size = 0x{size:x}")
+            printd(f"New external module: {name}; size = 0x{size:x}")
         else:
             self.manually_assigned = True
-            print(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
+            printd(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
         # New additions for the 'stepchild' feature
         self.sub_bus = None
         self.sub_mr = None

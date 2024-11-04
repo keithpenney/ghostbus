@@ -238,7 +238,10 @@ class MemoryRegion():
         #print(f"{self.label} shrinking from {self._top}", end="")
         hi_occupied = self.high_addr()
         if hi_occupied > 0:
-            min_aw = bits(hi_occupied-1)
+            if hi_occupied == 1:
+                min_aw = bits(hi_occupied)
+            else:
+                min_aw = bits(hi_occupied-1)
             self._top = (1 << min_aw)
             self._aw = min_aw
         else:
@@ -997,142 +1000,6 @@ class MemoryRegionStager(MemoryRegion):
         for ref, base, aw, _type, state in self._entries:
             entries.append((base, None, ref))
         return entries
-
-
-class Addrspace():
-    @staticmethod
-    def _vet_ranges(*ranges):
-        """Enforce three rules for memory ranges:
-            0. range[0] < range[1]
-            1. All boundaries must be powers-of-two
-            2. Ranges must not overlap
-        """
-        rl = len(ranges)
-        for n in range(rl):
-            rng = ranges[n]
-            # Rule 0
-            low, high = rng
-            if low >= high:
-                raise Exception("Inverted or identical boundaries: (low, high) = ({}, {})".format(low, high))
-                return False
-            # Rule 1
-            for boundary in rng:
-                if (boundary != 0) and (math.log2(boundary) % 1) > 0:
-                    raise Exception("Memory address range boundary 0x{:x} is not a power of two".format(boundary))
-                    return False
-            # Rule 2
-            overlap = False
-            if n < rl-1:
-                for m in range(n+1, rl):
-                    rng_cmp = ranges[m]
-                    low_cmp, high_cmp = rng_cmp
-                    # Ensure non-overlap
-                    # if r0_low < r1_low, then r0_high must also be <= r1_low
-                    # else (ro_low > r1_low), then r0_high must also be >= r1_low
-                    if (low < low_cmp) != (high <= low_cmp):
-                        overlap = True
-                    elif (low >= high_cmp) != (high > high_cmp):
-                        overlap = True
-                    elif (low >= low_cmp) and (high <= high_cmp) :
-                        overlap = True
-                    elif (low_cmp >= low) and (high_cmp <= high) :
-                        overlap = True
-                    if overlap:
-                        raise Exception("Memory regions (0x{:x}, 0x{:x}) and (0x{:x}, 0x{:x}) overlap".format(
-                            low, high, low_cmp, high_cmp))
-        return True
-
-    def __init__(self, scalar_range=MEMORY_RANGE_SCALAR, mirror_range=MEMORY_RANGE_MIRROR, array_range=MEMORY_RANGE_ARRAY):
-        #self.addr = numpy.empty((0, 2), dtype=int)
-        self._vet_ranges(scalar_range, mirror_range, array_range)
-        self.scalar_range = scalar_range
-        self.mirror_range = mirror_range
-        self.array_range = array_range
-        self.mem_regions = {
-            REGION_SCALAR: MemoryRegion(scalar_range),
-            REGION_MIRROR: MemoryRegion(mirror_range),
-            REGION_ARRAY:  MemoryRegion(array_range),
-        }
-        return
-
-    def __str__(self):
-        l = []
-        for region, mr in self.mem_regions.items():
-            if region == REGION_SCALAR:
-                rstr = "REGION_SCALAR"
-            elif region == REGION_MIRROR:
-                rstr = "REGION_MIRROR"
-            else:
-                rstr = "REGION_ARRAY"
-            l.append(rstr)
-            l.append(str(mr))
-            l.append("")
-        return "\n".join(l)
-
-    def __repr__(self):
-        return self.__str__()
-
-    def _add(self, reg, region=REGION_SCALAR, addr=None):
-        """Add a memory region 'reg' (class Reg) to region 'region'.
-        Finds the first empty slot with enough space that is aligned to the
-        address width for optimum decoding."""
-        return self.mem_regions[region].add(reg.addr_width, ref=reg, addr=addr)
-
-    def sort(self):
-        for n in range(len(self.mem_regions)):
-            self.mem_regions[n].sort()
-        return
-
-    def get_region_mirror_size(self):
-        mr = self.mem_regions[REGION_MIRROR]
-        return mr.high_addr()-mr.base_addr()
-
-    def get_region_array_size(self):
-        mr = self.mem_regions[REGION_ARRAY]
-        return mr.high_addr()-mr.base_addr()
-
-    def get_region_scalar_size(self):
-        mr = self.mem_regions[REGION_SCALAR]
-        return mr.high_addr()-mr.base_addr()
-
-    def add(self, reg, keep=False):
-        if reg.addr_width > 0:
-            region = REGION_ARRAY
-        elif reg.access == ACCESS_R:
-            region = REGION_SCALAR
-        else:
-            region = REGION_MIRROR
-        addr = None
-        reg_keep = reg.propdict.get('keep', False)
-        if (keep or reg_keep) and (reg.base_addr is None):
-            raise Exception("Cannot keep base_addr of None for reg {}".format(reg))
-            addr = reg.base_addr
-        return self._add(reg, region, addr=addr)
-
-    def lastaddr(self):
-        high_addr = 0
-        for region, mr in self.mem_regions.items():
-            addr = mr.high_addr()
-            if addr > high_addr:
-                high_addr = addr
-        return high_addr
-
-    def avoid(self, reg):
-        base = reg.base_addr
-        end = base + (1 << reg.addr_width)
-        for _x, mr in self.mem_regions.items():
-            region_base, region_end = mr.range
-            if (base >= region_base) and (base < region_end):
-                # It starts in this region
-                mr.keepout(base, math.ceil(math.log2(min(end, region_end)-base)))
-                if (end <= region_end):
-                    print(f"0x{end:x} <= 0x{region_end:x}, break")
-                    break
-                else:
-                    # It overlaps into the next region, continue
-                    print(f"0x{end:x} > 0x{region_end:x}, continue")
-                    base = region_end
-        return
 
 
 def test_Register():

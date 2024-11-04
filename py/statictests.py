@@ -1,5 +1,29 @@
 
+from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
+
+def test_bits():
+    addr_bits = {
+        # high address, nbits
+        0xff : 8,
+        0x0f : 4,
+        0x08 : 4,
+        0x07 : 3,
+        0x04 : 3,
+        0x03 : 2,
+        0x02 : 2,
+        0x01 : 1,
+        (1<<10)-1 : 10,
+    }
+    fail = False
+    for addr, bits_expected in addr_bits.items():
+        bits_actual = bits(addr)
+        if bits_actual != bits_expected:
+            print(f"Addr 0x{addr:x} expected {bits_expected}, got {bits_actual}")
+            fail = True
+    if fail:
+        return 1
+    return 0
 
 def test_MemoryTree_orderDependencies():
     dd = {
@@ -112,6 +136,7 @@ def test_JSONMaker_shortenNames():
 
 def doStaticTests():
     tests = (
+        test_bits,
         test_MemoryTree_orderDependencies,
         test_WalkDict,
         test_JSONMaker_flatten,

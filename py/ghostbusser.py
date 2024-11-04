@@ -356,6 +356,11 @@ class MemoryTree(WalkDict):
         Returns nmems, extmod_map
         where extmod_map = {'extmod_name': index of memory associated with the extmod}
         """
+        verbose = False
+        def printv(*args, **kwargs):
+            if verbose:
+                print(*args, **kwargs)
+
         pseudo_name_map = {} # {index_resolve_before: extmod_name}
         pseudo_index_map = {} # {index_resolve_before: index_resolve_after}
         # resolve_before means it contains the pseudo-bus domain itself
@@ -372,15 +377,15 @@ class MemoryTree(WalkDict):
         # SECOND: replace the extmod name with the index of the memory in which the extmod is found
         extmod_map = {}
         for nmem in range(len(memories)):
-            print(f"||| {nmem}: {memories[nmem].label}, {memories[nmem].domain}")
+            printv(f"||| {nmem}: {memories[nmem].label}, {memories[nmem].domain}")
             for start, stop, ref in memories[nmem].get_entries():
-                print(f" -- {start}, {stop}, {ref}")
+                printv(f" -- {start}, {stop}, {ref}")
                 if isinstance(ref, ExternalModule):
-                    print(f"    # Found ExternalModule {ref.name}")
+                    printv(f"    # Found ExternalModule {ref.name}")
                     # Found an extmod.  Is it a value in pseudo_name_map?
                     for key, extmod_name in pseudo_name_map.items():
                         if extmod_name == ref.name:
-                            print(f"  extmod_map[{extmod_name}] = {key}, not {nmem}")
+                            printv(f"  extmod_map[{extmod_name}] = {key}, not {nmem}")
                             extmod_map[extmod_name] = key
                             # Found the dependency!
                             pseudo_index_map[key] = nmem
@@ -490,7 +495,7 @@ class MemoryTree(WalkDict):
                     if toptag:
                         ldb = len(node.declared_busses)
                         if ldb == 1:
-                            print(f"Clobbering {node.memories[0].label}.domain from {node.memories[0].domain} to {node.declared_busses[0]}")
+                            printv(f"Clobbering {node.memories[0].label}.domain from {node.memories[0].domain} to {node.declared_busses[0]}")
                             node.memories[0].domain = node.declared_busses[0]
                         elif ldb > 1:
                             for mem in node.memories:
@@ -683,7 +688,7 @@ class GhostBusser(VParser):
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mrs.get(busname, None) is None:
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            print("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                            printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                         if addr is not None:
                             reg.manually_assigned = True
                         # This may not be the best place for this step, but at least it gets done.
@@ -695,7 +700,7 @@ class GhostBusser(VParser):
                             self._handleExt(module_name, netname, exts, dw, source, addr=addr, sub=subname)
                             if mrs.get(busname, None) is None:
                                 mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                                print("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                                printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -729,7 +734,7 @@ class GhostBusser(VParser):
                         if mrs.get(busname, None) is None:
                             module_name = get_modname(mod_hash)
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            print("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
+                            printd("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
                         if addr is not None:
                             mem.manually_assigned = True
                         # This may not be the best place for this step, but at least it gets done.
@@ -776,14 +781,13 @@ class GhostBusser(VParser):
         #print_dict(modtree, dohash=True)
         #print("=================================================")
         memtree = self.build_memory_tree(modtree, module_info)
-        self.memory_maps = memtree.resolve(verbose=True)
+        self.memory_maps = memtree.resolve(verbose=False)
         print(f"Number of independent memory maps: {len(self.memory_maps)}")
         #for mmap in self.memory_maps:
         #    mmap.shrink()
         #memtree.distribute_busses()
         #self.memory_map.print(4)
         #self.memory_maps = {None: self.memory_map} # DELETEME
-        #self.splitMemoryMap() # TODO - Hopefully this step can be eliminated
         ghostmods = {}
         for key, _info in module_info.items():
             mr = _info.get("memory", None)
@@ -791,67 +795,6 @@ class GhostBusser(VParser):
                 ghostmods[key] = mr
         self.ghostmods = ghostmods
         return memtree
-
-    @classmethod
-    def getMultiBusRegion(cls, memregion, busname=None):
-        if busname in memregion.declared_busses:
-            return memregion
-        for start, stop, ref in memregion.get_entries():
-            if isinstance(ref, MemoryRegion):
-                if busname in ref.declared_busses:
-                    return ref
-                else:
-                    newref = cls.getMultiBusRegion(ref, busname)
-                    if newref is not None:
-                        return newref
-        return None
-
-    def splitMemoryMap(self):
-        # Start with empty self.memory_maps
-        memory_maps = {}
-        # For each bus domain in the global list:
-        for bus in self._ghostbusses:
-            busname = bus.name
-            if bus.sub is not None:
-                print(f"  Skipping {busname} since it's not a top bus")
-                continue
-            print(f"  Building a map of {bus.name}")
-            #   0. Make a copy of the memory map
-            mmap = self.memory_map.copy()
-            #   1. Find the MemoryRegion where the bus is declared
-            region = self.getMultiBusRegion(mmap, busname)
-            if region is None:
-                print(f"  Can't find where {busname} is declared")
-                continue
-            else:
-                print(f"  {busname} is declared at {region.name}")
-            #   2. For every instance declared in this region:
-            delete_addrs = []
-            for (start, stop, ref) in region.map:
-                # If inst.busdomain != target_busdomain:
-                if hasattr(ref, 'busname') and ref.busname != busname:
-                    # delete the branch
-                    print(f"    I'm gonna chop off this {ref.busname} branch starting at {ref.name}!")
-                    delete_addrs.append(start)
-                elif not hasattr(ref, 'busname') and isinstance(ref, MemoryRegion):
-                    print(f"    Why {ref.name} has no busname?")
-                else:
-                    print(f"    I guess {ref.name} stays?")
-            for addr in delete_addrs:
-                region.remove(addr)
-            #   3. Unstage and re-resolve to ensure memory is tightly packed
-            #print(region)
-            region.unstage()
-            region.resolve()
-            region.shrink()
-            #   4. Append the copy to self.memory_maps
-            memory_maps[busname] = region
-        for busname, _map in memory_maps.items():
-            print(f"=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+ {busname} +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=")
-            #print(_map)
-            _map.print(4)
-        self.memory_maps = memory_maps
-        return
 
     def trim_hierarchy(self):
         for mem_map in self.memory_maps:
@@ -951,7 +894,7 @@ class GhostBusser(VParser):
             #self._ext_modules[module] = []
             for instname, bus in busses.items():
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
-                print(f"  Resolving ExternalModule {instname}")
+                printd(f"  Resolving ExternalModule {instname}")
                 #if bus.sub is not None:
                 #    print(f"######################## {extinst.name}. I need to get my 'AW' from a ghostbus named {bus.sub}")
                 #    sub_bus = self.findBusByName(bus.sub)
@@ -972,7 +915,7 @@ class GhostBusser(VParser):
                             mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
                             special_mod_hash = mod_hash
                             special_busname = busname
-                            print(f"  added {extinst.name} to MemoryRegion {mr.label} in domain {mr.domain}")
+                            printd(f"  added {extinst.name} to MemoryRegion {mr.label} in domain {mr.domain}")
                             added = True
                             break
                 if not added:
@@ -1299,14 +1242,14 @@ class JSONMaker():
         n = -(n+1)
         return '_'.join(subs[n:]), done
 
-    def write(self, filename, path="_auto", flat=False, mangle=False):
+    def write(self, filename, path="_auto", flat=False, mangle=False, short=False):
         import os
         import json
         if path is not None:
             filepath = os.path.join(path, filename)
         else:
             filepath = filename
-        ss = json.dumps(self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle, drops=self._drops), indent=2)
+        ss = json.dumps(self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle, drops=self._drops, short=short), indent=2)
         with open(filepath, 'w') as fd:
             fd.write(ss)
         return

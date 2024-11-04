@@ -406,16 +406,6 @@ def createPortBus(busses):
         portbus.set_port(key, netname, portwidth=portwidth, rangestr=None, source=None)
     return portbus
 
-# TODO FIXME
-#   I need to keep a slightly larger structure here rather than the memregion tree
-#   Instead, I need the MemoryTree itself with its domain:memoryregion associations intact
-#   Yes, recall that each node of MemoryTree is an instance of class MemoryTree and that at each node,
-#   node.memories contains a list (not a dict) of MemoryRegions and each MemoryRegion object knows its
-#   own domain.
-#   The MemoryTree structure was designed to be walked from leaf to trunk, but now we need to walk it the
-#   other way.  This shouldn't be too difficult.
-#   see: MemoryTree.resolve()
-
 #   The "DecoderDomainLB.submods" list needs to only contain submodules in its domain because of din routing.
 #   Also, DecoderLB functions as both a module and a submodule, and so has both an "outside" API and an "inside" API
 #   We just need to ensure that the generated code from all the DecoderDomainLB instances is collected and exposed
@@ -447,8 +437,7 @@ class DecoderLB():
             # the parent's memory associated with this domain until we find a reference to the exact same object
             target = node.get_memory_by_domain(None) # It has to be the default domain here
             if target is None:
-                #raise Exception(f"Failed to find memory by domain {domain} in node {node}")
-                print(f"Skipping {node.label}")
+                print(f"Ignoring non-ghostbus module {node.label}")
                 continue
             parent_mem = memorytree.get_memory_by_domain(domain)
             if parent_mem is None:
@@ -799,18 +788,19 @@ class DecoderDomainLB():
             implied_busses = (self.mod.busname,)
         memregion.implicit_busses = implied_busses
         # ========================================= Cute print formatting - DELETEME
-        print(f"{self.__class__}({self.name})", end="")
-        if len(memregion.declared_busses) > 0:
-            print(f" declares ghostbusses {memregion.declared_busses}", end="")
+        if False:
+            print(f"{self.__class__}({self.name})", end="")
+            if len(memregion.declared_busses) > 0:
+                print(f" declares ghostbusses {memregion.declared_busses}", end="")
+                if len(implied_busses) > 0:
+                    print(" and", end="")
             if len(implied_busses) > 0:
-                print(" and", end="")
-        if len(implied_busses) > 0:
-            implied_bus = implied_busses[0]
-            if implied_bus is None:
-                print(f" lets in the default bus", end="")
-            else:
-                print(f" lets in {implied_bus}.", end="")
-        print()
+                implied_bus = implied_busses[0]
+                if implied_bus is None:
+                    print(f" lets in the default bus", end="")
+                else:
+                    print(f" lets in {implied_bus}.", end="")
+            print()
         # ===========================================================================
         #self.nbusses = len(self.mod.declared_busses)
         self.nbusses = len(self.mod.declared_busses) + len(self.mod.implicit_busses)
@@ -822,6 +812,7 @@ class DecoderDomainLB():
         self.csrs = []
         self.exts = []
         self.max_local = 0
+        self._no_reads = False # TODO Assume True and prove me wrong by finding something readable
         self._parseMemoryRegion(memregion)
 
         if self.max_local == 0:
@@ -834,6 +825,9 @@ class DecoderDomainLB():
 
     def _parseMemoryRegion(self, memregion):
         for start, stop, ref in memregion.get_entries():
+            if hasattr(ref, "access"):
+                if ref.access & ref.READ:
+                    self._no_reads = False
             if isinstance(ref, GBRegister):
                 #ref._readRangeDepth()
                 self.csrs.append(ref)
@@ -848,6 +842,7 @@ class DecoderDomainLB():
 
     def add_submod(self, submod, base):
         self.submods.append((base, submod))
+        # TODO - Detect whether submod is readable and update self._no_reads
 
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal
@@ -1088,6 +1083,8 @@ class DecoderDomainLB():
                     ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]} & addrhit_{self.inst};")
                 elif netkey in ('din',):
                     ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
+                else:
+                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
         return "\n".join(ss)
 
     def dinRouting(self):
@@ -1095,6 +1092,10 @@ class DecoderDomainLB():
         #                 en_bar_0 ? gb_din_bar_0 :
         #                 en_local ? local_din :
         #                 32'h00000000;
+        if self._no_reads:
+            return ""
+        if self.ghostbus["din"] is None:
+            return ""
         en_local = "en_local" # TODO - Make a name less likely to collide
         local_din = "local_din"
         if self.domain is not None:
@@ -1330,7 +1331,6 @@ class DecoderDomainLB():
                 #   assign extmod_addr = GBPORT_addr[aw-1:0];
                 # To:
                 #   assign extmod_addr = {{true_aw-aw{1'b0}}, GBPORT_addr[aw-1:0]};
-                # TODO - I need a true_aw_str!
                 true_aw_str = extmod.extbus.get_width(portname)
                 ss.append(f"assign {ext_port} = {{{{{true_aw_str}-{extmod.aw}{{1'b0}}}}, {gb_port}[{extmod.aw}-1:0]}};")
             else:
@@ -1339,8 +1339,10 @@ class DecoderDomainLB():
                 if _range is not None:
                     _s, _e = _range
                     ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
-                else:
+                elif portname in ('wen', 'ren', 'wstb', 'rstb'):
                     ss.append(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name};")
+                else:
+                    ss.append(f"assign {ext_port} = {gb_port};")
         return "\n".join(ss)
 
 
