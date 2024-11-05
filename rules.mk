@@ -1,4 +1,3 @@
-
 # Usage:
 #  Populate the following:
 #    GHOSTBUS_SOURCES: a list of all Verilog source files to be processed by ghostbus. This can include non-ghostbus
@@ -12,6 +11,7 @@ GHOSTBUS_DIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
 AUTOGEN_DIR?=_autogen
 PY_DIR=$(GHOSTBUS_DIR)/py
+PYTHON?=python3
 
 GHOSTBUS_IGNORES?=rom
 ignore_args=$(addprefix --ignore ,$(GHOSTBUS_IGNORES))
@@ -26,5 +26,3 @@ ghostbus.d: $(AUTOGEN_DIR)/defs.vh
 #$(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
 #	mkdir -p $(AUTOGEN_DIR)
 #	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(GHOSTBUS_TOP) -o $@ --flat --mangle $(ignore_args)
-
-

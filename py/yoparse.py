@@ -187,6 +187,7 @@ def _findRangeStr(snippet, offset, get_type=True):
     keywords = _net_keywords
     nettype = None
     maxlen = max([len(kw) for kw in keywords])
+    #print(f"  ::{snippet[offset:offset+10]} -----", end="")
     for n in range(offset, -1, -1):
         char = snippet[n]
         # Room for whitespace+'r'+'e'+'g'+whitespace
@@ -196,6 +197,7 @@ def _findRangeStr(snippet, offset, get_type=True):
             nettype = NetTypes.get(kw)
             if rangestr is None:
                 rangestr = "0:0"
+            #print(f"Breaking at offset {offset-n}: {snippet[n:n+10]}")
             break
         elif char == ']': # walking backwards
             if grouplevel == 0:
@@ -206,6 +208,7 @@ def _findRangeStr(snippet, offset, get_type=True):
             if grouplevel == 0:
                 rangestr = snippet[n+1:endix]
                 if not get_type:
+                    #print(f"Breaking at offset {offset-n}: {snippet[n:n+10]}")
                     break
         if n == 0:
             raise Exception("Reached 0 looking for a keyword from netname {snippet[offset:offset+10]}")

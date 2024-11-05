@@ -1,6 +1,6 @@
 # Some utility functions/classes for use throughout the codebase
 
-def strDict(_dict, depth=-1):
+def strDict(_dict, depth=-1, dohash=False):
     def _strToDepth(_dict, depth=0, indent=0):
         """RECURSIVE"""
         if depth == 0:
@@ -8,19 +8,22 @@ def strDict(_dict, depth=-1):
         l = []
         sindent = " "*indent
         for key, val in _dict.items():
+            hs = ""
+            if dohash:
+                hs = f": {id(val)}"
             if hasattr(val, 'keys'):
-                l.append(f"{sindent}{key} : dict size {len(val)}")
+                l.append(f"{sindent}{key} : dict size {len(val)}{hs}")
                 l.extend(_strToDepth(val, depth-1, indent+2))
             else:
-                l.append(f"{sindent}{key} : {val}")
+                l.append(f"{sindent}{key} : {val}{hs}")
         return l
     l = []
     l.extend(_strToDepth(_dict, depth, indent=2))
     return '\n'.join(l)
 
 
-def print_dict(dd, depth=-1):
-    print(strDict(dd, depth=depth))
+def print_dict(dd, depth=-1, dohash=False):
+    print(strDict(dd, depth=depth, dohash=dohash))
 
 
 class enum():
@@ -49,3 +52,14 @@ def strip_empty(ll):
         if entry != "":
             result.append(entry)
     return result
+
+def deep_copy(dd):
+    cp = {}
+    for key, val in dd.items():
+        if hasattr(val, "items"):
+            cp[key] = deep_copy(val)
+        elif hasattr(val, "copy"):
+            cp[key] = val.copy()
+        else:
+            cp[key] = val
+    return cp

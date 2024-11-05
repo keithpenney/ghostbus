@@ -1,0 +1,51 @@
+{
+  "holiday_pasta": {
+    "access": "rw",
+    "addr_width": 0,
+    "sign": "unsigned",
+    "base_addr": 0,
+    "data_width": 8
+  },
+  "ima_wire": {
+    "access": "r",
+    "addr_width": 0,
+    "sign": "unsigned",
+    "base_addr": 1,
+    "data_width": 6
+  },
+  "foo_ram": {
+    "access": "rw",
+    "addr_width": 3,
+    "sign": "unsigned",
+    "base_addr": 64,
+    "data_width": 4
+  },
+  "bar_ha_reg": {
+    "access": "rw",
+    "addr_width": 0,
+    "sign": "signed",
+    "base_addr": 512,
+    "data_width": 8
+  },
+  "bar_ha_reg_two": {
+    "access": "rw",
+    "addr_width": 0,
+    "sign": "unsigned",
+    "base_addr": 513,
+    "data_width": 32
+  },
+  "ext_i": {
+    "access": "rw",
+    "addr_width": 2,
+    "sign": "unsigned",
+    "base_addr": 516,
+    "data_width": 8
+  },
+  "bar_ram": {
+    "access": "rw",
+    "addr_width": 6,
+    "sign": "unsigned",
+    "base_addr": 768,
+    "data_width": 8
+  }
+}

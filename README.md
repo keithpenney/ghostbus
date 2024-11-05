@@ -33,16 +33,31 @@ __TODO:__
   * Mangle ghostbus port names to reduce potential for port/net name collisions
   * Configurable pipelining
   * Auto-pipelining for module-specific read delays
-  * Support for multiple ghostbuses
+  * Support for multiple ghostbusses
   * Alternate bus architectures (AXI4/AXI4LITE, wishbone, etc)
+  * Allow ports to be CSRs - all should be allowed to be read-only and `output reg` type should be allowed to be r/w
 
 ## Usage
 See the [API documentation]("API.md") for usage.
 
 ## Design considerations
 
-### Multiple Ghostbuses
-I'm a bit conflicted on how to support multiple ghostbuses.  Theoretically, it should not be difficult but it requires
+### Multiple Ghostbusses
+#### Domain Rules
+1. The domain 'None' refers to that of the implied bus that magically comes in via `` `GHOSTBUSPORTS``. All other domains are named.
+   Note that this is instance-relative (i.e. your implied bus may be different from mine, but we still call ours both 'None').
+
+2. If a module is 'top' (i.e. is marked as top from `ghostbusser.py --top` CLI arg, or using `(* ghostbus_top *)` attribute),
+   there is no implied bus.  If no bus is declared in the module, no local resources can be routed.
+   If one bus is declared in the module, it is the default bus (thus no `(* ghostbus_domain="foo" *)` attributes required).
+   If more than one bus is declared in the module, EVERY CSR/RAM/extmod/submod needs to be disambiguated
+   via the `(* ghostbus_domain="foo" *)` attribute (anything missing this should generate an error).
+
+3. If a module is not 'top', the default domain is the implied bus.  If any additional busses are declared in this module,
+   each needs to be assigned a distinct explicit domain via the `(* ghostbus_domain="foo" *)` attribute.
+
+
+I'm a bit conflicted on how to support multiple ghostbusses.  Theoretically, it should not be difficult but it requires
 a bit more complexity in the API/macro naming convention.
 
 Wait! If a module has only a single ghostbus coming in (a normal ghostmod), we should _NOT_ be requiring the macro
@@ -53,22 +68,8 @@ and we only distinguish between the busses (with the specific macros/attributes 
 where multiple busses exist.
 
 Specifically, these need to change somehow:
-  * `(* ghostbus_port="port_name" *)`
-    If I figure out how to interpret the hierarchy (via Yosys) in a multi-ghostbus context, I'll need a way to
-    specify each bus by name and indicate which bus should be routed to which instance.
-    Need to incorporate the name of the bus somehow.
-    Ideas:
-      `(* ghostbus_port="bus_name, port_name" *)`
-        Pros: Agrees with syntax of `ghostbus_ext`
-        Cons: Might be confused with `ghostbus_ext`
-              No! Collides with usage of `ghostbus_port` allowing a single net to function as multiple port nets!
-      `(* ghostbus_port="port_name", ghostbus_bus="bus_name" *)`
-        Pros: Seems to be the only option.
-              Clean and explicit.
-              Easy to make backwards compatible (`ghostbus_bus=None` by default)
-        I'm going with this option.
+  `(* ghostbus_port="port_name", ghostbus_domain="bus_name" *)`
 
-  * `` `GHOSTBUS_parentmodname_instname ``
     Suppose in the top module we have two ghostbusses declared and named, and we also have a ghostmod instantiated
     at that same level.  How do we specify which ghostbus is to wire to the ghostmod?
     Let's use an attribute on the module instance!
@@ -81,9 +82,9 @@ Specifically, these need to change somehow:
     you'll need to specify the bus (or risk it getting hooked up to the wrong one).  This only affects the routing
     logic.
     Let's make this agree with `ghostbus_port` above:
-      `(* ghostbus_ext="extbus_name, port_name", ghostbus_name="ghostbus_name" *)`
+      `(* ghostbus_ext="extbus_name, port_name", ghostbus_domain="ghostbus_name" *)`
     The rule should be:
-      If `ghostbus_name` is not None, get the bus net names from the named bus.
+      If `ghostbus_domain` is not None, get the bus net names from the named bus.
       Else, use the generic bus port names.
 
 A few more considerations with multiple busses:

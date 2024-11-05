@@ -99,9 +99,21 @@ class Memory(Register):
                               base=self._base_addr, meta=self.meta, access=self.access)
 
 
+def hexlist(ll):
+    if not hasattr(ll, "__len__"):
+        return hex(ll)
+    return [hexlist(x) for x in ll]
+
+
+def _deepCopy(ll):
+    copy = []
+    for entry in ll:
+        copy.append(entry.copy())
+    return copy
+
 class MemoryRegion():
     """A memory allocator.
-    * Has no de-allocation.
+    * De-allocation by address
     * Only allows memory segments to be added at addresses aligned to their width, meaning:
         assert(addr % (1<<width) == 0)
     * Optionally keeps track of references (i.e. pointers) for convenient ordered access
@@ -118,6 +130,8 @@ class MemoryRegion():
         mr.add(width, addr=address)
       or to the first available address simply with:
         mr.add(width)
+    * If you need to collect items, then assign by priority, use class MemoryRegionStager,
+      which also provides the ability to de-allocate and re-allocate.
     """
     TYPE_VACANT = 0
     TYPE_MEM = 1
@@ -137,6 +151,7 @@ class MemoryRegion():
             'label' can be used to identify the memory region per application
             'hierarchy' can be used to keep track of region hierarchy
         """
+        self._init_addr_range = addr_range
         self._offset = addr_range[0]
         # -1 because the upper address is not inclusive
         self._aw = bits((addr_range[1]-addr_range[0])-1)
@@ -146,7 +161,6 @@ class MemoryRegion():
         self.map = []
         self.vacant = [list(addr_range)]
         self._keepout = []
-        self.refs = []
         self._hierarchy = hierarchy
         if label is None:
             self.label = "MemoryRegion" + str(self._nregion)
@@ -154,9 +168,44 @@ class MemoryRegion():
         else:
             self.label = label
         self._delta_indent = 0 # see self.print()
-        # NOTE: self.bustop is an annoying application-specific hook and I'm being lazy.
-        # If I end up with more of these, I'll just subclass it.
-        self.bustop = False
+
+    def check_complete(self):
+        """Verify that the memory map is complete (contiguous, non-overlapping regions of any type)."""
+        last_entry = None
+        for entry, _type in self: # Iterator magic
+            if last_entry is None:
+                if entry[0] != 0:
+                    raise Exception(f"MemoryRegion({self.name}) does not begin at zero! ({entry[0]}, {entry[1]})")
+            else:
+                if last_entry[1] != entry[0]:
+                    raise Exception(f"MemoryRegion({self.name}) entries are not contiguous ({last_entry[0]}, {last_entry[1]}), ({entry[0]}, {entry[1]})")
+            last_entry = entry
+        if (last_entry is not None) and (last_entry[1] != (1<<self.width)):
+            raise Exception(f"{self.label} Memory map has broken. last_entry = {last_entry}, self.width = {self.width}")
+        return
+
+    # Custom decorator
+    def completed(fn):
+        def wrapper(self, *args, **kw):
+            # Call the function
+            output = fn(self, *args, **kw)
+            self.check_complete()
+            return output
+        return wrapper
+
+    def reset(self):
+        """Empty the memory region (start fresh with no allocated items)."""
+        addr_range = self._init_addr_range
+        self._offset = addr_range[0]
+        # -1 because the upper address is not inclusive
+        self._aw = bits((addr_range[1]-addr_range[0])-1)
+        # Its own memory map will be defined relative to the base (not absolute addresses)
+        self._top = (1 << self._aw)
+        # Each entry is (start, end+1, ref) where 'ref' is either None or a Python object reference
+        self.map = []
+        self.vacant = [list(addr_range)]
+        self._keepout = []
+        return
 
     def copy(self):
         addr_range = (self._offset, self._offset + self._top)
@@ -170,15 +219,15 @@ class MemoryRegion():
             else:
                 copy_ref = ref
             mr.map.append((start, stop, copy_ref))
-        mr.vacant = self.vacant.copy()
-        mr._keepout = self._keepout.copy()
-        mr.refs = self.refs.copy() # TODO DELETEME
-        mr.bustop = self.bustop
-        # HACK ALERT - I need to purge my "ghostbusser" codebase of references to "MemoryRegion" directly
-        if hasattr(self, "busname"):
-            mr.busname = self.busname
+        mr.vacant = []
+        for start, stop in self.vacant:
+            mr.vacant.append([start, stop])
+        mr._keepout = []
+        for start, stop, ref in self._keepout:
+            mr._keepout.append([start, stop, ref])
         return mr
 
+    @completed
     def shrink(self):
         """Reduce address range to the minimum aligned range containing
         the occupied portions of the map.  Note that it only scales the
@@ -186,23 +235,31 @@ class MemoryRegion():
         Note that this could cause problems if you try to add more items
         to the memory region after shrinking.  It should probably only
         be called after you're sure you're done adding entries."""
+        #print(f"{self.label} shrinking from {self._top}", end="")
         hi_occupied = self.high_addr()
         if hi_occupied > 0:
-            min_aw = bits(hi_occupied-1)
+            if hi_occupied == 1:
+                min_aw = bits(hi_occupied)
+            else:
+                min_aw = bits(hi_occupied-1)
             self._top = (1 << min_aw)
             self._aw = min_aw
         else:
             self._top = 0
             self._aw = 0
-        # Also need to truncate the last entry in the "vacant" map
         if len(self.vacant) > 0:
-            vacant = (self.vacant[-1][0], self._top)
-            if vacant[1] == vacant[0]:
-                self.vacant.pop()
-            else:
-                self.vacant[-1] = (self.vacant[-1][0], self._top)
+            # If the top vacant is > self._top, we also need to truncate the last entry
+            # in the "vacant" map
+            if self.vacant[-1][1] > self._top:
+                vacant = [self.vacant[-1][0], self._top]
+                if vacant[1] == vacant[0]:
+                    self.vacant.pop()
+                else:
+                    self.vacant[-1] = vacant
+        #print(f" to {self._top}")
         return
 
+    @completed
     def grow(self, high, absolute=False):
         """If high is an address greater than the current max address,
         extend the memory range to the next aligned point including that
@@ -232,6 +289,7 @@ class MemoryRegion():
 
     @hierarchy.setter
     def hierarchy(self, hier):
+        #print(f"MemoryRegion.hierarchy = {self._hierarchy} -> {hier}")
         self._hierarchy = hier
         # Propagate to lower regions
         for entry, _type in self: # Iterator magic
@@ -250,6 +308,10 @@ class MemoryRegion():
         if len(self.map) == 0:
             return 0
         return self.high_addr()
+
+    @property
+    def empty(self):
+        return self.size == 0
 
     @property
     def base(self):
@@ -291,7 +353,7 @@ class MemoryRegion():
         if addr % size:
             raise Exception("Address 0x{:x} is not aligned to width {}".format(addr, width))
         if addr + size > self.top:
-            raise Exception("Adding element of size {} rooted at address 0x{:x}".format(size, addr) \
+            raise Exception("Adding element of size {} rooted at address 0x{:x} ".format(size, addr) \
                     + "would exceed bounds of memory region [0x{:x}->0x{:x})".format(self.base, self.top))
         return True
 
@@ -300,11 +362,13 @@ class MemoryRegion():
         self.sort()
         self._im = 0
         self._iv = 0
+        self._ik = 0
         return self
 
     def __next__(self):
         mempty = False
         vempty = False
+        kempty = False
         if self._im < len(self.map):
             mem = self.map[self._im]
         else:
@@ -314,24 +378,53 @@ class MemoryRegion():
             vac = (vac[0], vac[1], None) # Same shape as 'mem'
         else:
             vempty = True
-        if mempty and vempty:
-            raise StopIteration
-        elif vempty:
-            self._im += 1
-            return mem, self.TYPE_MEM
-        elif mempty:
-            self._iv += 1
-            return vac, self.TYPE_VACANT
-        elif mem[0] < vac[0]:
-            self._im += 1
-            return mem, self.TYPE_MEM
+        if self._ik < len(self._keepout):
+            ko = self._keepout[self._ik]
         else:
+            kempty = True
+        if mempty and vempty and kempty:
+            #print(f"  mempty ({len(self.map)}) and vempty ({len(self.vacant)}) and kempty ({len(self._keepout)})!")
+            raise StopIteration
+        elif kempty:
+            if vempty:
+                self._im += 1
+                return mem, self.TYPE_MEM
+            elif mempty:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+            elif mem[0] < vac[0]:
+                self._im += 1
+                return mem, self.TYPE_MEM
+            else:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+        elif mempty:
+            if vempty or ko[0] < vac[0]:
+                self._ik += 1
+                return ko, self.TYPE_KEEPOUT
+            else:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+        elif vempty:
+            if mempty or ko[0] < mem[0]:
+                self._iv += 1
+                return vac, self.TYPE_VACANT
+            else:
+                self._im += 1
+                return mem, self.TYPE_MEM
+        elif ko[0] < min(mem[0], vac[0]):
+            self._ik += 1
+            return ko, self.TYPE_KEEPOUT
+        elif mem[0] < min(ko[0], vac[0]):
+            self._im += 1
+            return mem, self.TYPE_MEM
+        else: # vac[0] < min(ko[0], mem[0]):
             self._iv += 1
             return vac, self.TYPE_VACANT
 
     def remove(self, addr):
         """Remove an entry rooted at 'addr' (and return it to vacant)"""
-        print(f"      #### MemoryRegion.remove(0x{addr:x}) ####")
+        #print(f"      #### MemoryRegion.remove(0x{addr:x}) ####")
         removed = False
         for n in range(len(self.map)):
             _start, _stop, _ref = self.map[n]
@@ -343,10 +436,11 @@ class MemoryRegion():
         if removed:
             vacated = self._vacate(_start, _stop)
             if not vacated:
-                # KEEF START HERE
-                print(f"WARNING! Failed to vacate 0x{addr:x}")
+                #print(f"WARNING! Failed to vacate 0x{addr:x}")
+                pass
         return (removed and vacated)
 
+    @completed
     def _vacate(self, start, stop):
         # Six cases:
         #   0: start is before (and not adjacent to) the first vacant region, insert new region
@@ -360,11 +454,15 @@ class MemoryRegion():
         new_entry = (base, end)
         success = False
         print(f"Trying to vacate (0x{start:x}, 0x{stop:x})")
-        for n in range(len(self.vacant)-1):
+        for n in range(len(self.vacant)):
             this_entry = self.vacant[n]
-            next_entry = self.vacant[n+1]
+            if n == len(self.vacant) - 1:
+                next_entry = (-1, -1)
+            else:
+                next_entry = self.vacant[n+1]
             this_base, this_end = this_entry
             next_base, next_end = next_entry
+            #print(f"           this_entry = (0x{this_base:x}, 0x{this_end:x}); next_entry = (0x{next_base:x}, 0x{next_end:x})")
             if (n == 0):
                 #   0: start is before (and not adjacent to) the first vacant region, insert new region
                 if end < this_base:
@@ -426,9 +524,6 @@ class MemoryRegion():
                 addr = offset
             else:
                 addr += offset
-        if self.hierarchy is not None:
-            if hasattr(item, 'hierarchy'):
-                item.hierarchy = (*self.hierarchy, *item.hierarchy)
         return self.add(width=width, ref=item, addr=addr)
 
     def add(self, width=0, ref=None, addr=None):
@@ -441,6 +536,7 @@ class MemoryRegion():
     def keepout(self, addr, width=0):
         return self._add(width, ref=None, addr=addr, type=self.TYPE_KEEPOUT)
 
+    @completed
     def _add(self, width=0, ref=None, addr=None, type=TYPE_MEM):
         """Add a memory element of address width 'width' that can optionally
         be referenced by 'ref' (e.g. a variable identifier (pointer))
@@ -457,10 +553,16 @@ class MemoryRegion():
         refname = None
         if ref is not None and hasattr(ref, "name"):
             refname = ref.name
-        #print(f"------ Adding ({base}, {end}) name {refname}")
-        # TODO DELETEME
-        if (type == self.TYPE_MEM) and (base is not None) and (end is not None):
-            self.refs.append((base, end, ref))
+        if self.hierarchy is not None:
+            if hasattr(ref, 'hierarchy'):
+                #print(f"    setting ref.hierarchy: {ref.hierarchy} -> {(*self.hierarchy, *ref.hierarchy)}")
+                ref.hierarchy = (*self.hierarchy, *ref.hierarchy)
+            else:
+                #print(f"    !!!! {ref.name} has no hierarchy?!?!?")
+                pass
+        else:
+            #print(f"    !!!! {self.label} self.hierarchy is None!")
+            pass
         return base
 
     def _insert(self, addr, width=0, type=TYPE_MEM, ref=None):
@@ -471,9 +573,11 @@ class MemoryRegion():
         base = addr
         end = addr + (1<<width)
         fit_elem = None
+        #print(f"  _insert: {self.label} I have a width of {self.width} and vacant[-1] = {self.vacant[-1]}")
         # First find whether 'addr' is within an occupied or vacant region
         for entry, _type in self: # Iterator magic
             e_base, e_end, e_ref = entry
+            #print(f" _insert: walking 0x{e_base:x}:0x{e_end} ({e_ref}) ({_type})")
             if (base >= e_base) and (base < e_end):
                 # 'addr' is in this element
                 if _type != self.TYPE_VACANT:
@@ -488,8 +592,17 @@ class MemoryRegion():
                     fit_elem = entry[:2]
                     break
         if fit_elem is None:
-            raise Exception("Could not fit [0x{:x}->0x{:x}) into memory map.".format(addr, end) \
-                + " It probably overlaps with a keepout region.")
+            overlap_entries = self.get_overlap(addr, end)
+            if len(overlap_entries) == 0:
+                raise Exception(f"It appears [0x{addr:x}->0x{end:x}) is outside our boundaries?!")
+            err = f"Could not fit [0x{addr:x}->0x{end:x}) into memory map. " + \
+                  f"It overlaps with {len(overlap_entries)} entries, spanning [0x{overlap_entries[0][0]:x}->" + \
+                  f"0x{overlap_entries[-1][1]:x})"
+            start_ref = overlap_entries[0][2]
+            stop_ref = overlap_entries[-1][2]
+            if (start_ref is not None) or (stop_ref is not None):
+                err += " ({start_ref}->{stop_ref})"
+            raise Exception(err)
         # Unfortunately we need to loop through the vacancies again to get the index of this element
         # This is due to the custom iterator which manages two separate lists
         for n in range(len(self.vacant)):
@@ -502,24 +615,27 @@ class MemoryRegion():
             old_end = self.vacant[n][1]
             if self.vacant[n][0] < base:
                 # Truncate downward the existing vacant region
+                #print(f"---{self.label} self.vacant[{n}][1] -> {base}")
                 self.vacant[n][1] = base
                 if old_end > end:
                     # Add a new vacancy region above the occupied section
+                    #print(f"---{self.label} self.vacant.insert({n+1}, {[end, old_end]})")
                     self.vacant.insert(n+1, [end, old_end])
             else:
                 # Truncate upward the existing vacant region
                 if old_end > end:
                     # Still some vacancy above the occupied section
+                    #print(f"---{self.label} self.vacant[{n}] = {[end, old_end]}")
                     self.vacant[n] = [end, old_end]
                 else:
                     # We occupied the exact size of this vacant region
+                    #print(f"---{self.label} del self.vacant[{n}]")
                     del self.vacant[n]
             # Add the memory region
             if type == self.TYPE_MEM:
-                #print(f"2222222222222 {base}, {end}")
                 self.map.append((base, end, ref))
             elif type == self.TYPE_KEEPOUT:
-                self._keepout.append((base, end))
+                self._keepout.append((base, end, None))
             else:
                 raise Exception("Invalid type {} to add to memory".format(type))
             break
@@ -556,7 +672,6 @@ class MemoryRegion():
                         # We occupied the exact size of this vacant region
                         del self.vacant[n]
                 # Add the memory region
-                #print(f"3333333333333 {aligned_start}, {mem_end}")
                 self.map.append((aligned_start, mem_end, ref))
                 base = aligned_start
                 end = mem_end
@@ -565,14 +680,42 @@ class MemoryRegion():
             raise Exception("{} has no room for memory of width {}".format(self.label, width))
         return base, end
 
+    def get_by_address(self, address):
+        """Get (start, stop, ref) for whatever the entry is that overlaps with address 'address'."""
+        for entry, _type in self: # Iterator magic
+            start, stop, ref = entry
+            if (start <= address) and (stop > address):
+                return entry
+        return (None, None, None)
+
+    def get_overlap(self, start, stop):
+        """Get a list of entries [(start, stop, ref), ...] which overlap with addresses 'start'->'stop'"""
+        entries = []
+        for entry, _type in self: # Iterator magic
+            that_start, that_stop, _ref = entry
+            if (start >= that_start): # this starts at or after that starts
+                if (start < that_stop): # this starts before that stops
+                    entries.append(entry) # overlap
+                else: # this starts after that stops
+                    pass # no overlap
+            else: # this starts before that starts
+                if (stop > that_start): # this stops after that starts
+                    entries.append(entry) # overlap
+                else: # this stops before that starts
+                    pass # no overlap
+        return entries
+
     def sort(self):
+        # TODO - Is this even needed? Maybe make a decorator that checks for map and vacant unsorted
         self.map.sort(key=lambda x: x[0])
         self.vacant.sort(key=lambda x: x[0])
-        self.refs.sort(key=lambda x: x[0])
         return
 
     def __str__(self):
-        return self.str()
+        if self._hierarchy is not None:
+            return f"MemoryRegion({self._hierarchy})"
+        else:
+            return f"MemoryRegion({self.label})"
 
     def __repr__(self):
         return self.__str__()
@@ -602,8 +745,11 @@ class MemoryRegion():
                 elemstr = " {:8x}-{:8x} ".format(self.base + entry[0], self.base + entry[1])
                 if _type == self.TYPE_MEM:
                     ordered = (elemstr, empty)
-                else: # _type == self.TYPE_VACANT
+                elif _type == self.TYPE_VACANT:
                     ordered = (empty, elemstr)
+                else: # _type == self.TYPE_KEEPOUT
+                    # Not printing keepouts for now
+                    continue
                 ss.append("|{}|{}|".format(*ordered))
         sindent = "\n" + " "*indent
         return " "*indent + sindent.join(ss)
@@ -679,7 +825,7 @@ class MemoryRegion():
         pass #1 sets the first len(common) items of each MemoryRegion's hierarchy to empty
         strings."""
         common = self._collectCommon()
-        if len(common) == 0:
+        if common is None or len(common) == 0:
             # print("    No common root. Done")
             return
         else:
@@ -706,200 +852,173 @@ class MemoryRegionStager(MemoryRegion):
     """Uses a near-indentical API as class MemoryRegion, but doesn't actually compose
     the map until you call 'resolve()' which adds explicit-address entries first, then
     the implicit-address entries."""
+    UNRESOLVED = False
+    RESOLVED = True
     def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
         super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
         # Each entry = (item, addr, addr_width, type)
-        self._staged_items = []
+        self._entries = []
+        self._keepouts = []
+        self._explicits = []
+        self._resolved = False
+
+    def copy(self):
+        cp = super().copy()
+        cp._entries = self._entries.copy()
+        cp._keepouts = self._keepouts.copy()
+        cp._explicits = self._explicits.copy()
+        return cp
 
     def add_item(self, item, offset=None, keep_base=False):
         """Overloaded to Stage-only"""
         addr_width = None
         if hasattr(item, 'aw'):
             addr_width = item.aw
-        self._staged_items.append((item, offset, addr_width, self.TYPE_MEM))
+        if offset is not None:
+            self._explicits.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
+        else:
+            self._entries.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
+        self._resolved = False
         return
 
     def add(self, width=0, ref=None, addr=None):
         """Overloaded to Stage-only"""
-        self._staged_items.append((ref, addr, width, self.TYPE_MEM))
+        if addr is not None:
+            self._explicits.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
+        else:
+            self._entries.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
+        self._resolved = False
         return
 
     def keepout(self, addr, width=0):
         """Overloaded to Stage-only"""
-        self._staged_items.append((None, addr, width, self.TYPE_KEEPOUT))
+        self._keepouts.append((None, addr, width, self.TYPE_KEEPOUT, self.UNRESOLVED))
+        self._resolved = False
         return
+
+    def remove(self, addr):
+        lists = (self._keepouts, self._explicits, self._entries)
+        removed = False
+        for _list in lists:
+            for n in range(len(_list)):
+                ref, base, aw, _type, resolved = _list[n]
+                if base == addr:
+                    del _list[n]
+                    #print(f"                                    Deleting {ref}")
+                    removed = True
+                    break
+            if removed:
+                break
+        if not removed:
+            #print(f"                           Failed to remove {addr}")
+            pass
+        return super().remove(addr)
+
+    @staticmethod
+    def _resolve_ref(ref, aw):
+        if hasattr(ref, "resolve"):
+            ref.resolve()
+        if hasattr(ref, 'shrink'):
+            ref.shrink()
+        if hasattr(ref, 'aw'):
+            aw = ref.aw
+        return aw
 
     def resolve(self):
         """Allocate the staged items in an explicit memory map.  Items staged with
         explicit addresses get priority."""
         # First pass, keepouts
-        for n in range(len(self._staged_items)):
-            ref, base, aw, _type = self._staged_items[n]
-            if _type == self.TYPE_KEEPOUT:
+        #print(f"RESOLVE: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)} {self.width} {self.vacant}")
+        for n in range(len(self._keepouts)):
+            ref, base, aw, _type, resolved = self._keepouts[n]
+            # This is probably not useful, but maybe I'll find a use for keepouts with 'ref's?
+            aw = self._resolve_ref(ref, aw)
+            if resolved != self.RESOLVED:
                 super().keepout(base, aw)
-                self._staged_items[n] = None
+                self._keepouts[n] = (ref, base, aw, _type, self.RESOLVED)
         # Second pass, add any with explicit addresses
-        for n in range(len(self._staged_items)):
-            data = self._staged_items[n]
+        for n in range(len(self._explicits)):
+            data = self._explicits[n]
             if data is None:
                 continue
-            ref, base, aw, _type = data
-            if _type == self.TYPE_MEM and base is not None:
-                name = None
-                if ref is not None:
-                    name = ref.name
-                print(f"Adding {name} to addr 0x{base:x}")
+            ref, base, aw, _type, resolved = data
+            aw = self._resolve_ref(ref, aw)
+            name = None
+            if ref is not None:
+                name = ref.name
+            if resolved != self.RESOLVED:
+                #print(f"{self.label}: Adding {name} to addr 0x{base:x}")
                 super().add(aw, ref=ref, addr=base)
-                self._staged_items[n] = None
+                self._explicits[n] = (ref, base, aw, _type, self.RESOLVED)
         # Third pass, add everything else
-        for n in range(len(self._staged_items)):
-            data = self._staged_items[n]
+        for n in range(len(self._entries)):
+            data = self._entries[n]
             if data is None:
                 continue
-            ref, base, aw, _type = data
-            if _type == self.TYPE_MEM:
-                name = None
-                if ref is not None:
-                    name = ref.name
-                print(f"Adding {name} to anywhere ({base})")
-                super().add(aw, ref=ref, addr=base)
-        self._staged_items = []
-        return
-
-class Addrspace():
-    @staticmethod
-    def _vet_ranges(*ranges):
-        """Enforce three rules for memory ranges:
-            0. range[0] < range[1]
-            1. All boundaries must be powers-of-two
-            2. Ranges must not overlap
-        """
-        rl = len(ranges)
-        for n in range(rl):
-            rng = ranges[n]
-            # Rule 0
-            low, high = rng
-            if low >= high:
-                raise Exception("Inverted or identical boundaries: (low, high) = ({}, {})".format(low, high))
-                return False
-            # Rule 1
-            for boundary in rng:
-                if (boundary != 0) and (math.log2(boundary) % 1) > 0:
-                    raise Exception("Memory address range boundary 0x{:x} is not a power of two".format(boundary))
-                    return False
-            # Rule 2
-            overlap = False
-            if n < rl-1:
-                for m in range(n+1, rl):
-                    rng_cmp = ranges[m]
-                    low_cmp, high_cmp = rng_cmp
-                    # Ensure non-overlap
-                    # if r0_low < r1_low, then r0_high must also be <= r1_low
-                    # else (ro_low > r1_low), then r0_high must also be >= r1_low
-                    if (low < low_cmp) != (high <= low_cmp):
-                        overlap = True
-                    elif (low >= high_cmp) != (high > high_cmp):
-                        overlap = True
-                    elif (low >= low_cmp) and (high <= high_cmp) :
-                        overlap = True
-                    elif (low_cmp >= low) and (high_cmp <= high) :
-                        overlap = True
-                    if overlap:
-                        raise Exception("Memory regions (0x{:x}, 0x{:x}) and (0x{:x}, 0x{:x}) overlap".format(
-                            low, high, low_cmp, high_cmp))
+            ref, base, aw, _type, resolved = data
+            aw = self._resolve_ref(ref, aw)
+            name = None
+            if ref is not None:
+                name = ref.name
+            if resolved != self.RESOLVED:
+                #print(f"{self.label}: Adding {name} ({aw} bits) to anywhere ({base})")
+                newbase = super().add(aw, ref=ref, addr=None)
+                self._entries[n] = (ref, newbase, aw, _type, self.RESOLVED)
+        self._resolved = True
         return True
 
-    def __init__(self, scalar_range=MEMORY_RANGE_SCALAR, mirror_range=MEMORY_RANGE_MIRROR, array_range=MEMORY_RANGE_ARRAY):
-        #self.addr = numpy.empty((0, 2), dtype=int)
-        self._vet_ranges(scalar_range, mirror_range, array_range)
-        self.scalar_range = scalar_range
-        self.mirror_range = mirror_range
-        self.array_range = array_range
-        self.mem_regions = {
-            REGION_SCALAR: MemoryRegion(scalar_range),
-            REGION_MIRROR: MemoryRegion(mirror_range),
-            REGION_ARRAY:  MemoryRegion(array_range),
-        }
+    def unstage(self):
+        """Unstage everything so you can resolve() again (presumably after
+        the memory map has been modified in some way)."""
+        #print(f"{self.name} unstaging", end="")
+        #print(f"{self.name} unstaging: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)}")
+        self.reset()
+        lists = (self._keepouts, self._explicits, self._entries)
+        #print(f" len(_list) = {len(_list)}", end="")
+        for m in range(len(lists)):
+            for n in range(len(lists[m])):
+                x = lists[m][n]
+                lists[m][n] = (x[0], x[1], x[2], x[3], self.UNRESOLVED)
+        self._resolved = False
         return
 
-    def __str__(self):
-        l = []
-        for region, mr in self.mem_regions.items():
-            if region == REGION_SCALAR:
-                rstr = "REGION_SCALAR"
-            elif region == REGION_MIRROR:
-                rstr = "REGION_MIRROR"
-            else:
-                rstr = "REGION_ARRAY"
-            l.append(rstr)
-            l.append(str(mr))
-            l.append("")
-        return "\n".join(l)
+    def shrink(self):
+        if not self._resolved:
+            self.resolve()
+        return super().shrink()
 
-    def __repr__(self):
-        return self.__str__()
+    def get_entries(self):
+        """Return a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
+        (e.g. a Python object reference, a string, None, etc).
+        Before resolving, our staged entries don't generally have addresses, so this will mostly return
+        (None, None, ref) but it's nice to have the same format as what it returns once resolved."""
+        if self._resolved:
+            return super().get_entries()
+        entries = []
+        for ref, base, aw, _type, state in self._explicits:
+            entries.append((base, None, ref))
+        for ref, base, aw, _type, state in self._entries:
+            entries.append((base, None, ref))
+        return entries
 
-    def _add(self, reg, region=REGION_SCALAR, addr=None):
-        """Add a memory region 'reg' (class Reg) to region 'region'.
-        Finds the first empty slot with enough space that is aligned to the
-        address width for optimum decoding."""
-        return self.mem_regions[region].add(reg.addr_width, ref=reg, addr=addr)
 
-    def sort(self):
-        for n in range(len(self.mem_regions)):
-            self.mem_regions[n].sort()
-        return
-
-    def get_region_mirror_size(self):
-        mr = self.mem_regions[REGION_MIRROR]
-        return mr.high_addr()-mr.base_addr()
-
-    def get_region_array_size(self):
-        mr = self.mem_regions[REGION_ARRAY]
-        return mr.high_addr()-mr.base_addr()
-
-    def get_region_scalar_size(self):
-        mr = self.mem_regions[REGION_SCALAR]
-        return mr.high_addr()-mr.base_addr()
-
-    def add(self, reg, keep=False):
-        if reg.addr_width > 0:
-            region = REGION_ARRAY
-        elif reg.access == ACCESS_R:
-            region = REGION_SCALAR
+def test_Register():
+    reg = Register(name="foo", dw=8, base=0x100, meta="some additional info", access=Register.RW)
+    copy = reg.copy()
+    for attr in dir(reg):
+        if attr.startswith('__'):
+            continue
+        ra = getattr(reg, attr)
+        ca = getattr(copy, attr)
+        if callable(ra):
+            continue
+            #rv = ra()
+            #cv = ca()
+            #assert rv==cv, f"reg.{attr}() = {rv} != copy.{attr}() = {cv}"
         else:
-            region = REGION_MIRROR
-        addr = None
-        reg_keep = reg.propdict.get('keep', False)
-        if (keep or reg_keep) and (reg.base_addr is None):
-            raise Exception("Cannot keep base_addr of None for reg {}".format(reg))
-            addr = reg.base_addr
-        return self._add(reg, region, addr=addr)
+            assert ra==ca, f"reg.{attr} = {ra} != copy.{attr} = {ca}"
+    return
 
-    def lastaddr(self):
-        high_addr = 0
-        for region, mr in self.mem_regions.items():
-            addr = mr.high_addr()
-            if addr > high_addr:
-                high_addr = addr
-        return high_addr
-
-    def avoid(self, reg):
-        base = reg.base_addr
-        end = base + (1 << reg.addr_width)
-        for _x, mr in self.mem_regions.items():
-            region_base, region_end = mr.range
-            if (base >= region_base) and (base < region_end):
-                # It starts in this region
-                mr.keepout(base, math.ceil(math.log2(min(end, region_end)-base)))
-                if (end <= region_end):
-                    print(f"0x{end:x} <= 0x{region_end:x}, break")
-                    break
-                else:
-                    # It overlaps into the next region, continue
-                    print(f"0x{end:x} > 0x{region_end:x}, continue")
-                    base = region_end
-        return
 
 def test_MemoryRegion():
     mr = MemoryRegion(hierarchy=("top",))
@@ -934,14 +1053,76 @@ def test_MemoryRegion():
     submr.shrink() # Shrink now that we're done adding
     mr.add_item(submr)
     #print(mr)
-    mr.print(4)
+    #mr.print(4)
     copymr = mr.copy()
-    print("==================== Deleting ====================")
+    #print("==================== Deleting ====================")
     mr.remove(submr.base)
-    mr.print(4)
-    print("==================== The Copy ====================")
-    copymr.print(4)
+    #mr.print(4)
+    #print("==================== The Copy ====================")
+    #copymr.print(4)
     return
 
+def test_MemoryRegionStager():
+    mr = MemoryRegionStager(hierarchy=("top",))
+    # Set some keep-out regions
+    mr.keepout(0x100, width=8)
+    widths = [0, 0, 0, 2, 2, 8, 4, 8, 0, 0, 0, 0, 1, 2]
+    for w in widths:
+        mr.add(w)
+        print("Adding {} to staging area".format(w))
+    #mr.sort()
+    # Add a few to specific addresses
+    addr_widths = [(0x40, 4), (0x300, 8)]
+    for addr, w in addr_widths:
+        try:
+            base = mr.add(w, addr=addr)
+            print("Adding {} to 0x{:x}".format(w, base))
+        except Exception as e:
+            print("EXCEPTION: " + str(e))
+    # Create a second memory map
+    submr = MemoryRegionStager(label="foo", hierarchy=("foo",))
+    submr.add(0)
+    submr.add(0)
+    submr.add(4)
+    submr.add(4)
+    submr.add(6)
+    # Create a third memory map
+    subsubmr = MemoryRegionStager(label="bar", hierarchy=("bar",))
+    subsubmr.add(10)
+    # Nest the structure
+    submr.add_item(subsubmr)
+    mr.add_item(submr)
+    mr.resolve()
+    #print(mr)
+    #mr.print(4)
+    copymr = mr.copy()
+    #print("==================== Deleting ====================")
+    mr.remove(submr.base)
+    #mr.print(4)
+    #print("==================== The Copy ====================")
+    #copymr.print(4)
+    return
+
+def doTests():
+    fails = 0
+    tests = (
+        test_Register,
+        test_MemoryRegion,
+        test_MemoryRegionStager,
+    )
+
+    for test in tests:
+        try:
+            test()
+        except Exception as err:
+            print(err)
+            fails += 1
+    if fails == 0:
+        print("PASS")
+    else:
+        print(f"FAIL: count = {fails}")
+    return fails
+
 if __name__ == "__main__":
-    test_MemoryRegion()
+    import sys
+    sys.exit(doTests())
