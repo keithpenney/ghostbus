@@ -1,6 +1,68 @@
 
+from yoparse import get_modname, block_inst, autogenblk
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
+
+
+def test_get_modname():
+    td = {
+        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : "axi_lb",
+        r"$paramod\nco_control\NDACS=s32'00000000000000000000000000000011" : "nco_control",
+    }
+    fail = False
+    for ss, name in td.items():
+        modname = get_modname(ss)
+        if modname != name:
+            print(f"get_modname({ss}) = {modname} != {name}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
+
+def test_block_inst():
+    td = {
+        # yostr: (gen_block, inst_name, index)
+        "gen_foo.inst_bar": ("gen_foo", "inst_bar", None),
+        "gen_foo[3].inst_bar": ("gen_foo", "inst_bar", 3),
+        "inst_foo": (None, None, None),
+        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : (None, None, None),
+        r"$0\baz_generator.top_baz": (None, None, None),
+        r"$0\top_reg[7:0]": (None, None, None),
+        r"$0\foo_generator[3].top_foo_n[3:0]": (None, None, None),
+    }
+    fail = False
+    for ss, expret in td.items():
+        ret = block_inst(ss)
+        for n in range(len(ret)):
+            thisfail = False
+            if ret[n] != expret[n]:
+                fail = True
+                thisfail = True
+            if thisfail:
+                print(f"block_inst({ss}) = {ret} != {expret}")
+    if fail:
+        return 1
+    return 0
+
+
+def test_autogenblk():
+    td = {
+        "genblk0": True,
+        "genblk2": True,
+        "genblk4321": True,
+        "genblk": False,
+        "foo": False,
+    }
+    fail = False
+    for ss, expected in td.items():
+        if autogenblk(ss) != expected:
+            print(f"FAIL: autogenblk({ss}) != {expected}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
 
 def test_bits():
     addr_bits = {
@@ -136,6 +198,9 @@ def test_JSONMaker_shortenNames():
 
 def doStaticTests():
     tests = (
+        test_get_modname,
+        test_block_inst,
+        test_autogenblk,
         test_bits,
         test_MemoryTree_orderDependencies,
         test_WalkDict,

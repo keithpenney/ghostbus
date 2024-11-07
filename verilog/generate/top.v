@@ -2,6 +2,8 @@
 
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUS_top
+  `define GHOSTBUS_baz
+  `define GHOSTBUS_foo
 `endif
 
 module top #(
@@ -21,6 +23,8 @@ localparam FOO_DW = 32;
 localparam FOO_GW = 8;
 localparam FOO_RD = 8;
 
+(* ghostbus *) reg [7:0] top_reg=8'h42;
+
 genvar N;
 generate
   for (N=0; N<FOO_COPIES; N=N+1) begin: foo_generator
@@ -29,29 +33,36 @@ generate
       .DW(FOO_DW),
       .GW(FOO_GW),
       .RD(FOO_RD)
-    ) submod_foo_0 (
+    ) foo (
       .clk(gb_clk)
-      `GHOSTBUS_submod_foo_0
+      `GHOSTBUS_foo
     );
     (* ghostbus *) reg [3:0] top_foo_n = N[3:0];
+    (* ghostbus *) reg [7:0] foo_ram [0:7];
+  end
+endgenerate
+
+genvar M;
+generate
+  for (M=0; M<4; M=M+1) begin
+    (* ghostbus *) reg [3:0] anon_for = M[3:0];
   end
 endgenerate
 
 generate
   if (TOP_BAZ==1) begin: baz_generator
     submod_baz #(
-      .AW(AW),
-      .DW(DW)
-    ) baz_0 (
-      .clk(clk),
-      .demo_sig(foo_reg[0])
-      `GHOSTBUS_submod_foo_baz_0
+      .AW(12),
+      .DW(8)
+    ) baz (
+      .clk(gb_clk),
+      .demo_sig(top_reg[0])
+      `GHOSTBUS_baz
     );
     (* ghostbus *) reg [3:0] top_baz = 4'hc;
+    (* ghostbus *) reg [7:0] baz_ram [0:7];
   end
 endgenerate
-
-(* ghostbus *) reg [7:0] top_reg=8'h42;
 
 `GHOSTBUS_top
 

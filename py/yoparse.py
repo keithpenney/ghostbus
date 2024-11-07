@@ -20,6 +20,7 @@ def srcParse(s):
     filepath, linestart, charstart, lineend, charend = _match.groups()
     return (filepath, int(linestart), int(charstart), int(lineend), int(charend))
 
+
 def ismodule(s):
     restr = r"^\$(\w+)[\$\\]"
     _match = re.search(restr, s)
@@ -30,6 +31,49 @@ def ismodule(s):
             return True
     else:
         # If it gets here, it's probably a module
+        return True
+    return False
+
+
+def isgenerate(inst_name):
+    """Match "gen_block[index].instance" string."""
+    gen_block, inst, index = block_inst(inst_name)
+    if gen_block is None:
+        return False
+    return True
+
+
+def block_inst(inst_name):
+    """
+    If inst_name matches "gen_block[index].instance",
+        return gen_block, instance, index
+    elif inst_name matches "gen_block.instance", 
+        return gen_block, instance, None
+    else:
+        return None, None, None
+    """
+    restr = "([^.$]+)\.(\w+)"
+    reindex = "(\w+)\[(\d+)\]"
+    gen_block = None
+    inst = None
+    index = None
+    _match = re.match(restr, inst_name)
+    if _match:
+        groups = _match.groups()
+        gen_block, inst = groups[:2]
+        imatch = re.match(reindex, gen_block)
+        if imatch:
+            gen_block, index = imatch.groups()
+            index = int(index)
+    return gen_block, inst, index
+
+
+def autogenblk(gen_block):
+    """Yosys lazily gives names to anonymous generate blocks and doesn't detect collisions if you happen
+    to name a block with the same auto-generated internal names assigned by Yosys.
+    Return True if the string 'gen_block' matches Yosys's internal naming convention (else False)."""
+    restr = "genblk(\d+)"
+    if re.match(restr, gen_block):
         return True
     return False
 
@@ -520,17 +564,20 @@ class VParser():
         return True
 
 
-def test_get_modname():
-    td = {
-        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : "axi_lb",
-        r"$paramod\nco_control\NDACS=s32'00000000000000000000000000000011" : "nco_control",
-    }
-    for ss, name in td.items():
-        modname = get_modname(ss)
-        if modname != name:
-            raise Exception(f"get_modname({ss}) = {modname} != {name}")
+def doBrowse():
+    import argparse
+    parser = argparse.ArgumentParser("Browse a JSON AST from a verilog codebase")
+    parser.add_argument("-d", "--depth", default=4, help="Depth to browse from the partselect.")
+    parser.add_argument("-s", "--select", default=None, help="Partselect string.")
+    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parser.add_argument("files", default=None, action="append", nargs="+", help="Source files.")
+    args = parser.parse_args()
+    vp = VParser(args.files[0], top=args.top)
+    if not vp.valid:
+        return False
+    print(vp.strToDepth(int(args.depth), args.select))
     return True
 
 
 if __name__ == "__main__":
-    test_get_modname()
+    doBrowse()

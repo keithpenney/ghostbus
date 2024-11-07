@@ -17,8 +17,6 @@ module submod_foo #(
   `GHOSTBUSPORTS
 );
 
-reg [3:0] foo_reg=0;                            // Non-host-accessible register
-
 (* ghostbus *) reg [GW-1:0] foo_reg=8'h42;  // Host-accessible register (will be auto-decoded)
 (* ghostbus_addr='h40 *) reg [3:0] foo_ram [0:RD-1]; // Host-accessible RAM with pre-defined relative address (0x40)
 

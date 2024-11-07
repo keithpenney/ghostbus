@@ -8,7 +8,8 @@ import re
 from yoparse import VParser, ismodule, get_modname, get_value, \
                     getUnparsedWidthRange, getUnparsedDepthRange, \
                     getUnparsedWidthAndDepthRange, getUnparsedWidth, \
-                    YosysParsingError, getUnparsedWidthRangeType, NetTypes
+                    YosysParsingError, getUnparsedWidthRangeType, NetTypes, \
+                    block_inst, autogenblk
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule
 from decoder_lb import DecoderLB, BusLB, createPortBus
@@ -636,13 +637,21 @@ class GhostBusser(VParser):
             cells = mod_dict.get("cells")
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
-                    if ismodule(inst_name):
+                    gen_block, inst, index = block_inst(inst_name)
+                    if gen_block is None and ismodule(inst_name):
                         attr_dict = inst_dict["attributes"]
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
                         busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                         toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
                         module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
+                    elif gen_block is not None:
+                        if autogenblk(gen_block):
+                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        if index is None:
+                            print(f"Found instance {inst} inside a generate-if block {gen_block}")
+                        else:
+                            print(f"Found instance {inst} inside a generate-for block {gen_block}, index {index}")
             mrs = {}
             # Check for regs
             netnames = mod_dict.get("netnames")
@@ -653,6 +662,15 @@ class GhostBusser(VParser):
             busname_to_subname_map = {}
             if netnames is not None:
                 for netname, net_dict in netnames.items():
+                    gen_block, gen_netname, gen_index = block_inst(netname)
+                    if gen_block is not None:
+                        if autogenblk(gen_block):
+                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        if gen_index is None:
+                            print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
+                        else:
+                            print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
+                        continue
                     attr_dict = net_dict["attributes"]
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
                     # for token, val in token_dict.items():
@@ -715,6 +733,15 @@ class GhostBusser(VParser):
             memories = mod_dict.get("memories")
             if memories is not None:
                 for memname, mem_dict in memories.items():
+                    gen_block, gen_netname, gen_index = block_inst(memname)
+                    if gen_block is not None:
+                        if autogenblk(gen_block):
+                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        if gen_index is None:
+                            print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
+                        else:
+                            print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
+                        continue
                     attr_dict = mem_dict["attributes"]
                     signed = net_dict.get("signed", None)
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
