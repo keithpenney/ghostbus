@@ -1,5 +1,5 @@
 
-from yoparse import get_modname, block_inst, autogenblk
+from yoparse import get_modname, block_inst, autogenblk, _matchForLoop
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
 
@@ -196,6 +196,32 @@ def test_JSONMaker_shortenNames():
     print("PASS")
     return 0
 
+
+def test__matchForLoop():
+    dd = {
+        # loop_string: (loop_index, start, compval, inc_val)
+        "for (N=0;N<4;N=N+1)": ("N", "0", "4", "+1"),
+        "for (N = 0; N < 4; N = N + 1)": ("N", "0", "4", "+1"),
+        "for (MY_LOOP_VAR=(SOME_THIS_NUMBER>>2); MY_LOOP_VAR>0; MY_LOOP_VAR=MY_LOOP_VAR-1)": ("MY_LOOP_VAR", "(SOME_THIS_NUMBER>>2)", "0", "-1"),
+        "for (boop; bop; floop)": (None, None, None, None),
+        # Make sure we get the last match
+        "for (N=0;N<4;N=N+1) for (M=1;M<M_MAX;M=M+M_INC)": ("M", "1", "M_MAX", "+M_INC"),
+    }
+    fail = False
+    for ss, exp in dd.items():
+        res = _matchForLoop(ss)
+        thisfail = False
+        for n in range(len(res)):
+            if res[n] != exp[n]:
+                thisfail = True
+                fail = True
+        if thisfail:
+            print(f"FAIL: _matchForLoop({ss}) = {res} != {exp}")
+    if fail:
+        return 1
+    return 0
+
+
 def doStaticTests():
     tests = (
         test_get_modname,
@@ -226,4 +252,5 @@ def doStaticTests():
 
 if __name__ == "__main__":
     import sys
-    sys.exit(doStaticTests())
+    #sys.exit(doStaticTests())
+    test__matchForLoop()

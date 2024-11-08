@@ -13,35 +13,31 @@ class GBRegister(Register):
     """This class expands on the Register class by including not just its
     resolved aw/dw, but also the unresolved strings used to declare aw/dw
     in the source code."""
+    _attrs = {
+        "range": (None, None),
+        "depth": ('0', '0'),
+        "initval": 0,
+        "strobe": False,
+        "write_strobes": [],
+        "read_strobes": [],
+        "alias": None,
+        "signed": None,
+        "manually_assigned": False,
+        "net_type": None,
+        "busname": None,
+        "genblock": None,
+    }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         #self._rangeStr = None
         #self._depthstr = None
-        self.range = (None, None)
-        self.depth = ('0', '0')
-        self.initval = 0
-        self.strobe = False
-        self.write_strobes = []
-        self.read_strobes = []
-        self.alias = None
-        self.signed = None
-        self.manually_assigned = False
-        self.net_type = None
-        self.busname = None
+        for name, default in self._attrs.items():
+            setattr(self, name, default)
 
     def copy(self):
         ref = super().copy()
-        ref.range = self.range
-        ref.depth = self.depth
-        ref.initval = self.initval
-        ref.strobe = self.strobe
-        ref.write_strobes = self.write_strobes
-        ref.read_strobes = self.read_strobes
-        ref.alias = self.alias
-        ref.signed = self.signed
-        ref.manually_assigned = self.manually_assigned
-        ref.net_type = self.net_type
-        ref.busname = self.busname
+        for name, default in self._attrs.items():
+            setattr(ref, name, getattr(self, name))
         if ref.access == ref.UNSPECIFIED:
             #raise Exception(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
             print(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
@@ -85,18 +81,22 @@ class GBRegister(Register):
 
 # TODO - Combine this class with GBRegister
 class GBMemory(Memory):
+    _attrs = {
+        "_depthStr": None,
+        "range": (None, None),
+        "depth": (None, None),
+        "alias": None,
+        "signed": None,
+        "manually_assigned": False,
+        "busname": None,
+        "access": Memory.RW,
+        "genblock": None,
+    }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         #self._rangeStr = None
-        self._depthStr = None
-        self.range = (None, None)
-        self.depth = (None, None)
-        self.alias = None
-        self.signed = None
-        self.manually_assigned = False
-        self.busname = None
-        # TODO - Is there any reason why this wouldn't be so? Maybe ROM?
-        self.access = self.RW
+        for name, default in self._attrs.items():
+            setattr(self, name, default)
 
     def _readRangeDepth(self):
         #if self._rangeStr is not None:
@@ -117,13 +117,8 @@ class GBMemory(Memory):
 
     def copy(self):
         ref = super().copy()
-        ref.range = self.range
-        ref.depth = self.depth
-        ref.alias = self.alias
-        ref.signed = self.signed
-        ref.manually_assigned = self.manually_assigned
-        ref.busname = self.busname
-        ref.access = self.access
+        for name, default in self._attrs.items():
+            setattr(ref, name, getattr(self, name))
         return ref
 
 

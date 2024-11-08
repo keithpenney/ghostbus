@@ -282,6 +282,41 @@ def _findDepthStr(snippet, offset):
     return depthstr
 
 
+# HACK ALERT!
+def _matchForLoop(ss):
+    """Match the last Verilog for-loop opening statement in the string 'ss'
+    NOTE: This hack only catches simple for-loops.  It's pretty easy to break this if you're trying.
+    I need a proper lexer to do this generically.
+    Return (loop_index, start, stop, inc)"""
+    restr = "for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
+    #_match = re.search(restr, ss)
+    #if _match:
+    _matches = re.findall(restr, ss)
+    if len(_matches) > 0:
+        groups = _matches[-1]
+        #groups = _match.groups()
+        loop_index = groups[0]
+        # We can only understand simple for loops such that loop_index also appears at groups()[2, 5, and 6]
+        for x in (2, 5, 6):
+            if loop_index != groups[x].strip():
+                ms = ss[_match.start(), _match.end()]
+                raise YosysParsingError(f"I'm not smart enough to parse this construct; please simplify it: {ms}")
+        start = groups[1].strip()
+        comp = groups[3]
+        compval = groups[4]
+        inc_op = groups[7]
+        inc_val = groups[8]
+        return (loop_index, start, compval, inc_op+inc_val)
+    return (None, None, None, None)
+
+
+def findForLoop(yosrc):
+    # We want to match the last for-loop in the portion of the string only up to the offset
+    # loop_index, start, comp, inc
+    snippet, offset = _getSourceSnippet(yosrc, size=1024)
+    return _matchForLoop(snippet[:offset])
+
+
 class YosysParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)

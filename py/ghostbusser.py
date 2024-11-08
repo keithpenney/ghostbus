@@ -9,7 +9,7 @@ from yoparse import VParser, ismodule, get_modname, get_value, \
                     getUnparsedWidthRange, getUnparsedDepthRange, \
                     getUnparsedWidthAndDepthRange, getUnparsedWidth, \
                     YosysParsingError, getUnparsedWidthRangeType, NetTypes, \
-                    block_inst, autogenblk
+                    block_inst, autogenblk, findForLoop
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule
 from decoder_lb import DecoderLB, BusLB, createPortBus
@@ -662,6 +662,11 @@ class GhostBusser(VParser):
             busname_to_subname_map = {}
             if netnames is not None:
                 for netname, net_dict in netnames.items():
+                    attr_dict = net_dict["attributes"]
+                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                    # for token, val in token_dict.items():
+                    #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
+                    source = attr_dict.get('src', None)
                     gen_block, gen_netname, gen_index = block_inst(netname)
                     if gen_block is not None:
                         if autogenblk(gen_block):
@@ -670,12 +675,11 @@ class GhostBusser(VParser):
                             print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
                         else:
                             print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
+                            loop_index, start, comp, inc = findForLoop(source)
+                            if loop_index is None:
+                                raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
+                            print(f"  for ({loop_index}={start}; {loop_index}...{comp}; {loop_index}={loop_index}{inc})")
                         continue
-                    attr_dict = net_dict["attributes"]
-                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                    # for token, val in token_dict.items():
-                    #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
-                    source = attr_dict.get('src', None)
                     signed = net_dict.get("signed", None)
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
