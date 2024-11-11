@@ -47,7 +47,7 @@ def block_inst(inst_name):
     """
     If inst_name matches "gen_block[index].instance",
         return gen_block, instance, index
-    elif inst_name matches "gen_block.instance", 
+    elif inst_name matches "gen_block.instance",
         return gen_block, instance, None
     else:
         return None, None, None
@@ -302,12 +302,12 @@ def _matchForLoop(ss):
                 ms = ss[_match.start(), _match.end()]
                 raise YosysParsingError(f"I'm not smart enough to parse this construct; please simplify it: {ms}")
         start = groups[1].strip()
-        comp = groups[3]
-        compval = groups[4]
+        comp_op = groups[3]
+        comp_val = groups[4]
         inc_op = groups[7]
         inc_val = groups[8]
-        return (loop_index, start, compval, inc_op+inc_val)
-    return (None, None, None, None)
+        return (loop_index, start, comp_op, comp_val, inc_op+inc_val)
+    return (None, None, None, None, None)
 
 
 def findForLoop(yosrc):

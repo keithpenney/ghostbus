@@ -232,6 +232,7 @@ def doStaticTests():
         test_WalkDict,
         test_JSONMaker_flatten,
         test_JSONMaker_shortenNames,
+        test__matchForLoop,
     )
     rval = 0
     fails = []
@@ -252,5 +253,4 @@ def doStaticTests():
 
 if __name__ == "__main__":
     import sys
-    #sys.exit(doStaticTests())
-    test__matchForLoop()
+    sys.exit(doStaticTests())

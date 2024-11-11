@@ -32,12 +32,17 @@ class GBRegister(Register):
         #self._rangeStr = None
         #self._depthstr = None
         for name, default in self._attrs.items():
+            if hasattr(default, "copy"):
+                default = default.copy()
             setattr(self, name, default)
 
     def copy(self):
         ref = super().copy()
         for name, default in self._attrs.items():
-            setattr(ref, name, getattr(self, name))
+            val = getattr(self, name)
+            if hasattr(val, "copy"):
+                val = val.copy()
+            setattr(ref, name, val)
         if ref.access == ref.UNSPECIFIED:
             #raise Exception(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
             print(f"copy of {self.name} with access {self.access} results in UNSPECIFIED ref!")
@@ -96,7 +101,18 @@ class GBMemory(Memory):
         super().__init__(*args, **kwargs)
         #self._rangeStr = None
         for name, default in self._attrs.items():
+            if hasattr(default, "copy"):
+                default = default.copy()
             setattr(self, name, default)
+
+    def copy(self):
+        ref = super().copy()
+        for name, default in self._attrs.items():
+            val = getattr(self, name)
+            if hasattr(val, "copy"):
+                val = val.copy()
+            setattr(ref, name, val)
+        return ref
 
     def _readRangeDepth(self):
         #if self._rangeStr is not None:
@@ -115,15 +131,9 @@ class GBMemory(Memory):
             _pass = False
         return _pass
 
-    def copy(self):
-        ref = super().copy()
-        for name, default in self._attrs.items():
-            setattr(ref, name, getattr(self, name))
-        return ref
-
 
 # I don't think this is needed anymore
-class GBMemoryRegion(MemoryRegion):
+class FooGBMemoryRegion(MemoryRegion):
     def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
         super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
         self.bustop = False # FIXME DEPRECATED
@@ -143,30 +153,36 @@ class GBMemoryRegion(MemoryRegion):
 
 
 class GBMemoryRegionStager(MemoryRegionStager):
-    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None, domain=None):
-        super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
-        self.bustop = False
-        self.declared_busses = ()
-        self.implicit_busses = ()
-        self.busname = None
-        self.domain = domain
+    _attrs = {
+        "bustop": False,
+        "declared_busses": (),
+        "implicit_busses": (),
+        "busname": None,
+        "domain": None,
         # A pseudo-domain is one that looks like a bus domain top, but is actually
         # a branch of another domain's tree.
         # If 'pseudo_domain' is not None, it should be the name of an ExternalModule
         # declared in the same scope
-        self.pseudo_domain = None
-        self.toptag = False
+        "pseudo_domain": None,
+        "toptag": False,
+        "genblock": None,
+    }
+    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None, domain=None):
+        super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
+        for name, default in self._attrs.items():
+            if hasattr(default, "copy"):
+                default = default.copy()
+            setattr(self, name, default)
+        self.domain = domain
 
     def copy(self):
-        cp = super().copy()
-        cp.bustop = self.bustop
-        cp.declared_busses = self.declared_busses
-        cp.implicit_busses = self.implicit_busses
-        cp.busname = self.busname
-        cp.domain = self.domain
-        cp.pseudo_domain = self.pseudo_domain
-        cp.toptag = self.toptag
-        return cp
+        ref = super().copy()
+        for name, default in self._attrs.items():
+            val = getattr(self, name)
+            if hasattr(val, "copy"):
+                val = val.copy()
+            setattr(ref, name, val)
+        return ref
 
 
 class ExternalModule():
@@ -232,3 +248,86 @@ class ExternalModule():
         return
 
 
+class GenerateBranch():
+    TYPE_IF  = 0
+    TYPE_FOR = 1
+    def __init__(self, branch_name):
+        self.branch = branch_name
+        self.type = None
+
+class GenerateIf(GenerateBranch):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.type = self.TYPE_IF
+
+    def __str__(self):
+        return f"generate if (): {self.branch}"
+
+class GenerateFor(GenerateBranch):
+    OP_EQ = 0
+    OP_NE = 1
+    OP_GT = 2
+    OP_GE = 3
+    OP_LT = 4
+    OP_LE = 5
+
+    _op_dict = {
+        '=':  OP_EQ,
+        '!=': OP_NE,
+        '>':  OP_GT,
+        '>=': OP_GE,
+        '<':  OP_LT,
+        '<=': OP_LE,
+    }
+
+    INC_ADD = 0x10
+    INC_SUB = 0x11
+    INC_MUL = 0x12
+    INC_DIV = 0x13
+
+    _inc_dict = {
+        '+': INC_ADD,
+        '-': INC_SUB,
+        '*': INC_MUL,
+        '/': INC_DIV,
+    }
+
+    @classmethod
+    def _parseOp(cls, ss):
+        """Parse a '=', '!=', '<', '>', '<=', or '>=' into one of cls.OP_*"""
+        op = cls._op_dict.get(ss.strip())
+        if op is None:
+            raise GhostbusException(f"Unknown boolean operator {ss}")
+        return op
+
+    @classmethod
+    def _parseInc(cls, ss):
+        """Parse '+val', '-val', '*val', or '/val' into (INC_*, val)"""
+        ss = ss.strip()
+        inc = cls._inc_dict.get(ss[0])
+        if inc is None:
+            raise GhostbusException(f"Unknown increment operator {ss}")
+        val = ss[1:]
+        return (inc, val)
+
+    @staticmethod
+    def _get_by_val(_dict, _val, default=None):
+        for key, val in _dict.items():
+            if val == _val:
+                return key
+        return default
+
+    def __init__(self, branch_name, index, init, op, comp, inc):
+        super().__init__(branch_name)
+        self.index = index
+        self.initial = init
+        self.op = self._parseOp(op)
+        self.comp = comp
+        self.inc = self._parseInc(inc)
+        self.type = self.TYPE_FOR
+
+    def __str__(self):
+        _op_str = self._get_by_val(self._op_dict, self.op)
+        _inc_op_str = self._get_by_val(self._inc_dict, self.inc[0])
+        _inc_val = self.inc[1]
+        return f"for ({self.index}={self.initial}; {self.index}{_op_str}{self.comp}; {self.index}={self.index}{_inc_op_str}{_inc_val}): {self.branch}"

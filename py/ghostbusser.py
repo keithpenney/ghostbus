@@ -11,7 +11,7 @@ from yoparse import VParser, ismodule, get_modname, get_value, \
                     YosysParsingError, getUnparsedWidthRangeType, NetTypes, \
                     block_inst, autogenblk, findForLoop
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
-from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule
+from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, GenerateFor, GenerateIf
 from decoder_lb import DecoderLB, BusLB, createPortBus
 from gbexception import GhostbusException, GhostbusNameCollision
 from util import enum, strDict, print_dict, strip_empty, deep_copy
@@ -299,6 +299,13 @@ class MemoryTree(WalkDict):
         self.memories = []
         self.domain_map = {}
         self.toptag_map = {}
+        # This is a map of instances within generate branches.  This should be distributed to child nodes.
+        # What changes if an instance is instantiated within a generate block? The hookup auto-generated code.
+        # So every node needs to know which instances are instantiated within a generate block
+        self.genblock_map = {}
+        # Because of the weirdness of recursive structures, each node will also keep track of whether it's
+        # instantiated within a generate branch as well
+        self.genblock = None
         # Transform whole structure into a MemoryTree
         for key, inst_dict in self._dd.items():
             inst_name = key[0]
@@ -474,6 +481,7 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
+        verbose = True
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
@@ -482,12 +490,16 @@ class MemoryTree(WalkDict):
             for key, node in self.walk():
                 if node is None:
                     print(f"WARNING! node is None! key = {key}")
+                    continue
                 printv(f" $$$$$$$$ Considering {key}: {node.label}")
+                if node._parent is None:
+                    toptag = True
+                    genblock = None
+                else:
+                    toptag = node._parent.toptag_map[node.label]
+                    genblock = node._parent.genblock_map[node.label]
+                node.genblock = genblock
                 if hasattr(node, "memories"):
-                    if node._parent is None:
-                        toptag = True
-                    if node._parent is not None:
-                        toptag = node._parent.toptag_map[node.label]
                     # =========================================================
                     # At this point, a module with a declared bus but no implied bus will have
                     # a MemoryRegion object incorrectly associated with domain 'None'.
@@ -638,20 +650,26 @@ class GhostBusser(VParser):
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
                     gen_block, inst, index = block_inst(inst_name)
-                    if gen_block is None and ismodule(inst_name):
+                    generate = None
+                    if gen_block is not None:
+                        if autogenblk(gen_block):
+                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        if gen_index is None:
+                            print(f"Found instance {inst} inside a generate-if block {gen_block}")
+                            generate = GenerateIf(gen_block)
+                        else:
+                            print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
+                            generate = parseForLoop(gen_block, source)
+                            if generate is None:
+                                raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
+                        print(generate)
+                    if ismodule(inst_name):
                         attr_dict = inst_dict["attributes"]
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
                         busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                         toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
-                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag}
+                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
-                    elif gen_block is not None:
-                        if autogenblk(gen_block):
-                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
-                        if index is None:
-                            print(f"Found instance {inst} inside a generate-if block {gen_block}")
-                        else:
-                            print(f"Found instance {inst} inside a generate-for block {gen_block}, index {index}")
             mrs = {}
             # Check for regs
             netnames = mod_dict.get("netnames")
@@ -668,18 +686,19 @@ class GhostBusser(VParser):
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
                     gen_block, gen_netname, gen_index = block_inst(netname)
+                    generate = None
                     if gen_block is not None:
                         if autogenblk(gen_block):
                             print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                         if gen_index is None:
                             print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
+                            generate = GenerateIf(gen_block)
                         else:
                             print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
-                            loop_index, start, comp, inc = findForLoop(source)
-                            if loop_index is None:
+                            generate = parseForLoop(gen_block, source)
+                            if generate is None:
                                 raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
-                            print(f"  for ({loop_index}={start}; {loop_index}...{comp}; {loop_index}={loop_index}{inc})")
-                        continue
+                        print(generate)
                     signed = net_dict.get("signed", None)
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
@@ -707,6 +726,7 @@ class GhostBusser(VParser):
                         reg.alias = alias
                         reg.signed = signed
                         reg.busname = busname
+                        reg.genblock = generate
                         # print("{} gets initval 0x{:x}".format(netname, initval))
                         if mrs.get(busname, None) is None:
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
@@ -738,14 +758,19 @@ class GhostBusser(VParser):
             if memories is not None:
                 for memname, mem_dict in memories.items():
                     gen_block, gen_netname, gen_index = block_inst(memname)
+                    generate = None
                     if gen_block is not None:
                         if autogenblk(gen_block):
                             print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                         if gen_index is None:
                             print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
+                            generate = GenerateIf(gen_block)
                         else:
                             print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
-                        continue
+                            generate = parseForLoop(gen_block, source)
+                            if generate is None:
+                                raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
+                        print(generate)
                     attr_dict = mem_dict["attributes"]
                     signed = net_dict.get("signed", None)
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
@@ -762,6 +787,7 @@ class GhostBusser(VParser):
                         mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source)
                         mem.signed = signed
                         mem.busname = busname
+                        mem.genblock = generate
                         if mrs.get(busname, None) is None:
                             module_name = get_modname(mod_hash)
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
@@ -918,8 +944,6 @@ class GhostBusser(VParser):
         #self._ext_modules = {}
         #ghostbus = self._top_bus
         ghostbus = self.getBusDict()
-        special_mod_hash = None # FIXME
-        special_busname = None # FIXME
         for module, data in self._ext_dict.items():
             busses = self._resolveExtModule(module, data)
             #self._ext_modules[module] = []
@@ -944,8 +968,6 @@ class GhostBusser(VParser):
                         if mr.label == module and mr.domain == extinst.busname:
                             # I need to not just ensure I'm adding to the right module, but also the right domain!
                             mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
-                            special_mod_hash = mod_hash
-                            special_busname = busname
                             printd(f"  added {extinst.name} to MemoryRegion {mr.label} in domain {mr.domain}")
                             added = True
                             break
@@ -1100,6 +1122,7 @@ class GhostBusser(VParser):
             printd(f"{module_name} declares insts: {[key for key in insts.keys()]}")
             memtree_node.domain_map = {inst_name: insts[inst_name]["busname"] for inst_name in insts.keys()}
             memtree_node.toptag_map = {inst_name: insts[inst_name]["toptag"] for inst_name in insts.keys()}
+            memtree_node.genblock_map = {inst_name: insts[inst_name]["generate"] for inst_name in insts.keys()}
             mrs = instdict.get("memory")
             busses_explicit = instdict.get("explicit_busses", [])
             # NOTE: Redundant 'declared_busses' is currently stored and used in both the node and each of its
@@ -1298,6 +1321,13 @@ def update_without_collision(old_dict, new_dict):
             raise GhostbusNameCollision(err)
     old_dict.update(new_dict)
     return
+
+
+def parseForLoop(branch_name, yosrc):
+    loop_index, start, comp_op, comp_val, inc = findForLoop(yosrc)
+    if loop_index is None:
+        return None
+    return GenerateFor(branch_name, loop_index, start, comp_op, comp_val, inc)
 
 
 def handleGhostbus(args):

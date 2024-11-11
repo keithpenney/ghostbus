@@ -449,6 +449,10 @@ class DecoderLB():
                     break
             if start is None:
                 raise Exception(f"Failed to find start address for {key}, {node.label}")
+            if hasattr(node, "genblock"):
+                if node.genblock is not None:
+                    print(f"Skipping DecoderDomainLB {node.label} for now since we haven't learned how to handle generate blocks yet")
+                    continue
             self.domains[domain].add_submod(self.__class__(node, ghostbusses, self.GhostbusPortBus), start)
 
     def _clearDef(self, dest_dir):
@@ -825,6 +829,10 @@ class DecoderDomainLB():
 
     def _parseMemoryRegion(self, memregion):
         for start, stop, ref in memregion.get_entries():
+            if hasattr(ref, "genblock"):
+                if ref.genblock is not None:
+                    print(f"Skipping {ref.name} for now since we haven't learned how to handle generate blocks yet")
+                    continue
             if hasattr(ref, "access"):
                 if ref.access & ref.READ:
                     self._no_reads = False
@@ -847,6 +855,8 @@ class DecoderDomainLB():
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal
         defined."""
+        print(f"{self.name}.check_bus(): self.ghostbus = {self.ghostbus.name};")
+        #print(self.ghostbus)
         for csr in self.csrs:
             if csr.strobe or (len(csr.write_strobes) > 0):
                 if self.ghostbus["wstb"] is None:
@@ -861,6 +871,7 @@ class DecoderDomainLB():
                             "you can define it to also be the 'wstb' as in e.g.:\n" + \
                             "  (* ghostbus_port='wstb, we' *) wire wen;"
                     raise Exception(serr)
+            print(f"len(csr.read_strobes) = {len(csr.read_strobes)}")
             if len(csr.read_strobes) > 0:
                 if self.ghostbus["rstb"] is None:
                     strobe_name = csr.read_strobes[0]
