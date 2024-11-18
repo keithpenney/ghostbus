@@ -56,6 +56,7 @@ assign gb_wen = lb_write;
 assign gb_rstb = lb_rstb;
 
 // =========== Stimulus =============
+`ifdef HAND_ROLLED
 reg [LB_ADW-1:0] xact_addr=0;
 localparam N_ADDRS = 46;
 wire [N_ADDRS*LB_ADW-1:0] xact_addrs = {
@@ -88,6 +89,7 @@ reg [31:0] xact_rvals [0:N_ADDRS-1];
 
 reg [31:0] read_result=0;
 integer N_XACT=0;
+reg PASS=1'b1;
 initial begin
   #(4*TICK) $display("First Read Loop: Read initial values");
   for (N_XACT=0; N_XACT<N_ADDRS; N_XACT=N_XACT+1) begin
@@ -103,7 +105,8 @@ initial begin
     #(4*TICK) lb_read_task(xact_addr, read_result);
     //$display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
     if (read_result != xact_rvals[N_XACT]) begin
-      $display("    WARNING: 0x%x != 0x%x", read_result, xact_rvals[N_XACT]);
+      $display("    ERROR: 0x%x != 0x%x", read_result, xact_rvals[N_XACT]);
+      PASS <= 1'b0;
     end
   end
 
@@ -120,198 +123,24 @@ initial begin
     //$display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
     if (read_result != xact_wvals[(N_XACT+1)*32-1-:32]) begin
       $display("    ERROR: 0x%x != 0x%x", read_result, xact_wvals[(N_XACT+1)*32-1-:32]);
+      PASS <= 1'b0;
     end
   end
 
-/*
-  xact_addr = 0;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 1;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 4;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 5;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 6;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 7;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 8;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 9;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'ha;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'hb;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'hc;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'hd;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'he;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'hf;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h20;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h21;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h22;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h23;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h24;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h25;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h26;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h27;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h28;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h29;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h2a;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h2b;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h2c;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h2d;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h2e;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h2f;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h30;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h31;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h32;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h33;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h34;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h35;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h36;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h37;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h38;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h39;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h3a;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h3b;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h3c;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h3d;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h3e;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-
-  xact_addr = 'h3f;
-  #(4*TICK) lb_read_task(xact_addr, read_result);
-  $display("addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
-  */
-
-
-  $display("Done");
+  if (PASS) begin
+    $display("PASS");
+    $finish(0);
+  end else begin
+    $display("FAIL");
+    $stop(0);
+  end
+end
+`else
+initial begin
+  $display("TODO: ghostbus support testbench");
   $finish(0);
 end
+
+`endif
 
 endmodule

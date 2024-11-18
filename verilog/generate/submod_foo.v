@@ -36,7 +36,18 @@ submod_baz #(
 ) baz_0 (
   .clk(clk),
   .demo_sig(foo_reg[0])
+  `ifdef HAND_ROLLED
+  // TODO
+  ,.GBPORT_clk(1'b0) // input
+  ,.GBPORT_addr(24'h000000) // input [23:0]
+  ,.GBPORT_dout(32'h00000000) // input [31:0]
+  ,.GBPORT_din() // output [31:0]
+  ,.GBPORT_we(1'b0) // input
+  ,.GBPORT_wstb(1'b0) // input
+  ,.GBPORT_rstb(1'b0) // input
+  `else
   `GHOSTBUS_submod_foo_baz_0
+  `endif
 );
 
 submod_bar #(
