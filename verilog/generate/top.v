@@ -4,6 +4,8 @@
   `define GHOSTBUS_top
   `define GHOSTBUS_top_baz
   `define GHOSTBUS_top_foo
+  `define GHOSTBUS_foo_generator
+  `define GHOSTBUS_baz_generator
 `endif
 
 module top #(
@@ -73,12 +75,20 @@ reg  [31:0] local_din=0;
 reg [3:0] foo_generator_top_foo_n_r [0:FOO_COPIES-1];
 reg [3:0] foo_generator_top_foo_n_w [0:FOO_COPIES-1];
 
-reg [3:0] baz_generator_top_baz_w=0;
-reg [3:0] baz_generator_top_baz_r=0;
+reg [3:0] baz_generator_top_baz_w;
+reg [3:0] baz_generator_top_baz_r;
 
 wire [FOO_COPIES-1:0] addrhit_foo_ram;
 localparam FOO_RAM_AW = $clog2(7+1);
 wire [(FOO_COPIES*8)-1:0] foo_generator_foo_ram_r;
+
+wire [7:0] baz_generator_baz_ram_r;
+localparam BAZ_RAM_AW = $clog2(7+1);
+wire addrhit_baz_ram = gb_addr[23:3] == 21'h000001; // 0x8-0xf
+
+// din routing
+assign gb_rdata = en_local ? local_din :
+                32'h00000000;
 
 always @(posedge gb_clk) begin
   // local writes
@@ -96,7 +106,26 @@ always @(posedge gb_clk) begin
   end // if (en_local & gb_wen)
   // local reads
   if (en_local & ~gb_wen) begin
+    local_din <= 0;
     // No rams
+    // RAM reads
+    // TODO - This needs to be in a for loop so it's properly parameterized to FOO_COPIES
+    if (addrhit_foo_ram[0]) begin
+      //assign foo_generator_foo_ram_r[((N+1)*8)-1-:8] = foo_ram[gb_addr[FOO_RAM_AW-1:0]];
+      //local_din <= {{32-3+1{1'b0}}, foo_ram[GBPORT_addr[FOO_RAM_AW-1:0]]};
+      local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((0+1)*8)-1-:8]};
+    end else if (addrhit_foo_ram[1]) begin
+      local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((1+1)*8)-1-:8]};
+    end else if (addrhit_foo_ram[2]) begin
+      local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((2+1)*8)-1-:8]};
+    end else if (addrhit_foo_ram[3]) begin
+      local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((3+1)*8)-1-:8]};
+    end
+
+    if (addrhit_baz_ram) begin
+      local_din <= {{32-(7+1){1'b0}}, baz_generator_baz_ram_r};
+    end
+
     // CSR reads
     casez (gb_addr[5:0])
       6'h00: local_din <= {{32-(7+1){1'b0}}, top_reg};
@@ -105,7 +134,7 @@ always @(posedge gb_clk) begin
       6'h05: local_din <= {{32-(3+1){1'b0}}, foo_generator_top_foo_n_r[1]};
       6'h06: local_din <= {{32-(3+1){1'b0}}, foo_generator_top_foo_n_r[2]};
       6'h07: local_din <= {{32-(3+1){1'b0}}, foo_generator_top_foo_n_r[3]};
-      default: local_din <= 32'h00000000;
+      //default: local_din <= 32'h00000000;
     endcase
   end // if (en_local & ~gb_wen)
 end
@@ -122,29 +151,39 @@ wire [FOO_COPIES-1:0] addrhit_foo;
 `endif
 // ===========================================================================
 
+integer RAM_N=0;
 genvar N;
 generate
   for (N=0; N<FOO_COPIES; N=N+1) begin: foo_generator
-    (* ghostbus *) reg [3:0] top_foo_n = N[3:0];
+    (* ghostbus *) reg [3:0] top_foo_n = 4'hc;// N[3:0];
     (* ghostbus *) reg [7:0] foo_ram [0:7];
+    // Preload some content in foo_ram so we know if we're reading it
+    initial begin
+      for (RAM_N=0; RAM_N<8; RAM_N=RAM_N+1) begin
+        foo_ram[RAM_N] = (N[3:0]<<4) | RAM_N[3:0];
+      end
+    end
 `ifdef HAND_ROLLED
     // Submodule foo
-    assign addrhit_foo[N] = gb_addr[23:8] = 16'h00001 + N[15:0];
+    assign addrhit_foo[N] = gb_addr[23:8] == 16'h0001 + N[15:0];
     assign GBPORT_we_foo[N] = gb_wen & addrhit_foo[N];
     assign GBPORT_wstb_foo[N] = gb_wen & addrhit_foo[N];
     assign GBPORT_rstb_foo[N] = gb_rstb & addrhit_foo[N];
 
     // RAM foo_ram
-    assign addrhit_foo_ram[N] = gb_addr[23:3] = 21'h000004 + N[20:0];
-    assign foo_generator_foo_ram_r[(N*8)-1-:8] = foo_ram[gb_addr[FOO_RAM_AW-1:0]];
-    always @(gb_clk) begin
-      if (addrhit_foo_ram[N]) begin
+    assign addrhit_foo_ram[N] = gb_addr[23:3] == 21'h000004 + N[20:0];
+    assign foo_generator_foo_ram_r[((N+1)*8)-1-:8] = foo_ram[gb_addr[FOO_RAM_AW-1:0]];
+    always @(posedge gb_clk) begin
+      if (addrhit_foo_ram[N] & gb_wen) begin
         foo_ram[gb_addr[FOO_RAM_AW-1:0]] <= gb_wdata[7:0];
       end
     end
 
     // CSR top_foo_n
-    always @(*) begin
+    initial begin
+      foo_generator_top_foo_n_w[N] = top_foo_n;
+    end
+    always @(top_foo_n or foo_generator_top_foo_n_w[N]) begin
       foo_generator_top_foo_n_r[N] <= top_foo_n;
       top_foo_n <= foo_generator_top_foo_n_w[N];
     end
@@ -162,7 +201,7 @@ generate
       ,.GBPORT_clk(GBPORT_clk_foo) // input
       ,.GBPORT_addr(GBPORT_addr_foo) // input [23:0]
       ,.GBPORT_dout(GBPORT_dout_foo) // input [31:0]
-      ,.GBPORT_din(GBPORT_din_foo[(N*32)-1-:32]) // output [31:0]
+      ,.GBPORT_din(GBPORT_din_foo[((N+1)*32)-1-:32]) // output [31:0]
       ,.GBPORT_we(GBPORT_we_foo[N]) // input
       ,.GBPORT_wstb(GBPORT_wstb_foo[N]) // input
       ,.GBPORT_rstb(GBPORT_rstb_foo[N]) // input
@@ -187,12 +226,29 @@ generate
       `GHOSTBUS_top_baz
 `endif
     );
-    (* ghostbus *) reg [3:0] top_baz = 4'hc;
+    (* ghostbus *) reg [3:0] top_baz = 4'he;
     (* ghostbus *) reg [7:0] baz_ram [0:7];
+    // Preload some content in foo_ram so we know if we're reading it
+    initial begin
+      for (RAM_N=0; RAM_N<8; RAM_N=RAM_N+1) begin
+        baz_ram[RAM_N] = (RAM_N[3:0] << 4) | 4'hb;
+      end
+    end
 `ifdef HAND_ROLLED
-    always @(*) begin
+    initial begin
+      baz_generator_top_baz_w = top_baz;
+    end
+    always @(top_baz or baz_generator_top_baz_w) begin
       top_baz <= baz_generator_top_baz_w;
       baz_generator_top_baz_r <= top_baz;
+    end
+
+    // RAM baz_ram
+    assign baz_generator_baz_ram_r = baz_ram[gb_addr[BAZ_RAM_AW-1:0]];
+    always @(posedge gb_clk) begin
+      if (addrhit_baz_ram & gb_wen) begin
+        baz_ram[gb_addr[BAZ_RAM_AW-1:0]] <= gb_wdata[7:0];
+      end
     end
 `else
     `GHOSTBUS_baz_generator

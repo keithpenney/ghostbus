@@ -19,7 +19,6 @@ $(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json memory_map.vh: $(GHOSTBUS_SOUR
 	mkdir -p $(AUTOGEN_DIR)
 	$(PYTHON) $(PY_DIR)/ghostbusser.py --live --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) --flat --mangle $(ignore_args) $^ --map memory_map.vh
 
-
 ICARUS_SUFFIX =
 VERILOG = iverilog$(ICARUS_SUFFIX) -Wall -Wno-macro-redefinition
 VG_ALL = -DSIMULATE
@@ -30,9 +29,13 @@ VVP = vvp$(ICARUS_SUFFIX) -N
 VVP_FLAGS = ${VVP_FLAGS_$@}
 VERILOG_CHECK = $(VVP) $< $(VVP_FLAGS)
 
-top_tb: top_tb.v $(GHOSTBUS_SOURCES) memory_map.vh
+# memory_map.vh
+
+VFLAGS_top_tb = -DHAND_ROLLED
+top_tb: top_tb.v $(GHOSTBUS_SOURCES)
 	$(VERILOG_TB)
 
+VVP_FLAGS_top_check=+vcd
 %_check: %_tb
 	$(VERILOG_CHECK)
 

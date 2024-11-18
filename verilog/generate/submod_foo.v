@@ -14,7 +14,17 @@ module submod_foo #(
   parameter RD = 8
 ) (
   input clk
+  `ifdef HAND_ROLLED
+  ,input  GBPORT_clk
+  ,input [23:0] GBPORT_addr
+  ,input [31:0] GBPORT_dout
+  ,output [31:0] GBPORT_din
+  ,input  GBPORT_we
+  ,input  GBPORT_wstb
+  ,input  GBPORT_rstb
+  `else
   `GHOSTBUSPORTS
+  `endif
 );
 
 (* ghostbus *) reg [GW-1:0] foo_reg=8'h42;  // Host-accessible register (will be auto-decoded)
