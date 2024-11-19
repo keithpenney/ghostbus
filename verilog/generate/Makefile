@@ -39,6 +39,9 @@ VVP_FLAGS_top_check=+vcd
 %_check: %_tb
 	$(VERILOG_CHECK)
 
+.PHONY: test
+test: top_check
+
 CLEANS=top_tb memory_map.vh
 
 .PHONY: clean

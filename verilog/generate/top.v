@@ -4,8 +4,8 @@
   `define GHOSTBUS_top
   `define GHOSTBUS_top_baz
   `define GHOSTBUS_top_foo
-  `define GHOSTBUS_foo_generator
-  `define GHOSTBUS_baz_generator
+  `define GHOSTBUS_top_foo_generator
+  `define GHOSTBUS_top_baz_generator
 `endif
 
 module top #(
@@ -96,12 +96,15 @@ integer AUTOGEN_INDEX=0;
 always @(posedge gb_clk) begin
   // local writes
   if (en_local & gb_wen) begin
-    // No rams
+    // RAM writes
+    // Generate-For RAM writes are handled within their generate block
     // CSR writes
     casez (gb_addr[5:0])
       6'h00: top_reg <= gb_wdata[7:0];
       6'h01: baz_generator_top_baz_w <= gb_wdata[3:0];
     endcase
+    // Generate-For CSRs
+    // foo_generator.top_foo_n
     for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
       if (gb_addr[5:0] == (FOO_GENERATOR_TOP_FOO_N_BASE[5:0] | AUTOGEN_INDEX[5:0])) begin
         foo_generator_top_foo_n_w[AUTOGEN_INDEX] <= gb_wdata[3:0];
@@ -111,14 +114,17 @@ always @(posedge gb_clk) begin
   // local reads
   if (en_local & ~gb_wen) begin
     local_din <= 0;
-    // No rams
     // RAM reads
+    // Generate-For RAMs
+    // foo_generator.foo_ram
     for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
       if (addrhit_foo_ram[AUTOGEN_INDEX]) begin
         local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((AUTOGEN_INDEX+1)*8)-1-:8]};
       end
     end
 
+    // baz_generator.baz_ram
+    // (same as non-generate RAM, except with baz_generator_baz_ram_r)
     if (addrhit_baz_ram) begin
       local_din <= {{32-(7+1){1'b0}}, baz_generator_baz_ram_r};
     end
@@ -129,10 +135,11 @@ always @(posedge gb_clk) begin
       6'h01: local_din <= {{32-(3+1){1'b0}}, baz_generator_top_baz_r};
       //default: local_din <= 32'h00000000;
     endcase
+    // Generate-For CSRs
+    // foo_generator.top_foo_n
     for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
       if (gb_addr[5:0] == (FOO_GENERATOR_TOP_FOO_N_BASE[5:0] | AUTOGEN_INDEX[5:0])) begin
         local_din <= {{32-(3+1){1'b0}}, foo_generator_top_foo_n_r[AUTOGEN_INDEX]};
-        //foo_generator_top_foo_n_w[AUTOGEN_INDEX] <= gb_wdata[3:0];
       end
     end
 
@@ -202,7 +209,7 @@ generate
       top_foo_n <= foo_generator_top_foo_n_w[N];
     end
 `else
-    `GHOSTBUS_foo_generator
+    `GHOSTBUS_top_foo_generator
 `endif
     submod_foo #(
       .AW(FOO_AW),
@@ -272,7 +279,7 @@ generate
       end
     end
 `else
-    `GHOSTBUS_baz_generator
+    `GHOSTBUS_top_baz_generator
 `endif
   end
 endgenerate

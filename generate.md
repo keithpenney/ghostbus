@@ -34,3 +34,51 @@ code that is properly parameterized to use the minimum address space in both cas
 So the consequence for __ghostbus__ is that each instance will occupy the size of the largest instance.  In the
 previous example that means, `foo_0` will occupy the same memory as `foo_1` though the portion of memory representing
 loop iterations 8-15 would be unavailable (empty).
+
+## Macros
+By necessity, some of the auto-generated decoding code needs to be inside the generate block to reach the nets only
+available within the block scope.  Thus, an additional macro is created for every block.
+
+### Macro Naming
+Because of the above need to put auto-generated code inside each generate block, we need every block to be named
+(or risk not getting the code in the right place). I don't think that Verilog enforces the rule that a block scope
+identifier cannot collide with the instance name of a submodule, but I want to respect this rule so we don't need
+to create even more mangled macro names.
+
+Thus, the macro name convention will be (until it proves an issue) the same as that for submodule instances:
+`` `GHOSTBUS_parentmodname_blockname`` where `blockname` is the block scope identifier.
+
+I also don't know if Verilog enforces the rule that instance names within a block can't collide with instance names
+outside of the block, but I'm going to enforce that rule until it proves an issue (once again to avoid adding
+complexity to the macro names).  Thus, instantiating a module within a generate block is the same as in top-level
+scope.
+
+```verilog
+module foo;
+
+// Top-level decoding logic
+`GHOSTBUS_foo
+
+generate
+  for (N=0; N<NMAX; N=N+1) begin: my_block
+
+    // Block-scope decoding logic
+    `GHOSTBUS_foo_my_block
+
+    // Instances inside the generate use the same macro name convention as those outside
+    bar loopy_bar (
+      .clk(clk)
+      `GHOSTBUS_foo_loopy_bar
+    );
+
+  end
+endgenerate
+
+// Thus, we can have instances inside the blocks and outside as well
+bar top_bar (
+  .clk(clk)
+  `GHOSTBUS_foo_top_bar
+);
+
+endmodule
+```
