@@ -22,7 +22,9 @@ class GBRegister(Register):
         "read_strobes": [],
         "alias": None,
         "signed": None,
+        # TODO - Can I get rid of "manually_assigned"?
         "manually_assigned": False,
+        "manual_addr": None,
         "net_type": None,
         "busname": None,
         "genblock": None,
@@ -92,7 +94,9 @@ class GBMemory(Memory):
         "depth": (None, None),
         "alias": None,
         "signed": None,
+        # TODO - Can I get rid of "manually_assigned"?
         "manually_assigned": False,
+        "manual_addr": None,
         "busname": None,
         "access": Memory.RW,
         "genblock": None,
@@ -130,26 +134,6 @@ class GBMemory(Memory):
         else:
             _pass = False
         return _pass
-
-
-# I don't think this is needed anymore
-class FooGBMemoryRegion(MemoryRegion):
-    def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None):
-        super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
-        self.bustop = False # FIXME DEPRECATED
-        self.declared_busses = ()
-        self.implicit_busses = ()
-        self.named_bus_insts = ()
-        self.busname = None
-
-    def copy(self):
-        cp = super().copy()
-        cp.bustop = self.bustop
-        cp.declared_busses = self.declared_busses
-        cp.implicit_busses = self.implicit_busses
-        cp.named_bus_insts = self.named_bus_insts
-        cp.busname = self.busname
-        return cp
 
 
 class GBMemoryRegionStager(MemoryRegionStager):

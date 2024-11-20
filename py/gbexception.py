@@ -11,3 +11,8 @@ class GhostbusNameCollision(GhostbusException):
 class GhostbusFeatureRequest(GhostbusException):
     def __init__(self, s):
         super().__init__("Ghostbus Unsupported Feature: " + s)
+
+class GhostbusInternalException(Exception):
+    def __init__(self, s):
+        super().__init__("**** Internal Ghostbus Error (broken tool)****: " + s)
+

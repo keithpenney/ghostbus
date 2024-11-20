@@ -63,3 +63,15 @@ def deep_copy(dd):
         else:
             cp[key] = val
     return cp
+
+def check_complete_indices(ll):
+    """Ensure that the list 'll' is identical to [x for x in range(len(ll))]
+    """
+    llc = ll.copy()
+    llc.sort()
+    comp = [x for x in range(len(llc))]
+    for n in range(len(llc)):
+        if comp[n] != llc[n]:
+            return False
+    return True
+

@@ -2,6 +2,7 @@
 from yoparse import get_modname, block_inst, autogenblk, _matchForLoop
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
+from util import check_complete_indices
 
 
 def test_get_modname():
@@ -223,6 +224,27 @@ def test__matchForLoop():
     return 0
 
 
+def test_check_complete_indices():
+    dd = (
+        # Indices, is_complete
+        ([4, 5, 3, 2, 1, 0], True),
+        ([4, 1, 3, 2, 0], True),
+        ([1, 3, 2, 4], False),
+        ([0], True),
+        (["0"], False),
+        ([1], False),
+    )
+    fail = False
+    for ll, exp in dd:
+        res = check_complete_indices(ll)
+        if res != exp:
+            print(f"FAIL: check_complete_indices({ll}) = {res} != {exp}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
+
 def doStaticTests():
     tests = (
         test_get_modname,
@@ -234,6 +256,7 @@ def doStaticTests():
         test_JSONMaker_flatten,
         test_JSONMaker_shortenNames,
         test__matchForLoop,
+        test_check_complete_indices,
     )
     rval = 0
     fails = []

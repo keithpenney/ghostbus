@@ -14,7 +14,7 @@ from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, GenerateFor, GenerateIf
 from decoder_lb import DecoderLB, BusLB, createPortBus
 from gbexception import GhostbusException, GhostbusNameCollision
-from util import enum, strDict, print_dict, strip_empty, deep_copy
+from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices
 
 # TODO: Multi-ghostbus hierarchy parsing
 #   1. If nbusses > 1:
@@ -481,7 +481,7 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
-        verbose = True
+        verbose = False
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
@@ -621,6 +621,9 @@ class MemoryTree(WalkDict):
 
 
 class GhostBusser(VParser):
+    _REFTYPE_CSR = 1
+    _REFTYPE_RAM = 2
+    _REFTYPE_EXT = 3
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.memory_map = None
@@ -671,6 +674,7 @@ class GhostBusser(VParser):
                         module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             mrs = {}
+            self._resetGenerates()
             # Check for regs
             netnames = mod_dict.get("netnames")
             entries = []
@@ -688,17 +692,16 @@ class GhostBusser(VParser):
                     gen_block, gen_netname, gen_index = block_inst(netname)
                     generate = None
                     if gen_block is not None:
-                        if autogenblk(gen_block):
-                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                         if gen_index is None:
                             print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
+                            if autogenblk(gen_block):
+                                print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                         else:
-                            print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
-                            generate = parseForLoop(gen_block, source)
-                            if generate is None:
-                                raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
-                        print(generate)
+                            print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
+                            #generate = parseForLoop(gen_block, source)
+                            #if generate is None:
+                            #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                     signed = net_dict.get("signed", None)
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
@@ -727,15 +730,19 @@ class GhostBusser(VParser):
                         reg.signed = signed
                         reg.busname = busname
                         reg.genblock = generate
-                        # print("{} gets initval 0x{:x}".format(netname, initval))
-                        if mrs.get(busname, None) is None:
-                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                        reg.manual_addr = addr
                         if addr is not None:
                             reg.manually_assigned = True
-                        # This may not be the best place for this step, but at least it gets done.
-                        reg._readRangeDepth()
-                        mrs[busname].add(width=0, ref=reg, addr=addr)
+                        if gen_block is not None and gen_index is not None:
+                            # Only handling generate-for's.  generate-if's are easier
+                            self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
+                        else:
+                            # This may not be the best place for this step, but at least it gets done.
+                            reg._readRangeDepth()
+                            if mrs.get(busname, None) is None:
+                                mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                                printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                            mrs[busname].add(width=0, ref=reg, addr=addr)
                     elif exts is not None:
                         dw = len(net_dict['bits'])
                         if module_name not in handledExtModules:
@@ -759,6 +766,7 @@ class GhostBusser(VParser):
                 for memname, mem_dict in memories.items():
                     gen_block, gen_netname, gen_index = block_inst(memname)
                     generate = None
+                    source = mem_dict['attributes']['src']
                     if gen_block is not None:
                         if autogenblk(gen_block):
                             print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
@@ -766,11 +774,10 @@ class GhostBusser(VParser):
                             print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
                         else:
-                            print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index}")
-                            generate = parseForLoop(gen_block, source)
-                            if generate is None:
-                                raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
-                        print(generate)
+                            print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
+                            #generate = parseForLoop(gen_block, source)
+                            #if generate is None:
+                            #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                     attr_dict = mem_dict["attributes"]
                     signed = net_dict.get("signed", None)
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
@@ -780,7 +787,6 @@ class GhostBusser(VParser):
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
                     busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if access is not None:
-                        source = mem_dict['attributes']['src']
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
@@ -788,15 +794,20 @@ class GhostBusser(VParser):
                         mem.signed = signed
                         mem.busname = busname
                         mem.genblock = generate
-                        if mrs.get(busname, None) is None:
-                            module_name = get_modname(mod_hash)
-                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
+                        mem.manual_addr = addr
                         if addr is not None:
                             mem.manually_assigned = True
-                        # This may not be the best place for this step, but at least it gets done.
-                        mem._readRangeDepth()
-                        mrs[busname].add(width=aw, ref=mem, addr=addr)
+                        if gen_block is not None and gen_index is not None:
+                            # Only handling generate-for's.  generate-if's are easier
+                            self._handleGenerates(self._REFTYPE_RAM, mem, source, module_name)
+                        else:
+                            if mrs.get(busname, None) is None:
+                                module_name = get_modname(mod_hash)
+                                mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                                printd("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
+                            # This may not be the best place for this step, but at least it gets done.
+                            mem._readRangeDepth()
+                            mrs[busname].add(width=aw, ref=mem, addr=addr)
             for busname, mr in mrs.items():
                 for strobe_name, reg_type in associated_strobes.items():
                     associated_reg, _read = reg_type
@@ -815,6 +826,11 @@ class GhostBusser(VParser):
                 # Any ghostmod has an implied ghostbus coming in
                 if None not in busnames_implicit:
                     busnames_implicit.append(None)
+            generates = self._resolveGenerates()
+            for ref in generates:
+                # TODO - ExternalModule has no 'manual_addr', but I haven't yet figured out how to handle extmods
+                #        instantiated within a generate block anyhow.
+                mrs[ref.busname].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
             module_info[mod_hash]["memory"] = mrs
             module_info[mod_hash]["explicit_busses"] = busnames_explicit
             module_info[mod_hash]["implicit_busses"] = busnames_implicit
@@ -950,15 +966,6 @@ class GhostBusser(VParser):
             for instname, bus in busses.items():
                 extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
                 printd(f"  Resolving ExternalModule {instname}")
-                #if bus.sub is not None:
-                #    print(f"######################## {extinst.name}. I need to get my 'AW' from a ghostbus named {bus.sub}")
-                #    sub_bus = self.findBusByName(bus.sub)
-                #    if sub_bus is not None:
-                #        print(f"$$$$$$$$$$$$$$$$$ Found the sub_bus {sub_bus.name}")
-                #        extinst.sub_bus = sub_bus
-                #        extinst.sub_mr = GBMemoryRegionStager(label=sub_bus.name, hierarchy=(sub_bus.name,))
-                #    else:
-                #        print(f"$$$$$$$$$$$$$$$$$ Failed to find {bus.sub} in {self._ghostbusses}")
                 added = False
                 for mod_hash, infodict in module_info.items():
                     mrs = infodict.get("memory", None)
@@ -1053,6 +1060,71 @@ class GhostBusser(VParser):
 
     def getBusDicts(self):
         return self._ghostbusses
+
+    def _resetGenerates(self):
+        """Get ready to handle a new module with potentitally more generate blocks."""
+        self._generates = {}
+        return
+
+    def _handleGenerates(self, reftype, ref, yosrc, module_name):
+        """Handle an item 'ref' of type 'reftype' instantiated inside a generate block within module 'module_name'.
+        The 'yosrc' string helps us find and parse the source which is unfortunately necessary."""
+        block_name, netname, loop_index = block_inst(ref.name)
+        if block_name is None:
+            raise Exception(f"Internal error. The string {ref.name} somehow got passed to _handleGenerates() even though it fails block_inst()")
+        if autogenblk(block_name):
+            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+        if self._generates.get(block_name) is None:
+            self._generates[block_name] = {"module_name": module_name, "source": yosrc, "csrs": {}, "rams": {}, "exts": {}}
+        if self._generates[block_name]["source"] is None:
+            self._generates[block_name]["source"] = yosrc
+        refstrs = {self._REFTYPE_CSR: "csrs", self._REFTYPE_RAM: "rams", self._REFTYPE_EXT: "exts"}
+        refstr = refstrs[reftype]
+        if self._generates[block_name][refstr].get(netname) is not None:
+            self._generates[block_name][refstr][netname]["indices"].append(int(loop_index))
+            self._generates[block_name][refstr][netname]["refs"].append(ref)
+        else:
+            self._generates[block_name][refstr][netname] = {"indices": [int(loop_index)], "refs": [ref]}
+        return
+
+    def _resolveGenerates(self):
+        # TODO: find any other instances and use the greatest `Unrolled_AW` for each instance
+        """
+          0. Ensure all indicies are numeric, sequential, and complete
+          1. Ensure the length of the indicies for each csr in the branch is identical
+          2. Use the yosrc to find the for-loop parameters
+          3. Calculate the size of the resulting objects. `Unrolled_AW = element_AW + clog2(len(indicies))`
+          4. Return items to be added to the memory map
+        """
+        results = []
+        for block_name, block_info in self._generates.items():
+            forloop = parseForLoop(block_name, block_info["source"])
+            if forloop is None:
+                raise GhostbusException(f"Failed to find for-loop around {block_info['source']}")
+            loop_len = None
+            for reftype in ("csrs", "rams", "exts"):
+                for netname, netdict in block_info[reftype].items():
+                    indices = netdict["indices"]
+                    refs = netdict["refs"]
+                    ref = refs[0]
+                    if not check_complete_indices(indices):
+                        raise GhostbusInternalException(f"Did not find all indices for {ref.name} in {block_info['module_name']}")
+                    if loop_len is None:
+                        loop_len = len(indices)
+                    elif len(indices) != loop_len:
+                        err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
+                            + f" ({len(indices)} != {loop_len})"
+                        raise GhostbusInternalException()
+                    aw = ref.aw
+                    new_aw = aw + bits(loop_len) - 1 # I'm pretty sure it's -1
+                    ref.aw = new_aw
+                    ref.name = netname
+                    if hasattr(ref, "_readRangeDepth"):
+                        # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
+                        ref._readRangeDepth()
+                    results.append(ref)
+                    print(f"Generate Loop {block_name} of len {loop_len}: {ref.name} now has AW {ref.aw}")
+        return results
 
     def build_modtree(self, dd):
         top = self._top

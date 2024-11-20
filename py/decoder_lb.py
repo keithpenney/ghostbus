@@ -428,6 +428,8 @@ class DecoderLB():
         self.inst = self.parent_domain_decoder.inst
         # As well as the module name it represents
         self.name = self.parent_domain_decoder.name
+        # Independently keep track of submods declared within block (generate) scope
+        self.block_submods = {}
         for key, node in memorytree.items():
             # Get the domain that the node is instantiated in
             domain = node.parent_domain
@@ -449,11 +451,14 @@ class DecoderLB():
                     break
             if start is None:
                 raise Exception(f"Failed to find start address for {key}, {node.label}")
-            if hasattr(node, "genblock"):
-                if node.genblock is not None:
-                    print(f"Skipping DecoderDomainLB {node.label} for now since we haven't learned how to handle generate blocks yet")
-                    continue
-            self.domains[domain].add_submod(self.__class__(node, ghostbusses, self.GhostbusPortBus), start)
+            # TODO I need to keep a dict of {blockname: submods} as well as adding to self.domains
+            submod = self.__class__(node, ghostbusses, self.GhostbusPortBus)
+            if hasattr(node, "genblock") and node.genblock is not None:
+                print(f"DecoderDomainLB {node.label} is instantiated within generate block {node.genblock.branch}")
+                if self.block_submods.get(node.genblock.branch) is None:
+                    self.block_submods[node.genblock.branch] = []
+                self.block_submods[node.genblock.branch].append(submod)
+            self.domains[domain].add_submod(submod, start)
 
     def _clearDef(self, dest_dir):
         """Start with empty macro definitions file"""
@@ -828,21 +833,37 @@ class DecoderDomainLB():
         self.check_bus()
 
     def _parseMemoryRegion(self, memregion):
+        self.block_csrs = {}
+        self.block_rams = {}
+        self.block_exts = {}
         for start, stop, ref in memregion.get_entries():
-            if hasattr(ref, "genblock"):
-                if ref.genblock is not None:
-                    print(f"Skipping {ref.name} for now since we haven't learned how to handle generate blocks yet")
-                    continue
+            #if hasattr(ref, "genblock"):
+            #    if ref.genblock is not None:
+            #        print(f"Skipping {ref.name} for now since we haven't learned how to handle generate blocks yet")
+            #        continue
             if hasattr(ref, "access"):
                 if ref.access & ref.READ:
                     self._no_reads = False
             if isinstance(ref, GBRegister):
-                #ref._readRangeDepth()
+                if hasattr(ref, "genblock") and ref.genblock is not None:
+                    print(f"GBRegister {ref.name} is instantiated within generate block {ref.genblock.branch}")
+                    if self.block_csrs.get(ref.genblock.branch) is None:
+                        self.block_csrs[ref.genblock.branch] = []
+                    self.block_csrs[ref.genblock.branch].append(ref)
                 self.csrs.append(ref)
             elif isinstance(ref, GBMemory):
-                #ref._readRangeDepth()
+                if hasattr(ref, "genblock") and ref.genblock is not None:
+                    print(f"GBMemory {ref.name} is instantiated within generate block {ref.genblock.branch}")
+                    if self.block_rams.get(ref.genblock.branch) is None:
+                        self.block_rams[ref.genblock.branch] = []
+                    self.block_rams[ref.genblock.branch].append(ref)
                 self.rams.append(ref)
             elif isinstance(ref, ExternalModule):
+                if hasattr(ref, "genblock") and ref.genblock is not None:
+                    print(f"ExternalModule {ref.name} is instantiated within generate block {ref.genblock.branch}")
+                    if self.block_exts.get(ref.genblock.branch) is None:
+                        self.block_exts[ref.genblock.branch] = []
+                    self.block_exts[ref.genblock.branch].append(ref)
                 self.exts.append((start, ref))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
@@ -855,7 +876,6 @@ class DecoderDomainLB():
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal
         defined."""
-        print(f"{self.name}.check_bus(): self.ghostbus = {self.ghostbus.name};")
         #print(self.ghostbus)
         for csr in self.csrs:
             if csr.strobe or (len(csr.write_strobes) > 0):
@@ -871,7 +891,6 @@ class DecoderDomainLB():
                             "you can define it to also be the 'wstb' as in e.g.:\n" + \
                             "  (* ghostbus_port='wstb, we' *) wire wen;"
                     raise Exception(serr)
-            print(f"len(csr.read_strobes) = {len(csr.read_strobes)}")
             if len(csr.read_strobes) > 0:
                 if self.ghostbus["rstb"] is None:
                     strobe_name = csr.read_strobes[0]

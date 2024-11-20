@@ -56,6 +56,10 @@ class Register():
             return "Register_{}".format(size)
         return self._name
 
+    @name.setter
+    def name(self, ss):
+        self._name = ss
+
     @property
     def size(self):
         return self._size
@@ -68,6 +72,11 @@ class Register():
     def aw(self):
         """Alias for width"""
         return self._addr_width
+
+    @aw.setter
+    def aw(self, _aw):
+        self._addr_width = int(_aw)
+        return
 
     @property
     def datawidth(self):

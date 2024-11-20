@@ -40,7 +40,8 @@ test: top_check
 
 CLEANS=top_tb memory_map.vh
 
+RM=rm -rf
 .PHONY: clean
 clean:
-	rm -r $(AUTOGEN_DIR)
-	rm -r $(CLEANS)
+	$(RM) $(AUTOGEN_DIR)
+	$(RM) $(CLEANS)

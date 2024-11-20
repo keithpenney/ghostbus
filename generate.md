@@ -82,3 +82,41 @@ bar top_bar (
 
 endmodule
 ```
+
+### Inner Monologue
+For a register "foo" instantiated inside a _generate-for_ block "loop" (which say unrolls to 4 iterations),
+will show up after Yosys parsing as four registers with names:
+  loop[0].foo
+  loop[1].foo
+  loop[2].foo
+  loop[3].foo
+In general, I can't assume that I'll always encounter these in order while iterating through the Yosys-generated
+dict object.  So like a bus or extmod, I'll need to handle these separately.
+
+I'll hand them to a `_handleGenerates()` method.  This should split the name into `(branch_name, index, csr_name)`
+and keep dict:
+```python
+  {block_name: {
+    "source": yosrc_string, # only keep the first "yosrc" string encountered for "for-loop" parsing
+    "csrs": {
+      csr_name: [index, index, index, ...],
+      ...
+    },
+    "rams": {
+      ram_name: [index, index, index, ...],
+      ...
+    },
+    "exts": {
+      ext_name: [index, index, index, ...],
+      ...
+    },
+  }
+```
+Then after parsing all the nets, we can call a "resolve" method which should do the following:
+  0. Ensure all indicies are numeric, sequential, and complete
+  1. Ensure the length of the indicies for each csr in the branch is identical
+  2. Use the yosrc to find the for-loop parameters
+  3. Calculate the size of the resulting objects. `Unrolled_AW = element_AW + clog2(len(indicies))`
+  4. TODO: find any other instances and use the greatest `Unrolled_AW` for each instance
+  5. Add all items to the memory map
+

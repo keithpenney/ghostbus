@@ -307,6 +307,9 @@ def _matchForLoop(ss):
         inc_op = groups[7]
         inc_val = groups[8]
         return (loop_index, start, comp_op, comp_val, inc_op+inc_val)
+    else:
+        #print(f"Failed to find for-loop in the following:\n  {ss}")
+        pass
     return (None, None, None, None, None)
 
 
