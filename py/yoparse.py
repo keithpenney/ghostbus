@@ -199,19 +199,19 @@ def _getSourceSnippet(yosrc, size=1024):
         with open(filepath, 'r') as fd:
             for n in range(linestart):
                 line = fd.readline()
-            # Rewind up to 512 chars before start of register name
+            # Rewind up to size/2 chars before start of register name
             tell = fd.tell()
             # Set tell to the start of the identifier
             tell -= 1+len(line)-charstart
-            fd.seek(max(0, tell-512))
+            fd.seek(max(0, tell-int(size//2)))
             # Read up to 1024 chars
-            snippet = fd.read(1024)
-            offset = min(tell, 512)
+            snippet = fd.read(int(size))
+            offset = min(tell, int(size//2))
             #namestr = snippet[offset:offset+charend-charstart]
             #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
             #    namestr, offset, len(snippet), rangeStr))
     except OSError:
-        print("Cannot open file {}".format(filepath))
+        # print("Cannot open file {}".format(filepath))
         return None, None
     return snippet, offset
 
@@ -308,7 +308,7 @@ def _matchForLoop(ss):
         inc_val = groups[8]
         return (loop_index, start, comp_op, comp_val, inc_op+inc_val)
     else:
-        #print(f"Failed to find for-loop in the following:\n  {ss}")
+        print(f"Failed to find for-loop in the following:\n  {ss}")
         pass
     return (None, None, None, None, None)
 
@@ -316,7 +316,7 @@ def _matchForLoop(ss):
 def findForLoop(yosrc):
     # We want to match the last for-loop in the portion of the string only up to the offset
     # loop_index, start, comp, inc
-    snippet, offset = _getSourceSnippet(yosrc, size=1024)
+    snippet, offset = _getSourceSnippet(yosrc, size=4096)
     return _matchForLoop(snippet[:offset])
 
 

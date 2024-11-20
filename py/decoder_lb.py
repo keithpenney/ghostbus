@@ -5,7 +5,8 @@ import os
 from memory_map import Register, MemoryRegion, bits
 from gbexception import GhostbusException, GhostbusFeatureRequest
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule
-from util import strDict
+from util import strDict, check_complete_indices, identical
+from yoparse import block_inst
 
 
 def vhex(num, width):
@@ -418,6 +419,8 @@ class DecoderLB():
         self.GhostbusPortBus = gbportbus
         self.parent_domain = memorytree.parent_domain
         self._def_file = "defs.vh" # TODO - harmonize with DecoderDomainLB()
+        self.genblock = memorytree.genblock
+        self.gen_addrs = {}
         for memregion in memorytree.memories:
             domain = memregion.domain
             self.domains[domain] = DecoderDomainLB(memregion, ghostbusses, gbportbus)
@@ -453,12 +456,63 @@ class DecoderLB():
                 raise Exception(f"Failed to find start address for {key}, {node.label}")
             # TODO I need to keep a dict of {blockname: submods} as well as adding to self.domains
             submod = self.__class__(node, ghostbusses, self.GhostbusPortBus)
-            if hasattr(node, "genblock") and node.genblock is not None:
-                print(f"DecoderDomainLB {node.label} is instantiated within generate block {node.genblock.branch}")
-                if self.block_submods.get(node.genblock.branch) is None:
-                    self.block_submods[node.genblock.branch] = []
-                self.block_submods[node.genblock.branch].append(submod)
-            self.domains[domain].add_submod(submod, start)
+            self._handleSubmod(submod, domain, start)
+        self._resolveSubmods()
+
+    def _handleSubmod(self, submod, domain, start_addr):
+        if hasattr(submod, "genblock") and submod.genblock is not None:
+            if submod.genblock.type == submod.genblock.TYPE_FOR:
+                print(f"DecoderDomainLB {submod.inst} is instantiated within generate-FOR block {submod.genblock.branch}")
+                if self.block_submods.get(submod.genblock.branch) is None:
+                    self.block_submods[submod.genblock.branch] = []
+                self.block_submods[submod.genblock.branch].append((submod, domain, start_addr))
+                # We'll handle these later
+                return
+            else:
+                print(f"DecoderDomainLB {submod.inst} is instantiated within generate-IF block {submod.genblock.branch}")
+                # Generate-if, just strip the branch name from the submod name
+                gen_branch, instname, gen_index = block_inst(submod.inst)
+                submod.inst = instname
+        self.domains[domain].add_submod(submod, start_addr)
+        return
+
+    def _resolveSubmods(self):
+        block_submods = {}
+        for branch, submods in self.block_submods.items():
+            block_submods[branch] = []
+            moddict = {}
+            # Re-organize the data a bit
+            for submod, domain, start_addr in submods:
+                block_name, modname, loop_index = block_inst(submod.inst)
+                if moddict.get(modname) is None:
+                    moddict[modname] = {"indices": [], "refs": [], "domains": [], "addrs": []}
+                moddict[modname]["indices"].append(loop_index)
+                moddict[modname]["refs"].append(submod)
+                moddict[modname]["domains"].append(domain)
+                moddict[modname]["addrs"].append(start_addr)
+            loop_len = None
+            for modname, modinfo in moddict.items():
+                indices = modinfo["indices"]
+                refs = modinfo["refs"]
+                domains = modinfo["domains"]
+                addrs = modinfo["addrs"]
+                if not identical(domains):
+                    raise GhostbusInternalException(f"Instances of submod {modname} ended up in different domains!")
+                ref = refs[0]
+                if not check_complete_indices(indices):
+                    raise GhostbusInternalException(f"Did not find all indices for {ref.name} in {block_info['module_name']}")
+                if loop_len is None:
+                    loop_len = len(indices)
+                elif len(indices) != loop_len:
+                    err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
+                        + f" ({len(indices)} != {loop_len})"
+                    raise GhostbusInternalException()
+                ref.inst = modname
+                ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
+                block_submods[branch].append(ref)
+        # Clobber block_submods
+        self.block_submods = block_submods
+        return
 
     def _clearDef(self, dest_dir):
         """Start with empty macro definitions file"""
@@ -864,6 +918,7 @@ class DecoderDomainLB():
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
+                ref.ghostbus = self.ghostbus
                 self.exts.append((start, ref))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:

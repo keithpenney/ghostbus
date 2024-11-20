@@ -75,3 +75,12 @@ def check_complete_indices(ll):
             return False
     return True
 
+def identical(ll):
+    """Return True if all items in list 'll' are the same"""
+    if len(ll) <= 1:
+        return True
+    l0 = ll[0]
+    for l in ll[1:]:
+        if l != l0:
+            return False
+    return True

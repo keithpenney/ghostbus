@@ -170,20 +170,12 @@ class GBMemoryRegionStager(MemoryRegionStager):
 
 
 class ExternalModule():
-    def __init__(self, name, ghostbus, extbus):
+    def __init__(self, name, extbus):
         size = 1<<extbus.aw
-        if extbus.aw > ghostbus.aw:
-            serr = f"{name} external bus has greater address width {extbus['aw']}" + \
-                   f" than the ghostbus {ghostbus['aw']}"
-            raise GhostbusException(serr)
-        if extbus.dw > ghostbus.dw:
-            serr = f"{name} external bus has greater data width {extbus['dw']}" + \
-                   f" than the ghostbus {ghostbus['dw']}"
-            raise GhostbusException(serr)
         self.signed = None
         self.name = name
         self.inst = name # alias
-        self.ghostbus = ghostbus
+        self._ghostbus = None
         self.extbus = extbus
         self._aw = self.extbus.aw # This is clobbered during resolution if the extmod is connected to a pseudo-domain
         self.true_aw = self.extbus.aw # This will always show the number of address bits as specified in the source
@@ -201,6 +193,23 @@ class ExternalModule():
         # New additions for the 'stepchild' feature
         self.sub_bus = None
         self.sub_mr = None
+
+    @property
+    def ghostbus(self):
+        return self._ghostbus
+
+    @ghostbus.setter
+    def ghostbus(self, ghostbus):
+        self._ghostbus = ghostbus
+        if self.extbus.aw > ghostbus.aw:
+            serr = f"{self.name} external bus has greater address width {self.extbus['aw']}" + \
+                   f" than the ghostbus {ghostbus['aw']}"
+            raise GhostbusException(serr)
+        if self.extbus.dw > ghostbus.dw:
+            serr = f"{self.name} external bus has greater data width {self.extbus['dw']}" + \
+                   f" than the ghostbus {ghostbus['dw']}"
+            raise GhostbusException(serr)
+        return
 
     def getDoutPort(self):
         return self.extbus['dout']
