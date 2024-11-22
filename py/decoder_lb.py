@@ -509,7 +509,9 @@ class DecoderLB():
                     raise GhostbusInternalException()
                 ref.inst = modname
                 ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
+                print(f"Submod {modname} gets addresses: {ref.gen_addrs}")
                 block_submods[branch].append(ref)
+            print(f"Branch {branch}: submods = {block_submods[branch]}")
         # Clobber block_submods
         self.block_submods = block_submods
         return
