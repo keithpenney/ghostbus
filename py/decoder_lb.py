@@ -4,8 +4,8 @@ import os
 
 from memory_map import Register, MemoryRegion, bits
 from gbexception import GhostbusException, GhostbusFeatureRequest
-from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule
-from util import strDict, check_complete_indices, identical
+from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, isForLoop
+from util import strDict, check_complete_indices
 from yoparse import block_inst
 
 
@@ -423,7 +423,7 @@ class DecoderLB():
         self.gen_addrs = {}
         for memregion in memorytree.memories:
             domain = memregion.domain
-            self.domains[domain] = DecoderDomainLB(memregion, ghostbusses, gbportbus)
+            self.domains[domain] = DecoderDomainLB(self, memregion, ghostbusses, gbportbus)
         # Recall that from every module's perspective, the domain in which it is
         # instantiated (in its parent module) is default ("None")
         self.parent_domain_decoder = self.domains[None]
@@ -431,8 +431,6 @@ class DecoderLB():
         self.inst = self.parent_domain_decoder.inst
         # As well as the module name it represents
         self.name = self.parent_domain_decoder.name
-        # Independently keep track of submods declared within block (generate) scope
-        self.block_submods = {}
         for key, node in memorytree.items():
             # Get the domain that the node is instantiated in
             domain = node.parent_domain
@@ -454,66 +452,24 @@ class DecoderLB():
                     break
             if start is None:
                 raise Exception(f"Failed to find start address for {key}, {node.label}")
-            # TODO I need to keep a dict of {blockname: submods} as well as adding to self.domains
             submod = self.__class__(node, ghostbusses, self.GhostbusPortBus)
             self._handleSubmod(submod, domain, start)
-        self._resolveSubmods()
+        for domain, decoder in self.domains.items():
+            decoder._resolveSubmods()
 
     def _handleSubmod(self, submod, domain, start_addr):
         if hasattr(submod, "genblock") and submod.genblock is not None:
-            if submod.genblock.type == submod.genblock.TYPE_FOR:
+            if isForLoop(submod.genblock):
                 print(f"DecoderDomainLB {submod.inst} is instantiated within generate-FOR block {submod.genblock.branch}")
-                if self.block_submods.get(submod.genblock.branch) is None:
-                    self.block_submods[submod.genblock.branch] = []
-                self.block_submods[submod.genblock.branch].append((submod, domain, start_addr))
+                self.domains[domain].add_block_submod(submod.genblock.branch, submod, start_addr)
                 # We'll handle these later
                 return
             else:
                 print(f"DecoderDomainLB {submod.inst} is instantiated within generate-IF block {submod.genblock.branch}")
                 # Generate-if, just strip the branch name from the submod name
-                gen_branch, instname, gen_index = block_inst(submod.inst)
-                submod.inst = instname
+                #gen_branch, instname, gen_index = block_inst(submod.inst)
+                #submod.setInst(instname)
         self.domains[domain].add_submod(submod, start_addr)
-        return
-
-    def _resolveSubmods(self):
-        block_submods = {}
-        for branch, submods in self.block_submods.items():
-            block_submods[branch] = []
-            moddict = {}
-            # Re-organize the data a bit
-            for submod, domain, start_addr in submods:
-                block_name, modname, loop_index = block_inst(submod.inst)
-                if moddict.get(modname) is None:
-                    moddict[modname] = {"indices": [], "refs": [], "domains": [], "addrs": []}
-                moddict[modname]["indices"].append(loop_index)
-                moddict[modname]["refs"].append(submod)
-                moddict[modname]["domains"].append(domain)
-                moddict[modname]["addrs"].append(start_addr)
-            loop_len = None
-            for modname, modinfo in moddict.items():
-                indices = modinfo["indices"]
-                refs = modinfo["refs"]
-                domains = modinfo["domains"]
-                addrs = modinfo["addrs"]
-                if not identical(domains):
-                    raise GhostbusInternalException(f"Instances of submod {modname} ended up in different domains!")
-                ref = refs[0]
-                if not check_complete_indices(indices):
-                    raise GhostbusInternalException(f"Did not find all indices for {ref.name} in {block_info['module_name']}")
-                if loop_len is None:
-                    loop_len = len(indices)
-                elif len(indices) != loop_len:
-                    err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
-                        + f" ({len(indices)} != {loop_len})"
-                    raise GhostbusInternalException()
-                ref.inst = modname
-                ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
-                print(f"Submod {modname} gets addresses: {ref.gen_addrs}")
-                block_submods[branch].append(ref)
-            print(f"Branch {branch}: submods = {block_submods[branch]}")
-        # Clobber block_submods
-        self.block_submods = block_submods
         return
 
     def _clearDef(self, dest_dir):
@@ -532,6 +488,12 @@ class DecoderLB():
         defstr = f"`define {macrostr} {macrodef}\n"
         with open(os.path.join(dest_dir, self._def_file), "a") as fd:
             fd.write(defstr)
+        return
+
+    def setInst(self, instname):
+        self.inst = instname
+        for domain, decoder in self.domains.items():
+            decoder.inst = instname
         return
 
     def _addGhostbusDef(self, dest_dir, suffix):
@@ -596,6 +558,7 @@ class DecoderLB():
         for domain, decoder in self.domains.items():
             ss.append(decoder.localInit())
             ss.append(decoder.submodsTopInit())
+            ss.append(decoder.extmodsTopInit())
             ss.append(decoder.dinRouting())
             ss.append(decoder.busDecoding())
         return "\n".join(ss)
@@ -824,7 +787,8 @@ class DecoderDomainLB():
     # This list is singular to the class and keeps track of macros
     # defined by any instance
     _defs = []
-    def __init__(self, memregion, ghostbusses, gbportbus):
+    def __init__(self, parent, memregion, ghostbusses, gbportbus):
+        self.parent = parent
         self.bustop = False
         self.mod = memregion
         self.domain = memregion.domain
@@ -876,6 +840,11 @@ class DecoderDomainLB():
         self.rams = []
         self.csrs = []
         self.exts = []
+        # Independently keep track of items declared within block (generate) scope
+        self.block_submods = {} # {branch_name: [], ...}
+        self.block_rams = {} # {branch_name: [], ...}
+        self.block_csrs = {} # {branch_name: [], ...}
+        self.block_exts = {} # {branch_name: [], ...}
         self.max_local = 0
         self._no_reads = False # TODO Assume True and prove me wrong by finding something readable
         self._parseMemoryRegion(memregion)
@@ -887,16 +856,13 @@ class DecoderDomainLB():
         self.local_aw = bits(self.max_local)
         self._def_file = "defs.vh"
         self.check_bus()
+        # Net names for universal auto-generated nets
+        self.en_local = "ghostbus_addrhit_local" # TODO - Harmonize this with a singleton netname generator class
+        self.local_din = "ghostbus_rdata_local"  # TODO - Harmonize this with a singleton netname generator class
+        self.autogen_loop_index = "GHOSTBUS_AUTOGEN_INDEX" # TODO - Harmonize this with a singleton netname generator class
 
     def _parseMemoryRegion(self, memregion):
-        self.block_csrs = {}
-        self.block_rams = {}
-        self.block_exts = {}
         for start, stop, ref in memregion.get_entries():
-            #if hasattr(ref, "genblock"):
-            #    if ref.genblock is not None:
-            #        print(f"Skipping {ref.name} for now since we haven't learned how to handle generate blocks yet")
-            #        continue
             if hasattr(ref, "access"):
                 if ref.access & ref.READ:
                     self._no_reads = False
@@ -906,29 +872,85 @@ class DecoderDomainLB():
                     if self.block_csrs.get(ref.genblock.branch) is None:
                         self.block_csrs[ref.genblock.branch] = []
                     self.block_csrs[ref.genblock.branch].append(ref)
-                self.csrs.append(ref)
+                else:
+                    self.csrs.append(ref)
             elif isinstance(ref, GBMemory):
                 if hasattr(ref, "genblock") and ref.genblock is not None:
                     print(f"GBMemory {ref.name} is instantiated within generate block {ref.genblock.branch}")
                     if self.block_rams.get(ref.genblock.branch) is None:
                         self.block_rams[ref.genblock.branch] = []
                     self.block_rams[ref.genblock.branch].append(ref)
-                self.rams.append(ref)
+                else:
+                    self.rams.append(ref)
             elif isinstance(ref, ExternalModule):
+                ref.ghostbus = self.ghostbus
                 if hasattr(ref, "genblock") and ref.genblock is not None:
                     print(f"ExternalModule {ref.name} is instantiated within generate block {ref.genblock.branch}")
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
-                ref.ghostbus = self.ghostbus
-                self.exts.append((start, ref))
+                else:
+                    self.exts.append((start, ref))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
                     self.max_local = stop
 
+    @property
+    def genblock(self):
+        return self.parent.genblock
+
+    @property
+    def gen_addrs(self):
+        return self.parent.gen_addrs
+
     def add_submod(self, submod, base):
         self.submods.append((base, submod))
         # TODO - Detect whether submod is readable and update self._no_reads
+
+    def add_block_submod(self, branch, submod, base):
+        if self.block_submods.get(branch) is None:
+            self.block_submods[branch] = []
+        self.block_submods[branch].append((base, submod))
+
+    def _resolveSubmods(self):
+        block_submods = {}
+        for branch, submods in self.block_submods.items():
+            block_submods[branch] = []
+            moddict = {}
+            # Re-organize the data a bit
+            for start_addr, submod in submods:
+                block_name, modname, loop_index = block_inst(submod.inst)
+                if moddict.get(modname) is None:
+                    moddict[modname] = {"indices": [], "refs": [], "addrs": []}
+                moddict[modname]["indices"].append(loop_index)
+                moddict[modname]["refs"].append(submod)
+                moddict[modname]["addrs"].append(start_addr)
+            loop_len = None
+            for modname, modinfo in moddict.items():
+                indices = modinfo["indices"]
+                refs = modinfo["refs"]
+                addrs = modinfo["addrs"]
+                ref = refs[0]
+                if not check_complete_indices(indices):
+                    raise GhostbusInternalException(f"Did not find all indices for {ref.name} in {block_info['module_name']}")
+                if loop_len is None:
+                    loop_len = len(indices)
+                elif len(indices) != loop_len:
+                    err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
+                        + f" ({len(indices)} != {loop_len})"
+                    raise GhostbusInternalException()
+                ref.setInst(modname)
+                ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
+                print(f"Submod {modname} gets addresses: {ref.gen_addrs}")
+                block_submods[branch].append(ref)
+            print(f"Branch {branch}: submods = {block_submods[branch]}")
+        # Clobber block_submods
+        self.block_submods = block_submods
+        #print(f"self.block_submods = {self.block_submods}")
+        #for branch, decoders in self.block_submods.items():
+        #    for decoder in decoders:
+        #        print(f"  decoder.gen_addrs = {decoder.gen_addrs}")
+        return
 
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal
@@ -1050,8 +1072,8 @@ class DecoderDomainLB():
         # reg  [31:0] local_din=0;
         if self.no_local:
             return ""
-        en_local = "en_local" # TODO - Make a name less likely to collide
-        local_din = "local_din"
+        en_local = self.en_local
+        local_din = self.local_din
         if self.domain is not None:
             en_local += "_" + self.domain
             local_din += "_" + self.domain
@@ -1065,31 +1087,121 @@ class DecoderDomainLB():
         if len(self.rams) > 0:
             ss.append("// local rams")
             for n in range(len(self.rams)):
-                ss.append(self._ramInit(self.rams[n], self.local_aw))
+                ss.append(self._ramInit(self.rams[n]))
+        ss.append(self.localBlockInit())
+        return "\n".join(ss)
+
+    def localBlockInit(self):
+        ss = []
+        any_block = False
+        for branch, csrs in self.block_csrs.items():
+            if len(csrs) == 0:
+                continue
+            if not any_block:
+                ss.append("// CSRs in block scope")
+                any_block = True
+            ss.append(f"//   Generate Block {branch}")
+            for csr in csrs:
+                ss.append(self._blockCsrInit(csr, branch))
+        any_block = False
+        for branch, rams in self.block_rams.items():
+            if len(rams) == 0:
+                continue
+            if not any_block:
+                ss.append("// RAMs in block scope")
+                any_block = True
+            ss.append(f"//   Generate Block {branch}")
+            for ram in rams:
+                ss.append(self._blockRamInit(ram, branch))
         return "\n".join(ss)
 
     def submodsTopInit(self):
         ss = []
         for base, submod in self.submods:
             ss.append(submod.submodInitStr(base, self))
+
+        for branch, submods in self.block_submods.items():
+            ss.append(f"// Branch {branch}")
+            for submod in submods:
+                ss.append(submod.submodInitStr(None, self))
+        return "\n".join(ss)
+
+    def extmodsTopInit(self):
+        ss = []
         for base_rel, ext in self.exts:
             ss.append(f"// External Module Instance {ext.name}")
             ss.append(self._addrHit(base_rel, ext, self))
             ss.append(self.busHookup(ext, self))
+
+        any_block = False
+        for branch, exts in self.block_exts.items():
+            if len(exts) == 0:
+                continue
+            if not any_block:
+                ss.append("// Extmods in block scope")
+                any_block = True
+            ss.append(f"//   Generate Block {branch}")
+            for ext in exts:
+                ss.append(self._blockExtInit(ext, branch))
+
         return "\n".join(ss)
 
-    def _ramInit(self, mod, local_aw=None):
+    def _ramInit(self, mod):
         # localparam FOO_RAM_AW = $clog2(RD);
         # wire en_foo_ram = gb_addr[8:3] == 6'b001000;
-        if local_aw is None:
+        if self.local_aw is None:
             local_aw = self.ghostbus['aw']
-        namemap = self.ghostbus
+        else:
+            local_aw = self.local_aw
         divwidth = local_aw - mod.aw
+        base_rel = mod.base
+        end = base_rel + (1<<mod.aw) - 1
         ss = (
             f"localparam {mod.name.upper()}_AW = $clog2({mod.depth[1]}+1);",
-            f"wire addrhit_{mod.name} = {namemap['addr']}[{local_aw-1}:{mod.aw}] == {vhex(mod.base>>mod.aw, divwidth)};",
+            f"wire addrhit_{mod.name} = {self.ghostbus['addr']}[{local_aw-1}:{mod.aw}] == {vhex(mod.base>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}",
         )
         return "\n".join(ss)
+
+    def _blockCsrInit(self, csr, branch):
+        ss = []
+        # Make one register for reading and one for writing
+        if None in csr.range:
+            rangestr = ""
+        else:
+            rangestr = f"[{csr.range[0]}:{csr.range[1]}] "
+        looprange = ""
+        if isForLoop(csr.genblock):
+            looprange = f" {csr.genblock.loop_range}"
+        ss.append(f"reg {rangestr}{branch}_{csr.name}_r{looprange};")
+        ss.append(f"reg {rangestr}{branch}_{csr.name}_w{looprange};")
+        return "\n".join(ss)
+
+    def _blockRamInit(self, ram, branch):
+        # Declare a wire for reading from within the block scope, then declare RAM as normal
+        # but with branch name incorporated into net names
+        if None in ram.range:
+            rangestr = ""
+        else:
+            rangestr = f"[{ram.range[0]}:{ram.range[1]}] "
+            if ram.genblock.isFor():
+                rangestr = ram.genblock.unrollRangeString(rangestr) + " "
+        ss = [f"wire {rangestr}{branch}_{ram.name}_r;"]
+        if self.local_aw is None:
+            local_aw = self.ghostbus['aw']
+        else:
+            local_aw = self.local_aw
+        divwidth = local_aw - ram.aw
+        base_rel = ram.base
+        end = base_rel + (1<<ram.aw) - 1
+        ss.extend([
+            f"localparam {branch.upper()}_{ram.name.upper()}_AW = $clog2({ram.depth[1]}+1);",
+            f"wire addrhit_{branch}_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}",
+        ])
+        return "\n".join(ss)
+
+    def _blockExtInit(self, extmod, branch):
+        # TODO
+        return f"// TODO - Initialize extmod {extmod.name} in branch {branch}"
 
     @staticmethod
     def _addrHit(base_rel, mod, parent=None):
@@ -1139,15 +1251,21 @@ class DecoderDomainLB():
         the nets in the ghostbus.  In this case, unused nets are still declared.
         Unused inputs into the submod are tied low (assigned to 0).
         """
-        #ports = parentbus.getPortDict()
         parentbus = parent.ghostbus
         gbports = self.gbportbus
-        #netlist = parentbus.getPortList() # (key, name, rangestr, dirstr)
-        netlist = self.gbportbus.getPortList() # (key, name, rangestr, dirstr)
-        addrHit = self._addrHit(base_rel, self, parent)
         addrMask = self._addrMask(self, parent)
         ss = [f"// submodule {self.inst}"]
-        ss.append(addrHit)
+        # If this is in a For-Loop, addrHit needs to be declared here as a vector then assigned within the loop
+        loopsize = ""
+        loopvector = ""
+        if isForLoop(self.genblock):
+            loopsize = self.genblock.unrolled_size
+            loopvector = f"[{loopsize}-1:0] "
+            ss.append(f"wire {loopvector} addrhit_{self.inst};")
+        else:
+            addrHit = self._addrHit(base_rel, self, parent)
+            ss.append(addrHit)
+        netlist = self.gbportbus.getPortList() # (key, name, rangestr, dirstr)
         for net in netlist:
             netkey, netname, rangestr, _dir = net
             if netkey == "addr":
@@ -1167,8 +1285,15 @@ class DecoderDomainLB():
                 if netkey in ('clk', 'addr', 'dout'):
                     ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
                 elif netkey in ('we', 'wstb', 're', 'rstb'):
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]} & addrhit_{self.inst};")
+                    if loopsize == "":
+                        pbk = f"{parentbus[netkey]}"
+                    else:
+                        pbk = f"{{{loopsize}{{{parentbus[netkey]}}}}}"
+                        rangestr = loopvector
+                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{self.inst};")
                 elif netkey in ('din',):
+                    if isForLoop(self.genblock):
+                        rangestr = self.genblock.unrollRangeString(rangestr) + " "
                     ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
                 else:
                     ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
@@ -1183,8 +1308,8 @@ class DecoderDomainLB():
             return ""
         if self.ghostbus["din"] is None:
             return ""
-        en_local = "en_local" # TODO - Make a name less likely to collide
-        local_din = "local_din"
+        en_local = self.en_local
+        local_din = self.local_din
         if self.domain is not None:
             en_local += "_" + self.domain
             local_din += "_" + self.domain
@@ -1219,7 +1344,7 @@ class DecoderDomainLB():
         return "\n".join(ss)
 
     def busDecoding(self):
-        en_local = "en_local" # TODO - Make a name less likely to collide
+        en_local = self.en_local
         if self.domain is not None:
             en_local += "_" + self.domain
 
@@ -1239,8 +1364,7 @@ class DecoderDomainLB():
         extraend = ""
         midend = ""
         if len(_ramreads) == 0:
-            crindent = 6*" "
-            #extraend = "  end // ram reads"
+            #crindent = 6*" "
             ramreads = "// No rams"
         else:
             ramreads = _ramreads
@@ -1256,8 +1380,10 @@ class DecoderDomainLB():
         csrdefaults.extend(wdefaults)
         csrdefaults.extend(rdefaults)
         namemap = self.ghostbus
+        ss.append(f"integer {self.autogen_loop_index}=0;")
         if len(_ramwrites) > 0 or len(_csrwrites) > 0:
             ss.append(f"always @(posedge {namemap['clk']}) begin")
+            ss.append(f"  {self.local_din} <= 0;")
             if len(csrdefaults) > 0:
                 ss.append("  // Strobe default assignments")
             for strobe in csrdefaults:
@@ -1284,24 +1410,36 @@ class DecoderDomainLB():
             ss.append(f"end // always @(posedge {namemap['clk']})")
         return "\n".join(ss)
 
+    def _get_all_csrs(self, block_append=""):
+        csrs = self.csrs.copy()
+        # Include CSRs declared in generate-if blocks
+        for branch, block_csrs in self.block_csrs.items():
+            for csr in block_csrs:
+                if csr.genblock is not None and csr.genblock.isIf():
+                    copy = csr.copy()
+                    copy.name = f"{branch}_{csr.name}{block_append}"
+                    csrs.append(copy)
+        return csrs
+
     def csrWrites(self):
         if len(self.csrs) == 0:
             return ("", [])
         namemap = self.ghostbus
         # Default-assign any strobes
         defaults = []
-        for csr in self.csrs:
-            if csr.strobe:
-                defaults.append(csr)
-            if len(csr.write_strobes) > 0:
-                defaults.extend(csr.write_strobes)
         ss = [
             "// CSR writes",
             f"casez ({namemap['addr']}[{self.local_aw-1}:0])",
         ]
         writes = 0
-        for n in range(len(self.csrs)):
-            csr = self.csrs[n]
+        csrs = self._get_all_csrs(block_append="_w")
+        for csr in csrs:
+            if csr.strobe:
+                defaults.append(csr)
+            if len(csr.write_strobes) > 0:
+                defaults.extend(csr.write_strobes)
+        for n in range(len(csrs)):
+            csr = csrs[n]
             if (csr.access & Register.WRITE) == 0:
                 # Skip read-only registers
                 continue
@@ -1321,20 +1459,57 @@ class DecoderDomainLB():
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
         ss.append("endcase")
-        if writes == 0:
-            return ("", [])
+        ss.append(self.genCsrWrites())
+        #if writes == 0:
+        #    return ("", [])
         return ("\n".join(ss), defaults)
+
+    def genCsrWrites(self):
+        """Return write decoding logic for CSRs declared in generate-for block scope"""
+        #// Generate-For CSRs
+        #// foo_generator.top_foo_n
+        #for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
+        #  if (gb_addr[5:0] == (FOO_GENERATOR_TOP_FOO_N_BASE[5:0] | AUTOGEN_INDEX[5:0])) begin
+        #    foo_generator_top_foo_n_w[AUTOGEN_INDEX] <= gb_wdata[3:0];
+        #  end
+        #end
+        ss = []
+        agi = self.autogen_loop_index
+        for branch, csrs in self.block_csrs.items():
+            if len(csrs) == 0:
+                continue
+            isfor = csrs[0].genblock.isFor()
+            if not isfor:
+                continue
+            block_size = csrs[0].genblock.unrolled_size
+            ss.append(f"// Generate {branch}")
+            # Generate-For
+            ss.append(f"for ({agi}=0; {agi}<{block_size}; {agi}={agi}+1) begin")
+            for csr in csrs:
+                #depth = f"({ram.depth[1]}+1)"
+                ar = f"[{self.local_aw-1}:0]"
+                #addrs = [addr for addr in csr.gen_addrs.values()]
+                #addrs.sort()
+                base = csr.base
+                dec = f"{self.ghostbus['addr']}{ar} == {vhex(base, self.local_aw)} + {agi}{ar}"
+                ss.append(f"  // {csr.name}")
+                ss.append(f"  if ({dec}) begin")
+                ss.append(f"    {branch}_{csr.name}_w[{agi}] <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
+                ss.append( "  end")
+            ss.append("end")
+        return "\n".join(ss)
 
     def csrReads(self):
         if len(self.csrs) == 0:
             return ("", [])
-        local_din = "local_din" # TODO - replace me with some global reference
+        local_din = self.local_din
         if self.domain is not None:
             local_din += "_" + self.domain
         namemap = self.ghostbus
+        csrs = self._get_all_csrs(block_append="_r")
         # Default-assign any strobes
         defaults = []
-        for csr in self.csrs:
+        for csr in csrs:
             if len(csr.read_strobes) > 0:
                 defaults.extend(csr.read_strobes)
         ss = [
@@ -1342,8 +1517,8 @@ class DecoderDomainLB():
             f"casez ({namemap['addr']}[{self.local_aw-1}:0])",
         ]
         reads = 0
-        for n in range(len(self.csrs)):
-            csr = self.csrs[n]
+        for n in range(len(csrs)):
+            csr = csrs[n]
             if (csr.access & Register.READ) == 0:
                 # Skip write-only registers
                 continue
@@ -1356,11 +1531,62 @@ class DecoderDomainLB():
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
             reads += 1
-        ss.append(f"  default: {local_din} <= {vhex(0, self.ghostbus['dw'])};")
+        # I need to leave the default off to allow RAM reads to take effect
+        #ss.append(f"  default: {local_din} <= {vhex(0, self.ghostbus['dw'])};")
         ss.append("endcase")
-        if reads == 0:
-            return ("", [])
+        ss.append(self.genCsrReads())
+        #if reads == 0:
+        #    return ("", [])
         return ("\n".join(ss), defaults)
+
+    def genCsrReads(self):
+        """Return read decoding logic for CSRs declared in generate-for block scope"""
+        #// Generate-For CSRs
+        #// foo_generator.top_foo_n
+        #for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
+        #  if (gb_addr[5:0] == (FOO_GENERATOR_TOP_FOO_N_BASE[5:0] | AUTOGEN_INDEX[5:0])) begin
+        #    local_din <= {{32-(3+1){1'b0}}, foo_generator_top_foo_n_r[AUTOGEN_INDEX]};
+        #  end
+        #end
+        ss = []
+        agi = self.autogen_loop_index
+        for branch, csrs in self.block_csrs.items():
+            if len(csrs) == 0:
+                continue
+            isfor = csrs[0].genblock.isFor()
+            if not isfor:
+                continue
+            block_size = csrs[0].genblock.unrolled_size
+            ss.append(f"// Generate {branch}")
+            # Generate-For
+            ss.append(f"for ({agi}=0; {agi}<{block_size}; {agi}={agi}+1) begin")
+            for csr in csrs:
+                #depth = f"({ram.depth[1]}+1)"
+                ar = f"[{self.local_aw-1}:0]"
+                #addrs = [addr for addr in csr.gen_addrs.values()]
+                #addrs.sort()
+                #base = addrs[0]
+                base = csr.base
+                dec = f"{self.ghostbus['addr']}{ar} == {vhex(base, self.local_aw)} + {agi}{ar}"
+                ss.append(f"  // {csr.name}")
+                ss.append(f"  if ({dec}) begin")
+                ss.append(f"    {self.local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {branch}_{csr.name}_r[{agi}]}};")
+                #ss.append(f"    {self.local_din} <= {{32-(3+1){1'b0}}, {branch}_{csr.name}_r[{agi}]};")
+                #ss.append(f"    {branch}_{csr.name}_w <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
+                ss.append( "  end")
+            ss.append("end")
+        return "\n".join(ss)
+
+    def _get_all_rams(self, block_append=""):
+        rams = self.rams.copy()
+        # Include RAMs declared in generate-if blocks
+        for branch, block_rams in self.block_rams.items():
+            for ram in block_rams:
+                if ram.genblock is not None and ram.genblock.isIf():
+                    copy = ram.copy()
+                    copy.name = f"{branch}_{ram.name}{block_append}"
+                    rams.append(copy)
+        return rams
 
     def ramWrites(self):
         if len(self.rams) == 0:
@@ -1370,6 +1596,7 @@ class DecoderDomainLB():
             "// RAM writes",
             "",
         ]
+        # Writes to RAMs in generate-if blocks are handled in block scope
         for n in range(len(self.rams)):
             ram = self.rams[n]
             s0 = f"if (addrhit_{ram.name}) begin"
@@ -1381,25 +1608,70 @@ class DecoderDomainLB():
         return "\n".join(ss)
 
     def ramReads(self):
-        if len(self.rams) == 0:
-            return ""
-        local_din = "local_din" # TODO - replace me with some global reference
+        """Return read-decoding for RAMs declared in top scope."""
+        #rams = self._get_all_rams(block_append="_r")
+        rams = self.rams
+        local_din = self.local_din
         if self.domain is not None:
             local_din += "_" + self.domain
         namemap = self.ghostbus
-        ss = [
-            "// RAM reads",
-            "",
-        ]
-        for n in range(len(self.rams)):
-            ram = self.rams[n]
+        if len(rams) == 0:
+            ss = []
+        else:
+            ss = [
+                "// RAM reads",
+                "",
+            ]
+        for n in range(len(rams)):
+            ram = rams[n]
             s0 = f"if (addrhit_{ram.name}) begin"
             if n > 0:
                 s0 = " else " + s0
             ss[-1] = ss[-1] + s0
             #ss.append(f"  {ram.name}[{self.ghostbus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.ghostbus['dout']}[{ram.range[0]}:{ram.range[1]}];")
-            ss.append(f"  {local_din} <= {{{{{self.ghostbus['dw']}-{ram.range[0]}+1{{1'b0}}}}, {ram.name}[{namemap['addr']}[{ram.name.upper()}_AW-1:0]]}};")
+            ss.append(f"  {local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {ram.name}[{namemap['addr']}[{ram.name.upper()}_AW-1:0]]}};")
             ss.append("end")
+        ss.append(self.genRamReads())
+        return "\n".join(ss)
+
+    def genRamReads(self):
+        """Return read-decoding for RAMs declared in generate-for block scope."""
+        ss = []
+        num_rams = 0
+        #// Generate RAMs
+        #// foo_generator.foo_ram
+        #for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
+        #  if (addrhit_foo_ram[AUTOGEN_INDEX]) begin
+        #    local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((AUTOGEN_INDEX+1)*8)-1-:8]};
+        #  end
+        #end
+        agi = self.autogen_loop_index
+        for branch, rams in self.block_rams.items():
+            if len(rams) == 0:
+                continue
+            block_size = rams[0].genblock.unrolled_size
+            isfor = rams[0].genblock.isFor()
+            ss.append(f"// Generate {branch}")
+            if isfor:
+                # Generate-For
+                ss.append(f"for ({agi}=0; {agi}<{block_size}; {agi}={agi}+1) begin")
+                for ram in rams:
+                    depth = f"({ram.depth[1]}+1)"
+                    ss.append(f"  // {ram.name}")
+                    ss.append(f"  if (addrhit_{branch}_{ram.name}[{agi}]) begin")
+                    ss.append(f"    {self.local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r[(({agi}+1)*{depth})-1-:{depth}]}};")
+                    ss.append( "  end")
+                ss.append("end")
+            else:
+                # Generate-If
+                for ram in rams:
+                    ss.append(f"// {ram.name}")
+                    ss.append(f"if (addrhit_{branch}_{ram.name}) begin")
+                    ss.append(f"  {self.local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r}};")
+                    ss.append("end")
+            num_rams += len(rams)
+        if num_rams == 0:
+            return "// No block-scope RAMs"
         return "\n".join(ss)
 
     def busHookup(self, extmod, parent=None):
@@ -1431,8 +1703,6 @@ class DecoderDomainLB():
                 else:
                     ss.append(f"assign {ext_port} = {gb_port};")
         return "\n".join(ss)
-
-
 
 
 def test_createPortBus():

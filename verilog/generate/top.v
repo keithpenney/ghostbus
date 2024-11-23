@@ -115,7 +115,7 @@ always @(posedge gb_clk) begin
   if (en_local & ~gb_wen) begin
     local_din <= 0;
     // RAM reads
-    // Generate-For RAMs
+    // Generate RAMs
     // foo_generator.foo_ram
     for (AUTOGEN_INDEX=0; AUTOGEN_INDEX<FOO_COPIES; AUTOGEN_INDEX=AUTOGEN_INDEX+1) begin
       if (addrhit_foo_ram[AUTOGEN_INDEX]) begin
@@ -147,14 +147,14 @@ always @(posedge gb_clk) begin
 end
 
 // Submodule foo
+wire [FOO_COPIES-1:0] addrhit_foo;
 wire GBPORT_clk_foo = gb_clk;
 wire [23:0] GBPORT_addr_foo = {{24-8{1'b0}}, gb_addr[7:0]};
 wire [31:0] GBPORT_dout_foo = gb_wdata;
 wire [(FOO_COPIES*32)-1:0] GBPORT_din_foo;
-wire [FOO_COPIES-1:0] GBPORT_we_foo;
-wire [FOO_COPIES-1:0] GBPORT_wstb_foo;
-wire [FOO_COPIES-1:0] GBPORT_rstb_foo;
-wire [FOO_COPIES-1:0] addrhit_foo;
+wire [FOO_COPIES-1:0] GBPORT_we_foo = {FOO_COPIES{gb_wen}} & addrhit_foo;
+wire [FOO_COPIES-1:0] GBPORT_wstb_foo = {FOO_COPIES{gb_wen}} & addrhit_foo;
+wire [FOO_COPIES-1:0] GBPORT_rstb_foo = {FOO_COPIES{gb_rstb}} & addrhit_foo;
 
 // Submodule baz (0x0080 <-> 0x00ff baz)
 // (same as non-generate submodule)
@@ -187,9 +187,11 @@ generate
 `ifdef HAND_ROLLED
     // Submodule foo
     assign addrhit_foo[N] = gb_addr[23:8] == 16'h0001 + N[15:0];
+    /*
     assign GBPORT_we_foo[N] = gb_wen & addrhit_foo[N];
     assign GBPORT_wstb_foo[N] = gb_wen & addrhit_foo[N];
     assign GBPORT_rstb_foo[N] = gb_rstb & addrhit_foo[N];
+    */
 
     // RAM foo_ram
     assign addrhit_foo_ram[N] = gb_addr[23:3] == 21'h0004 + N[20:0];

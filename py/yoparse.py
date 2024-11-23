@@ -283,12 +283,46 @@ def _findDepthStr(snippet, offset):
 
 
 # HACK ALERT!
+def _decomment(ss):
+    """A hackish attempt to de-comment a block of Verilog code"""
+    cbs = "/*"
+    cbe = "*/"
+    cls = "//"
+    cle = "\n"
+    result = []
+    start = 0
+    NO_COMMENT = 0
+    BLOCK_COMMENT = 1
+    LINE_COMMENT = 2
+    comment = NO_COMMENT
+    for n in range(2, len(ss)):
+        chrs = ss[n-2:n]
+        if comment == NO_COMMENT:
+            if cbs in chrs:
+                comment = BLOCK_COMMENT
+            elif cls in chrs:
+                comment = LINE_COMMENT
+            if comment != NO_COMMENT:
+                result.append(ss[start:n-2])
+        elif comment == BLOCK_COMMENT:
+            if cbe in chrs:
+                start = n
+                comment = NO_COMMENT
+        elif comment == LINE_COMMENT:
+            if cle in chrs:
+                start = n-1 # Will hit when cle is chrs[0]
+                comment = NO_COMMENT
+    if comment == NO_COMMENT:
+        result.append(ss[start:])
+    return "".join(result)
+
 def _matchForLoop(ss):
-    """Match the last Verilog for-loop opening statement in the string 'ss'
+    """Match the last Verilog generate-for-loop opening statement in the string 'ss'
     NOTE: This hack only catches simple for-loops.  It's pretty easy to break this if you're trying.
     I need a proper lexer to do this generically.
     Return (loop_index, start, stop, inc)"""
-    restr = "for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
+    ss = _decomment(ss)
+    restr = "generate\s+for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
     #_match = re.search(restr, ss)
     #if _match:
     _matches = re.findall(restr, ss)
@@ -308,7 +342,7 @@ def _matchForLoop(ss):
         inc_val = groups[8]
         return (loop_index, start, comp_op, comp_val, inc_op+inc_val)
     else:
-        print(f"Failed to find for-loop in the following:\n  {ss}")
+        #print(f"Failed to find for-loop in the following:\n  {ss}")
         pass
     return (None, None, None, None, None)
 

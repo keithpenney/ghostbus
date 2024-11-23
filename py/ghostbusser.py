@@ -662,6 +662,7 @@ class GhostBusser(VParser):
                         if gen_index is None:
                             print(f"Found instance {inst} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
+                            inst_name = inst
                         else:
                             print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
                             generate = parseForLoop(gen_block, source)
@@ -700,6 +701,7 @@ class GhostBusser(VParser):
                             generate = GenerateIf(gen_block)
                             if autogenblk(gen_block):
                                 print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                            netname = gen_netname
                         else:
                             print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
                             #generate = parseForLoop(gen_block, source)
@@ -776,6 +778,7 @@ class GhostBusser(VParser):
                         if gen_index is None:
                             print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
+                            memname = gen_netname
                         else:
                             print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
                             #generate = parseForLoop(gen_block, source)
@@ -1173,6 +1176,7 @@ class GhostBusser(VParser):
                     new_aw = aw + bits(loop_len) - 1 # I'm pretty sure it's -1
                     ref.aw = new_aw
                     ref.name = netname
+                    ref.genblock = forloop
                     if hasattr(ref, "_readRangeDepth"):
                         # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
                         ref._readRangeDepth()

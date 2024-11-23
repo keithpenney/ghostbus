@@ -59,6 +59,7 @@ class Register():
     @name.setter
     def name(self, ss):
         self._name = ss
+        return
 
     @property
     def size(self):

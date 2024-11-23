@@ -19,9 +19,9 @@ gold: $(AUTOGEN_DIR)/regmap.json
 parse: $(GHOSTBUS_SOURCES)
 	$(PYTHON) $(PY_DIR)/ghostbusser.py -t $(GHOSTBUS_TOP) $^
 
-$(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json memory_map.vh: $(GHOSTBUS_SOURCES)
-	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py --live --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) --flat --mangle $(ignore_args) $^ --map memory_map.vh
+#$(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json memory_map.vh: $(GHOSTBUS_SOURCES)
+#	mkdir -p $(AUTOGEN_DIR)
+#	$(PYTHON) $(PY_DIR)/ghostbusser.py --live --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) --flat --mangle $(ignore_args) $^ --map memory_map.vh
 
 ICARUS_SUFFIX =
 VERILOG = iverilog$(ICARUS_SUFFIX) -Wall -Wno-macro-redefinition

@@ -1,5 +1,7 @@
 """Ghostbus-specific elements of the tree representing the memory map of a Verilog design."""
 
+import re
+
 from yoparse import getUnparsedWidthAndDepthRange, getUnparsedWidthRangeType, NetTypes
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory
 from gbexception import GhostbusException
@@ -248,10 +250,18 @@ class GenerateBranch():
         self.branch = branch_name
         self.type = None
 
+    def isFor(self):
+        return self.type == self.TYPE_FOR
+
+    def isIf(self):
+        return self.type == self.TYPE_IF
+
 class GenerateIf(GenerateBranch):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.type = self.TYPE_IF
+        self.unrolled_size = "1"
+        self.loop_range = "[0:0]"
 
     def __str__(self):
         return f"generate if (): {self.branch}"
@@ -318,9 +328,112 @@ class GenerateFor(GenerateBranch):
         self.comp = comp
         self.inc = self._parseInc(inc)
         self.type = self.TYPE_FOR
+        self.unrolled_size = self._getUnrolledSizeStr()
+        self.loop_range = f"[0:{self.unrolled_size}-1]"
+
+    def _getUnrolledSizeStr(self):
+        """Try to divine the size of the unrolled loop using the strings parsed from the for loop
+        (preserving parameters and expressions in the source code).
+        Also tries to make the result as friendly to read as possible."""
+        p1 = ""
+        if self.op in (self.OP_GE, self.OP_LE):
+            p1 = "+1"
+        if self.inc[0] == self.INC_ADD:
+            ss = f"{self.comp}"
+            mm = f"-{self.initial}"
+            if self.initial == "0":
+                mm = ""
+        elif self.inc[0] == self.INC_SUB:
+            ss = f"{self.initial}"
+            mm = f"-{self.comp}"
+            if self.comp == "0":
+                mm = ""
+        if mm == "" and p1 == "":
+            ss1 = ss
+        else:
+            ss1 = f"({ss}{mm}{p1})"
+        ss2 = f"({ss1}/{self.inc[1]})"
+        if self.inc[1] == "1":
+            return ss1
+        else:
+            return ss2
+        _inc_op_str = self._get_by_val(self._inc_dict, self.inc[0])
+        raise GhostbusException("I don't know how to handle For-Loops with \"{_inc_op_str}\" in the loop eval.")
 
     def __str__(self):
         _op_str = self._get_by_val(self._op_dict, self.op)
         _inc_op_str = self._get_by_val(self._inc_dict, self.inc[0])
         _inc_val = self.inc[1]
         return f"for ({self.index}={self.initial}; {self.index}{_op_str}{self.comp}; {self.index}={self.index}{_inc_op_str}{_inc_val}): {self.branch}"
+
+    def unrollRangeString(self, rangestr):
+        print(f"unrollRangeString: rangestr = {rangestr}")
+        restr = "\[([^:]+):([^\]]+)\]"
+        _match = re.match(restr, rangestr)
+        loopsize = self.unrolled_size
+        if _match:
+            groups = _match.groups()
+            #range = (groups[0], groups[1])
+            rsize = f"({groups[0]}-{groups[1]}+1)"
+            # [(FOO_COPIES*32)-1:0]
+            unrolled = f"[({loopsize}*{rsize})-1:0]"
+            print(f"  returning: {unrolled}")
+            return unrolled
+        return rangestr
+
+    def unrollRange(self, range):
+        # TODO
+        print(f"unrollRange: range = {range}")
+        return f"[range[0]:range[1]]"
+
+def isForLoop(genblock):
+    return (genblock is not None) and genblock.isFor()
+
+def isIfBlock(genblock):
+    return (genblock is not None) and genblock.isIf()
+
+def test_GenerateFor():
+    dd = (
+        # ((branch_name, index, init, op, comp, inc), (unrolled_size, ...)
+        (("branch", "N", "0", "<", "SIZE", "+1"),       ("SIZE",)),
+        (("branch", "N", "0", "<=", "SIZE", "+1"),      ("(SIZE+1)",)),
+        (("branch", "N", "SIZE", ">", "0", "-1"),       ("SIZE",)),
+        (("branch", "N", "SIZE", ">=", "0", "-1"),      ("(SIZE+1)",)),
+        (("branch", "N", "SIZE-1", ">=", "0", "-1"),    ("(SIZE-1+1)",)),
+        (("branch", "N", "START", "<", "SIZE", "+1"),   ("(SIZE-START)",)),
+        (("branch", "N", "START", "<=", "SIZE", "+1"),  ("(SIZE-START+1)",)),
+        (("branch", "N", "START", "<", "SIZE", "+2"),   ("((SIZE-START)/2)",)),
+        (("branch", "N", "START", "<=", "SIZE", "+2"),  ("((SIZE-START+1)/2)",)),
+        (("branch", "N", "START", ">", "SIZE", "-1"),   ("(START-SIZE)",)),
+        (("branch", "N", "START", ">=", "SIZE", "-1"),  ("(START-SIZE+1)",)),
+        (("branch", "N", "START", ">", "SIZE", "-2"),   ("((START-SIZE)/2)",)),
+        (("branch", "N", "START", ">=", "SIZE", "-2"),  ("((START-SIZE+1)/2)",)),
+    )
+    fail = False
+    for params, results in dd:
+        gf = GenerateFor(*params)
+        unrolled_size = results[0]
+        if gf.unrolled_size != unrolled_size:
+            fail = True
+            print(f"  {gf}: {gf.unrolled_size} != {unrolled_size}")
+    if fail:
+        return 1
+    return 0
+
+def doTests():
+    tests = (
+        test_GenerateFor,
+    )
+    fails = 0
+    for test in tests:
+        rval = test()
+        if rval != 0:
+            fails += 1
+    if fails > 0:
+        print(f"FAIL: {fails}/{len(tests)} failed.")
+        return 1
+    print("PASS")
+    return 0
+
+if __name__ == "__main__":
+    exit(doTests())
