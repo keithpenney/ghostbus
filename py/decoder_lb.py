@@ -537,7 +537,14 @@ class DecoderLB():
             fd.write(decode)
             print(f"Wrote to {fname}")
         self.parent_domain_decoder._addGhostbusDef(dest_dir, self.name)
-
+        # Then, generate decoding logic for each block scope
+        block_decode = self._GhostbusBlockDecoding()
+        for branch, decode in block_decode.items():
+            fname = f"ghostbus_{self.name}_{branch}.vh"
+            with open(os.path.join(dest_dir, fname), "w") as fd:
+                fd.write(decode)
+                print(f"Wrote to {fname}")
+                self.parent_domain_decoder._addGhostbusDef(dest_dir, f"{self.name}_{branch}")
         # Then generate instantiation code for any children in their appropriate domains
         for domain, decoder in self.domains.items():
             if domain in decoder.mod.declared_busses:
@@ -562,6 +569,15 @@ class DecoderLB():
             ss.append(decoder.dinRouting())
             ss.append(decoder.busDecoding())
         return "\n".join(ss)
+
+    def _GhostbusBlockDecoding(self):
+        block_decode = {}
+        for domain, decoder in self.domains.items():
+            decode = decoder.blockDecoding()
+            for branch, decodestr in decode.items():
+                ss = block_decode.get(branch, "")
+                block_decode[branch] = ss + decodestr + "\n"
+        return block_decode
 
     def GhostbusMagic(self, dest_dir="_auto"):
         """Generate the automatic files for this project and write to
@@ -1179,13 +1195,6 @@ class DecoderDomainLB():
     def _blockRamInit(self, ram, branch):
         # Declare a wire for reading from within the block scope, then declare RAM as normal
         # but with branch name incorporated into net names
-        if None in ram.range:
-            rangestr = ""
-        else:
-            rangestr = f"[{ram.range[0]}:{ram.range[1]}] "
-            if ram.genblock.isFor():
-                rangestr = ram.genblock.unrollRangeString(rangestr) + " "
-        ss = [f"wire {rangestr}{branch}_{ram.name}_r;"]
         if self.local_aw is None:
             local_aw = self.ghostbus['aw']
         else:
@@ -1193,9 +1202,19 @@ class DecoderDomainLB():
         divwidth = local_aw - ram.aw
         base_rel = ram.base
         end = base_rel + (1<<ram.aw) - 1
+        if None in ram.range:
+            rangestr = ""
+        else:
+            rangestr = f"[{ram.range[0]}:{ram.range[1]}] "
+            addrhit = f"wire addrhit_{branch}_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
+            if ram.genblock.isFor():
+                rangestr = ram.genblock.unrollRangeString(rangestr) + " "
+                addrhit_range = f"[{ram.genblock.unrolled_size}-1:0] "
+                addrhit = f"wire {addrhit_range}addrhit_{branch}_{ram.name};"
+        ss = [f"wire {rangestr}{branch}_{ram.name}_r;"]
         ss.extend([
             f"localparam {branch.upper()}_{ram.name.upper()}_AW = $clog2({ram.depth[1]}+1);",
-            f"wire addrhit_{branch}_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}",
+            addrhit,
         ])
         return "\n".join(ss)
 
@@ -1704,6 +1723,71 @@ class DecoderDomainLB():
                     ss.append(f"assign {ext_port} = {gb_port};")
         return "\n".join(ss)
 
+    def blockDecoding(self):
+        dd = {} # {branch: decodestring}
+        # CSRs
+        for branch, csrs in self.block_csrs.items():
+            if dd.get(branch) is None:
+                dd[branch] = []
+            ss = []
+            for csr in csrs:
+                if csr.genblock.isIf():
+                    continue
+                index = csr.genblock.index
+                ss.append(f"// CSR {csr.name}")
+                ss.append("initial begin")
+                ss.append(f"  {branch}_{csr.name}_w[{index}] = {csr.name};")
+                ss.append("end")
+                ss.append(f"always @({csr.name} or {branch}_{csr.name}_w[{index}]) begin")
+                ss.append(f"  {branch}_{csr.name}_r[{index}] <= {csr.name};")
+                ss.append(f"  {csr.name} <= {branch}_{csr.name}_w[{index}];")
+                ss.append("end")
+            dd[branch].extend(ss)
+        # RAMs
+        for branch, rams in self.block_rams.items():
+            if dd.get(branch) is None:
+                dd[branch] = []
+            ss = []
+            for ram in rams:
+                if ram.genblock.isIf():
+                    continue
+                index = csr.genblock.index
+                rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
+                sizestr = csr.size_str
+                awstr = f"{branch.upper()}_{csr.name.upper()}_AW"
+                ss.append(f"// RAM {ram.name}")
+                awdiff = self.ghostbus.aw - ram.aw
+                gbah = self.ghostbus.get_range('addr')[0]
+                ramname = f"{branch}_{ram.name}"
+                ss.append(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.aw}] == {vhex(ram.base>>ram.aw, awdiff)} + {index}[{awdiff}-1:0];")
+                ss.append(f"assign {ramname}_r[(({index}+1)*{sizestr})-1-:{sizestr}] = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
+                ss.append(f"always @(posedge {self.ghostbus['clk']}) begin")
+                ss.append(f"  if (addrhit_{ramname}[{index}] & {self.ghostbus['we']}) begin")
+                ss.append(f"    {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
+                ss.append( "  end")
+                ss.append( "end")
+            dd[branch].extend(ss)
+        # Submods
+        for branch, submods in self.block_submods.items():
+            if dd.get(branch) is None:
+                dd[branch] = []
+            ss = []
+            for submod in submods:
+                if submod.genblock.isIf():
+                    continue
+                index = csr.genblock.index
+                aw = submod.domains[None].mod.aw
+                base = submod.domains[None].mod.base
+                awdiff = self.ghostbus.aw - aw
+                rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
+                ss.append(f"// Submodule {submod.name}")
+                ss.append(f"assign addrhit_{branch}_{submod.name}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
+            dd[branch].extend(ss)
+        for key in dd.keys():
+            ss = "\n".join(dd[key])
+            dd[key] = ss
+        # Extmods TODO
+        return dd
 
 def test_createPortBus():
     # Bus 1 is write-only

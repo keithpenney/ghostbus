@@ -87,6 +87,18 @@ class GBRegister(Register):
             return False
         return True
 
+    @property
+    def size_str(self):
+        """Get the size of the register as an unpreprocessed string
+        (preserving parameters and expressions in the source code).
+        Also tries to make the result as friendly to read as possible."""
+        r0, r1 = self.range
+        if None in self.range:
+            return "1"
+        if r1 == "0":
+            return f"({r0}+1)"
+        return f"({r0}-{r1}+1)"
+
 
 # TODO - Combine this class with GBRegister
 class GBMemory(Memory):
@@ -136,6 +148,30 @@ class GBMemory(Memory):
         else:
             _pass = False
         return _pass
+
+    @property
+    def size_str(self):
+        """Get the size of the register as an unpreprocessed string
+        (preserving parameters and expressions in the source code).
+        Also tries to make the result as friendly to read as possible."""
+        r0, r1 = self.range
+        if None in self.range:
+            return "1"
+        if r1 == "0":
+            return f"({r0}+1)"
+        return f"({r0}-{r1}+1)"
+
+    @property
+    def depth_str(self):
+        """Get the depth of the register as an unpreprocessed string
+        (preserving parameters and expressions in the source code).
+        Also tries to make the result as friendly to read as possible."""
+        d0, d1 = self.depth
+        if None in self.depth:
+            return "1"
+        if d0 == "0":
+            return f"({d1}+1)"
+        return f"({d1}-{d0}+1)"
 
 
 class GBMemoryRegionStager(MemoryRegionStager):
