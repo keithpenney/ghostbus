@@ -25,11 +25,11 @@ module top #(
 (* ghostbus_ext="glue_top, rdata" *) wire [GB_DW-1:0] gluetop_rdata;
 (* ghostbus_ext="glue_top, wstb"  *) wire gluetop_wstb;
 
-(* ghostbus_port="clk",       ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_clk;
-(* ghostbus_port="addr",      ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_AW-1:0] gluebottom_addr;
-(* ghostbus_port="wdata",     ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_wdata;
-(* ghostbus_port="rdata",     ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_rdata;
-(* ghostbus_port="wstb, wen", ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_wstb;
+(* ghostbus_port="clk",       ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_clk;
+(* ghostbus_port="addr",      ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_AW-1:0] gluebottom_addr;
+(* ghostbus_port="wdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_wdata;
+(* ghostbus_port="rdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_rdata;
+(* ghostbus_port="wstb, wen", ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_wstb;
 
 bus_glue #(
   .AW(GB_AW),
@@ -78,7 +78,7 @@ submod_foo #(
 (* ghostbus *) reg [7:0] top_ha_reg=8'h42;
 
 // A CSR in the "glue_bottom" domain
-(* ghostbus, ghostbus_name="glue_bottom" *) reg [7:0] bottom_ha_reg=8'h42;
+(* ghostbus, ghostbus_domain="glue_bottom" *) reg [7:0] bottom_ha_reg=8'h42;
 
 `GHOSTBUS_top
 

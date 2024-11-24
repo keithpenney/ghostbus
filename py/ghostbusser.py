@@ -403,6 +403,7 @@ class MemoryTree(WalkDict):
             unfound = ", ".join([val for val in pseudo_name_map.values()])
             err = f"Could not find the following extmods in module {module_name}: {unfound}\n" + \
                   "These extmod names were referenced by a declared bus in the module."
+            # MISSING_EXTMOD
             raise GhostbusException(err)
         # THIRD: sort the indices
         nmems = cls._orderDependencies(pseudo_index_map)
@@ -516,6 +517,7 @@ class MemoryTree(WalkDict):
                                     err = f"Module {node.label} declares {ldb} busses and has no implied busses." \
                                         + " In such a case, every CSR, RAM, submodule, and external module needs to be disambiguated" \
                                         + " with the (* ghostbus_domain=\"domain_name\" *) attribute which indicates the inteded domain."
+                                    # UNSPECIFIED_DOMAIN
                                     raise GhostbusException(err)
                     nmems, extmod_map = self._getMemoryOrder(node.memories, module_name=node.label)
                     printv(" *** Parsing in this order:", end="")
@@ -615,6 +617,7 @@ class MemoryTree(WalkDict):
                                 err = f"Domain name {mem.domain} is declared in multiple modules " + \
                                        "or multiple instances of a single module.  Separate bus " + \
                                        "domains need to be globally unique."
+                                # DOMAIN_COLLISION
                                 raise GhostbusException(err)
                             domain_memories[mem.domain] = mem
         return domain_memories
@@ -667,6 +670,7 @@ class GhostBusser(VParser):
                             print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
                             generate = parseForLoop(gen_block, source)
                             if generate is None:
+                                # UNPARSED_FOR_LOOP
                                 raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
                         print(generate)
                     if ismodule(inst_name):
@@ -847,6 +851,7 @@ class GhostBusser(VParser):
                         printd(f"  added {extmod.name} to MemoryRegion {mr.label} in domain {mr.domain}")
                         added = True
                 if not added:
+                    # UNKNOWN_DOMAIN
                     raise GhostbusException("Could not find the referenced domain {extmod.busname} for extmod {extmod.name} in module {module_name}.")
             module_info[mod_hash]["memory"] = mrs
             module_info[mod_hash]["explicit_busses"] = busnames_explicit
@@ -858,6 +863,7 @@ class GhostBusser(VParser):
             if not valid:
                 self._busValid = False
         if len(self._ghostbusses) == 0:
+            # NO_GHOSTBUS
             raise GhostbusException("No ghostbus found in codebase.")
         #print_dict(module_info)
         #self._busValid = self._top_bus.validate()
@@ -904,12 +910,14 @@ class GhostBusser(VParser):
                     if alias is not None:
                         if bus.alias is not None:
                             if alias != bus.alias:
+                                # NAME_COLLISION
                                 raise GhostbusException(f"Cannot give multiple aliases to the same bus ({alias} and {bus.alias}).")
                         else:
                             bus.alias = alias
                     if extmod_name is not None:
                         if bus.extmod_name is not None:
                             if extmod_name != bus.extmod_name:
+                                # MULTIPLE_ASSOCIATION
                                 raise GhostbusException(f"Cannot give multiple extmod_names to the same bus ({extmod_name} and {bus.extmod_name}).")
                         else:
                             bus.extmod_name = extmod_name
@@ -975,8 +983,9 @@ class GhostBusser(VParser):
                     instnames.append(val)
         if len(instnames) > 1:
             if 'dout' in portnames or 'wdata' in portnames:
-                serr = "The 'dout' vector cannot be shared between multiple instances " + \
+                serr = "The 'dout' ('wdata') vector cannot be shared between multiple instances " + \
                       f"({instnames}). See: {source}"
+                # SHARED_WDATA
                 raise GhostbusException(serr)
         # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
         self._extmod_list.append((netname, dw, portnames, instnames, source, addr, sub))
@@ -1048,10 +1057,12 @@ class GhostBusser(VParser):
                                 except GhostbusException as err:
                                     errst = str(err)
                                 if errst != None:
+                                    # MULTIPLE_ADDRESSES
                                     raise GhostbusException(f"{instnames}: {errst}")
                 busses[instname] = bus
         if inst_err:
             serr = "No instance referenced for external bus. " + ext_advice
+            # NO_EXTMOD_INSTANCE
             raise GhostbusException(serr)
         for instname, bus in busses.items():
             valid, msg = bus.validate()
@@ -1115,7 +1126,7 @@ class GhostBusser(VParser):
                 if not added:
                     serr = f"Ext module somehow references a non-existant module {module}?"
                     print(f"module_info.keys() = {[x for x in module_info.keys()]}")
-                    raise GhostbusException(serr)
+                    raise GhostbusInternalException(serr)
         return
 
     def _resetGenerates(self):
@@ -1157,6 +1168,7 @@ class GhostBusser(VParser):
         for block_name, block_info in self._generates.items():
             forloop = parseForLoop(block_name, block_info["source"])
             if forloop is None:
+                # UNPARSED_FOR_LOOP
                 raise GhostbusException(f"Failed to find for-loop around {block_info['source']}")
             loop_len = None
             for reftype in ("csrs", "rams", "exts"):
@@ -1198,12 +1210,14 @@ class GhostBusser(VParser):
     def build_modtree(self, dd):
         top = self._top
         if top is None:
+            # NO_TOP_SPECIFIED
             raise GhostbusException("I don't know how to do this without top specified")
         modtree = {}
         for module, mod_dict in dd.items():
             if module == top:
                 modtree[module] = {}
         if len(modtree) == 0:
+            # NO_TOP_SPECIFIED
             raise GhostbusException("Could not find top: {}".format(top))
         nested = False
         dd_keys = [key for key in dd.keys()]

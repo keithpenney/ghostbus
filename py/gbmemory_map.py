@@ -74,6 +74,7 @@ class GBRegister(Register):
                 if _net_type == NetTypes.wire:
                     err = f"Cannot have write access to net {self.name} of 'wire' type." + \
                           f" See: {self.meta}"
+                    # INVALID_ACCESS
                     raise GhostbusException(err)
             elif self.access == self.UNSPECIFIED:
                 # Can't leave the access unspecified
@@ -242,10 +243,12 @@ class ExternalModule():
         if self.extbus.aw > ghostbus.aw:
             serr = f"{self.name} external bus has greater address width {self.extbus['aw']}" + \
                    f" than the ghostbus {ghostbus['aw']}"
+            # AW_CONFLICT
             raise GhostbusException(serr)
         if self.extbus.dw > ghostbus.dw:
             serr = f"{self.name} external bus has greater data width {self.extbus['dw']}" + \
                    f" than the ghostbus {ghostbus['dw']}"
+            # DW_CONFLICT
             raise GhostbusException(serr)
         return
 
@@ -336,6 +339,7 @@ class GenerateFor(GenerateBranch):
         """Parse a '=', '!=', '<', '>', '<=', or '>=' into one of cls.OP_*"""
         op = cls._op_dict.get(ss.strip())
         if op is None:
+            # UNPARSED_FOR_LOOP
             raise GhostbusException(f"Unknown boolean operator {ss}")
         return op
 
@@ -345,6 +349,7 @@ class GenerateFor(GenerateBranch):
         ss = ss.strip()
         inc = cls._inc_dict.get(ss[0])
         if inc is None:
+            # UNPARSED_FOR_LOOP
             raise GhostbusException(f"Unknown increment operator {ss}")
         val = ss[1:]
         return (inc, val)
@@ -394,6 +399,7 @@ class GenerateFor(GenerateBranch):
         else:
             return ss2
         _inc_op_str = self._get_by_val(self._inc_dict, self.inc[0])
+        # UNPARSED_FOR_LOOP
         raise GhostbusException("I don't know how to handle For-Loops with \"{_inc_op_str}\" in the loop eval.")
 
     def __str__(self):

@@ -189,6 +189,7 @@ class BusLB():
     @base.setter
     def base(self, _base):
         if self._base is not None and _base != self._base:
+            # MULTIPLE_ADDRESSES
             raise GhostbusException("Multiple explicit addresses set for bus.")
         self._base = _base
         return
@@ -1694,6 +1695,7 @@ class DecoderDomainLB():
         return "\n".join(ss)
 
     def busHookup(self, extmod, parent=None):
+        """Create code to attach an extmod (ExternalModule) to a ghostbus."""
         if parent is None:
             ghostbus = extmod.ghostbus
         else:

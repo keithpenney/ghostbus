@@ -135,7 +135,7 @@ initial begin
     $stop(0);
   end
 end
-`else
+`else // ndef HAND_ROLLED
 initial begin
   $display("TODO: ghostbus support testbench");
   $finish(0);

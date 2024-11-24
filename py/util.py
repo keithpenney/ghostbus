@@ -29,16 +29,36 @@ def print_dict(dd, depth=-1, dohash=False):
 class enum():
     """A slightly fancy enum"""
     def __init__(self, names, base=0):
-        self._strs = {}
+        self._strs = []
+        self._offset = base
         for n in range(len(names)):
             setattr(self, names[n], base+n)
-            self._strs[base+n] = names[n]
+            self._strs.append(names[n])
 
     def __getitem__(self, item):
         return getattr(self, item)
 
+    def __iter__(self):
+        self._ix = 0
+        self._items = False
+        return self
+
+    def items(self):
+        self._ix = 0
+        self._items = True
+        return self
+
+    def __next__(self):
+        if self._ix > len(self._entries):
+            raise StopIteration
+        ss = self._strs[self._ix]
+        self._ix += 1
+        if self._items:
+            return (ss, getattr(self, ss))
+        return getattr(self, ss)
+
     def str(self, val):
-        return self._strs[val]
+        return self._strs[val-self._offset]
 
     def get(self, item):
         if hasattr(self, item):
