@@ -29,6 +29,7 @@ VVP = vvp$(ICARUS_SUFFIX) -N
 VVP_FLAGS = ${VVP_FLAGS_$@}
 VERILOG_CHECK = $(VVP) $< $(VVP_FLAGS)
 
+VFLAGS_top_tb = -DGHOSTBUS_LIVE
 top_tb: top_tb.v $(GHOSTBUS_SOURCES) memory_map.vh
 	$(VERILOG_TB)
 

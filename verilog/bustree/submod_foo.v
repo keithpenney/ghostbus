@@ -4,6 +4,8 @@
   `define GHOSTBUSPORTS
   `define GHOSTBUS_submod_foo
   `define GHOSTBUS_submod_foo_bar_0
+`else
+  `include "defs.vh"
 `endif
 
 module submod_foo #(
@@ -27,6 +29,8 @@ reg [3:0] foo_reg=0;                            // Non-host-accessible register
 (* ghostbus *) wire [5:0] ima_wire;
 reg  [5:0] ima_reg;
 
+`GHOSTBUS_submod_foo
+
 submod_bar #(
   .AW(AW),
   .DW(DW)
@@ -35,7 +39,5 @@ submod_bar #(
   .demo_sig(foo_reg[1])
   `GHOSTBUS_submod_foo_bar_0
 );
-
-`GHOSTBUS_submod_foo
 
 endmodule

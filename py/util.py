@@ -34,13 +34,14 @@ class enum():
         for n in range(len(names)):
             setattr(self, names[n], base+n)
             self._strs.append(names[n])
+        self._items = False
 
     def __getitem__(self, item):
         return getattr(self, item)
 
     def __iter__(self):
         self._ix = 0
-        self._items = False
+        #self._items = False
         return self
 
     def items(self):
@@ -49,7 +50,8 @@ class enum():
         return self
 
     def __next__(self):
-        if self._ix > len(self._entries):
+        if self._ix >= len(self._strs):
+            self._items = False
             raise StopIteration
         ss = self._strs[self._ix]
         self._ix += 1

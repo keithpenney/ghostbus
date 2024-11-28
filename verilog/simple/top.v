@@ -2,8 +2,10 @@
 
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUS_top
-  `define GHOSTBUS_submod_foo_0
-  `define GHOSTBUS_submod_foo_1
+  `define GHOSTBUS_top_submod_foo_0
+  `define GHOSTBUS_top_submod_foo_1
+`else
+  `include "defs.vh"
 `endif
 
 module top (
@@ -20,6 +22,12 @@ localparam FOO_DW = 32;
 localparam FOO_GW = 8;
 localparam FOO_RD = 8;
 
+// Host-accessible register (will be auto-decoded)
+// Global alias "holiday_pasta"
+(* ghostbus, ghostbus_alias="holiday_pasta" *) reg [7:0] top_ha_reg=8'h42;
+
+`GHOSTBUS_top
+
 submod_foo #(
   .AW(FOO_AW),
   .DW(FOO_DW),
@@ -27,7 +35,7 @@ submod_foo #(
   .RD(FOO_RD)
 ) submod_foo_0 (
   .clk(gb_clk)
-  `GHOSTBUS_submod_foo_0
+  `GHOSTBUS_top_submod_foo_0
 );
 
 submod_foo #(
@@ -37,13 +45,7 @@ submod_foo #(
   .RD(FOO_RD)
 ) submod_foo_1 (
   .clk(gb_clk)
-  `GHOSTBUS_submod_foo_1
+  `GHOSTBUS_top_submod_foo_1
 );
-
-// Host-accessible register (will be auto-decoded)
-// Global alias "holiday_pasta"
-(* ghostbus, ghostbus_alias="holiday_pasta" *) reg [7:0] top_ha_reg=8'h42;
-
-`GHOSTBUS_top
 
 endmodule

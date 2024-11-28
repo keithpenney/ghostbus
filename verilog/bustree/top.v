@@ -2,8 +2,10 @@
 
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUS_top
-  `define GHOSTBUS_submod_foo_top
-  `define GHOSTBUS_submod_foo_bottom
+  `define GHOSTBUS_top_submod_foo_top
+  `define GHOSTBUS_top_submod_foo_bottom
+`else
+  `include "defs.vh"
 `endif
 
 module top #(
@@ -51,6 +53,14 @@ localparam FOO_GW = 8;
 localparam FOO_RD_TOP = 8;
 localparam FOO_RD_BOTTOM = 16;
 
+// A CSR in the default domain
+(* ghostbus *) reg [7:0] top_ha_reg=8'h42;
+
+// A CSR in the "glue_bottom" domain
+(* ghostbus, ghostbus_domain="glue_bottom" *) reg [7:0] bottom_ha_reg=8'h42;
+
+`GHOSTBUS_top
+
 wire clk = gb_clk;
 // submod_foo_top lives in the default domain
 submod_foo #(
@@ -60,7 +70,7 @@ submod_foo #(
   .RD(FOO_RD_TOP)
 ) submod_foo_top (
   .clk(clk)
-  `GHOSTBUS_submod_foo_top
+  `GHOSTBUS_top_submod_foo_top
 );
 
 // submod_foo_bottom lives in the "glue_bottom" domain
@@ -71,15 +81,7 @@ submod_foo #(
   .RD(FOO_RD_BOTTOM)
 ) submod_foo_bottom (
   .clk(clk)
-  `GHOSTBUS_submod_foo_bottom
+  `GHOSTBUS_top_submod_foo_bottom
 );
-
-// A CSR in the default domain
-(* ghostbus *) reg [7:0] top_ha_reg=8'h42;
-
-// A CSR in the "glue_bottom" domain
-(* ghostbus, ghostbus_domain="glue_bottom" *) reg [7:0] bottom_ha_reg=8'h42;
-
-`GHOSTBUS_top
 
 endmodule

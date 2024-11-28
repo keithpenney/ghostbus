@@ -96,6 +96,6 @@ class GhostbusNewException(Exception):
 
 # Add errno strings as class attributes to GhostbusNewException
 _errnos = enum([key for key in _errs.keys()])
-for errno, errstr in self._errnos.items():
+for errstr, errno in _errnos.items():
     setattr(GhostbusNewException, errstr, errno)
 

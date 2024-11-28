@@ -375,7 +375,7 @@ def createPortBus(busses):
         for key, portname in bus.get().items():
             if key in ignores:
                 continue
-            if key not in portkeys:
+            if portname is not None and key not in portkeys:
                 portkeys.append(key)
             if key == "addr":
                 if aw is None:
@@ -422,6 +422,7 @@ class DecoderLB():
         self._def_file = "defs.vh" # TODO - harmonize with DecoderDomainLB()
         self.genblock = memorytree.genblock
         self.gen_addrs = {}
+        self.autogen_loop_index = "GHOSTBUS_AUTOGEN_INDEX" # TODO - Harmonize this with a singleton netname generator class
         for memregion in memorytree.memories:
             domain = memregion.domain
             self.domains[domain] = DecoderDomainLB(self, memregion, ghostbusses, gbportbus)
@@ -531,6 +532,8 @@ class DecoderLB():
         return self.parent_domain_decoder._WriteGhostbusSubmodMap(dest_dir, parentname)
 
     def _GhostbusDoSubmods(self, dest_dir):
+        # TODO - Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
+        global_inits = self._globalInit()
         # First, generate own internal bus decoding code in all domains
         decode = self._GhostbusDecoding()
         fname = f"ghostbus_{self.name}.vh"
@@ -559,6 +562,20 @@ class DecoderLB():
                 ss = submod._WriteGhostbusSubmodMap(dest_dir, self.name)
                 submod._GhostbusDoSubmods(dest_dir)
         return
+
+    @property
+    def has_gens(self):
+        for domain, decoder in self.domains.items():
+            if decoder.has_gens:
+                return True
+        return False
+
+    def _globalInit(self):
+        """Some generated code needs to be done once for all domains."""
+        ss = []
+        if self.has_gens:
+            ss.append(f"integer {self.autogen_loop_index}=0;")
+        return "\n".join(ss)
 
     def _GhostbusDecoding(self):
         """Generate the bus decoding logic for this instance."""
@@ -710,17 +727,26 @@ class DecoderLB():
         ss.append("end")
         # GB tasks
         # TODO - Do it right depending on what bus signals are defined
+        atre = f"@(posedge {bus['clk']})"
         tasks = (
             "// Bus transaction tasks",
             "reg test_pass=1'b1;",
             f"task GB_WRITE (input [{aw-1}:0] addr, input [{dw-1}:0] data);",
             "  begin",
-            f"    @(posedge {bus['clk']}) {bus['addr']} = addr;",
+            f"    {atre} {bus['addr']} = addr;",
             f"    {bus['dout']} = data;",
+            #f"    @(posedge {bus['clk']}) {bus['we']} = 1'b1;",
+            f"    {atre}; // Stupid simulator issues",
             f"    {bus['we']} = 1'b1;",
             f"    {bus['wstb']} = 1'b1;" if (bus['wstb'] is not None and bus['wstb'] != bus['we']) else "",
-            f"    @(posedge {bus['clk']}) {bus['we']} = 1'b0;",
+            f"    {atre}; // Stupid simulator issues",
+            f"    {atre} {bus['we']} = 1'b0;",
             f"    {bus['wstb']} = 1'b0;" if (bus['wstb'] is not None and bus['wstb'] != bus['we']) else "",
+            "`ifndef YOSYS",
+            "`ifdef DEBUG_WRITES",
+            f"       $display(\"DEBUG: Write 0x%x to addr 0x%x\", data, addr);",
+            "`endif",
+            "`endif",
             "  end",
             "endtask",
 
@@ -729,16 +755,21 @@ class DecoderLB():
             "`endif",
             f"task GB_READ_CHECK (input [{aw-1}:0] addr, input [{dw-1}:0] checkval);",
             "  begin",
-            f"    @(posedge {bus['clk']}) {bus['addr']} = addr;",
+            f"    {atre} {bus['addr']} = addr;",
             f"    {bus['dout']} = {vhex(0, dw)};",
             f"    {bus['we']} = 1'b0;",
             f"    {bus['re']} = 1'b1;" if bus['re'] is not None else "",
             "    #(`RDDELAY*TICK);",
-            f"    @(posedge {bus['clk']});",
+            f"    {atre};",
             f"    {bus['rstb']} = 1'b1;" if bus['rstb'] is not None else "",
-            f"    @(posedge {bus['clk']}) {bus['rstb']} = 1'b0;" if bus['rstb'] is not None else "",
+            f"    {atre} {bus['rstb']} = 1'b0;" if bus['rstb'] is not None else "",
             f"    {bus['re']} = 1'b0;" if bus['re'] is not None else "",
-            f"    if ({bus['din']} != checkval) begin",
+            "`ifndef YOSYS",
+            "`ifdef DEBUG_READS",
+            f"       $display(\"DEBUG: Read from addr 0x%x. Expected 0x%x, got 0x%x\", addr, checkval, {bus['din']});",
+            "`endif",
+            "`endif",
+            f"    if ({bus['din']} !== checkval) begin",
             "       test_pass = 1'b0;",
             "`ifndef YOSYS",
             f"       $display(\"ERROR: Read from addr 0x%x. Expected 0x%x, got 0x%x\", addr, checkval, {bus['din']});",
@@ -752,30 +783,30 @@ class DecoderLB():
             "// Stimulus",
             "integer LOOPN;",
             "initial begin",
-            "  #TICK;",
+            f"  {atre};",
             "  `ifdef GHOSTBUS_TEST_CSRS",
             "  $display(\"Reading init values.\");",
             "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
-            "    #TICK GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_INITVALS[LOOPN]);",
+            f"    {atre} GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_INITVALS[LOOPN]);",
             "  end",
             "  if (test_pass) $display(\"PASS\");",
             "  else $display(\"FAIL\");",
-            "  #TICK test_pass = 1'b1;",
+            f"  {atre} test_pass = 1'b1;",
             "  $display(\"Writing CSRs with random values.\");",
             "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
             "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
-            "      #TICK GB_WRITE(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
+            f"      {atre} GB_WRITE(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
             "    end",
             "  end",
             "  $display(\"Reading back written values.\");",
             "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
             "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
-            "      #TICK GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
+            f"      {atre} GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
             "    end",
             "  end",
             "  if (test_pass) $display(\"PASS\");",
             "  else $display(\"FAIL\");",
-            "  #TICK test_pass = 1'b1;",
+            f"  {atre} test_pass = 1'b1;",
             "  `endif // GHOSTBUS_TEST_CSRS",
             "  `ifdef GHOSTBUS_TEST_RAMS",
             "  // TODO", # TODO
@@ -876,7 +907,7 @@ class DecoderDomainLB():
         # Net names for universal auto-generated nets
         self.en_local = "ghostbus_addrhit_local" # TODO - Harmonize this with a singleton netname generator class
         self.local_din = "ghostbus_rdata_local"  # TODO - Harmonize this with a singleton netname generator class
-        self.autogen_loop_index = "GHOSTBUS_AUTOGEN_INDEX" # TODO - Harmonize this with a singleton netname generator class
+        self.autogen_loop_index = self.parent.autogen_loop_index
 
     def _parseMemoryRegion(self, memregion):
         for start, stop, ref in memregion.get_entries():
@@ -911,6 +942,13 @@ class DecoderDomainLB():
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
                     self.max_local = stop
+        return
+
+    @property
+    def has_gens(self):
+        if len(self.block_csrs) > 0 or len(self.block_rams) > 0 or len(self.block_exts) > 0:
+            return True
+        return False
 
     @property
     def genblock(self):
@@ -1098,7 +1136,7 @@ class DecoderDomainLB():
         divwidth = busaw - self.local_aw
         ss = [
             f"// local init",
-            f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw:x}",
+            f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw-1:x}",
             f"reg  [{self.ghostbus['dw']-1}:0] {local_din}=0;",
         ]
         if len(self.rams) > 0:
@@ -1149,7 +1187,6 @@ class DecoderDomainLB():
             ss.append(f"// External Module Instance {ext.name}")
             ss.append(self._addrHit(base_rel, ext, self))
             ss.append(self.busHookup(ext, self))
-
         any_block = False
         for branch, exts in self.block_exts.items():
             if len(exts) == 0:
@@ -1391,7 +1428,8 @@ class DecoderDomainLB():
         _csrreads, rdefaults = self.csrReads()
         if len(_csrreads) == 0:
             if len(_ramreads) > 0:
-                midend = " else begin"
+                #midend = " else begin"
+                midend = ""
             csrreads = "// No CSRs"
         else:
             csrreads = _csrreads
@@ -1400,10 +1438,12 @@ class DecoderDomainLB():
         csrdefaults.extend(wdefaults)
         csrdefaults.extend(rdefaults)
         namemap = self.ghostbus
-        ss.append(f"integer {self.autogen_loop_index}=0;")
+        local_din = self.local_din
+        if self.domain is not None:
+            local_din += "_" + self.domain
         if len(_ramwrites) > 0 or len(_csrwrites) > 0:
             ss.append(f"always @(posedge {namemap['clk']}) begin")
-            ss.append(f"  {self.local_din} <= 0;")
+            ss.append(f"  {local_din} <= 0;")
             if len(csrdefaults) > 0:
                 ss.append("  // Strobe default assignments")
             for strobe in csrdefaults:
@@ -1419,6 +1459,7 @@ class DecoderDomainLB():
             hasclk = True
         if len(_ramreads) > 0 or len(_csrreads) > 0:
             if not hasclk:
+                hasclk = True
                 ss.append(f"always @(posedge {namemap['clk']}) begin")
             ss.append("  // local reads")
             ss.append(f"  if ({en_local} & {self._bus_re}) begin")
@@ -1568,6 +1609,9 @@ class DecoderDomainLB():
         #    local_din <= {{32-(3+1){1'b0}}, foo_generator_top_foo_n_r[AUTOGEN_INDEX]};
         #  end
         #end
+        local_din = self.local_din
+        if self.domain is not None:
+            local_din += "_" + self.domain
         ss = []
         agi = self.autogen_loop_index
         for branch, csrs in self.block_csrs.items():
@@ -1590,8 +1634,8 @@ class DecoderDomainLB():
                 dec = f"{self.ghostbus['addr']}{ar} == {vhex(base, self.local_aw)} + {agi}{ar}"
                 ss.append(f"  // {csr.name}")
                 ss.append(f"  if ({dec}) begin")
-                ss.append(f"    {self.local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {branch}_{csr.name}_r[{agi}]}};")
-                #ss.append(f"    {self.local_din} <= {{32-(3+1){1'b0}}, {branch}_{csr.name}_r[{agi}]};")
+                ss.append(f"    {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {branch}_{csr.name}_r[{agi}]}};")
+                #ss.append(f"    {local_din} <= {{32-(3+1){1'b0}}, {branch}_{csr.name}_r[{agi}]};")
                 #ss.append(f"    {branch}_{csr.name}_w <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
                 ss.append( "  end")
             ss.append("end")
@@ -1651,7 +1695,9 @@ class DecoderDomainLB():
             #ss.append(f"  {ram.name}[{self.ghostbus['addr']}[{ram.name.upper()}_AW-1:0]] <= {self.ghostbus['dout']}[{ram.range[0]}:{ram.range[1]}];")
             ss.append(f"  {local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {ram.name}[{namemap['addr']}[{ram.name.upper()}_AW-1:0]]}};")
             ss.append("end")
-        ss.append(self.genRamReads())
+        genrams = self.genRamReads()
+        if len(genrams) > 0:
+            ss.append(genrams)
         return "\n".join(ss)
 
     def genRamReads(self):
@@ -1665,6 +1711,9 @@ class DecoderDomainLB():
         #    local_din <= {{32-(3+1){1'b0}}, foo_generator_foo_ram_r[((AUTOGEN_INDEX+1)*8)-1-:8]};
         #  end
         #end
+        local_din = self.local_din
+        if self.domain is not None:
+            local_din += "_" + self.domain
         agi = self.autogen_loop_index
         for branch, rams in self.block_rams.items():
             if len(rams) == 0:
@@ -1679,7 +1728,7 @@ class DecoderDomainLB():
                     depth = f"({ram.depth[1]}+1)"
                     ss.append(f"  // {ram.name}")
                     ss.append(f"  if (addrhit_{branch}_{ram.name}[{agi}]) begin")
-                    ss.append(f"    {self.local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r[(({agi}+1)*{depth})-1-:{depth}]}};")
+                    ss.append(f"    {local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r[(({agi}+1)*{depth})-1-:{depth}]}};")
                     ss.append( "  end")
                 ss.append("end")
             else:
@@ -1687,11 +1736,11 @@ class DecoderDomainLB():
                 for ram in rams:
                     ss.append(f"// {ram.name}")
                     ss.append(f"if (addrhit_{branch}_{ram.name}) begin")
-                    ss.append(f"  {self.local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r}};")
+                    ss.append(f"  {local_din} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r}};")
                     ss.append("end")
             num_rams += len(rams)
         if num_rams == 0:
-            return "// No block-scope RAMs"
+            return ""
         return "\n".join(ss)
 
     def busHookup(self, extmod, parent=None):

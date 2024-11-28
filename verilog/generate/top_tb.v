@@ -136,11 +136,7 @@ initial begin
   end
 end
 `else // ndef HAND_ROLLED
-initial begin
-  $display("TODO: ghostbus support testbench");
-  $finish(0);
-end
-
+`include "memory_map.vh"
 `endif
 
 endmodule
