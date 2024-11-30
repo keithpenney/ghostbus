@@ -35,7 +35,6 @@ VERILOG_CHECK = $(VVP) $< $(VVP_FLAGS)
 
 # memory_map.vh
 
-#VFLAGS_top_tb = -DHAND_ROLLED
 VFLAGS_top_tb = -DGHOSTBUS_LIVE
 top_tb: top_tb.v $(GHOSTBUS_SOURCES) memory_map.vh
 	$(VERILOG_TB)
@@ -44,8 +43,15 @@ VVP_FLAGS_top_check=+vcd
 %_check: %_tb
 	$(VERILOG_CHECK)
 
+VFLAGS_top_tb_manual = -DHAND_ROLLED
+top_tb_manual: top_tb.v $(GHOSTBUS_SOURCES)
+	$(VERILOG_TB)
+
+top_check_manual: top_tb_manual
+	$(VERILOG_CHECK)
+
 .PHONY: test
-test: top_check
+test: top_check_manual
 
 CLEANS=top_tb memory_map.vh
 
