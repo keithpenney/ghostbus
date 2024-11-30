@@ -42,7 +42,7 @@ bus_glue #(
   .i_wdata(gluetop_wdata), // input [DW-1:0]
   .i_rdata(gluetop_rdata), // output [DW-1:0]
   .i_wstb(gluetop_wstb), // input
-  .o_clk(gluebottom_clk), // input
+  .o_clk(gluebottom_clk), // output
   .o_addr(gluebottom_addr), // output [AW-1:0]
   .o_wdata(gluebottom_wdata), // output [DW-1:0]
   .o_rdata(gluebottom_rdata), // input [DW-1:0]

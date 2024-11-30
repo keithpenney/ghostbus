@@ -11,13 +11,14 @@ module bus_glue #(
   output [DW-1:0] i_rdata,
   input  i_wstb,
   // out bus (to periph)
-  input  o_clk, // ignored
+  output  o_clk,
   output [AW-1:0] o_addr,
   output [DW-1:0] o_wdata,
   input  [DW-1:0] o_rdata,
   output o_wstb
 );
 
+assign o_clk = i_clk;
 assign o_addr = i_addr;
 assign o_wdata = i_wdata;
 assign i_rdata = o_rdata;

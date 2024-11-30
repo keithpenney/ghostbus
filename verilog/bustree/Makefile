@@ -36,6 +36,9 @@ top_tb: top_tb.v $(GHOSTBUS_SOURCES) memory_map.vh
 %_check: %_tb
 	$(VERILOG_CHECK)
 
+%.vcd: %_tb
+	$(VERILOG_CHECK) +vcd
+
 .PHONY: test
 test: top_check
 

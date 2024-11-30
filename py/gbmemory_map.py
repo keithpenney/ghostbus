@@ -232,6 +232,11 @@ class ExternalModule():
         # New additions for the 'stepchild' feature
         self.sub_bus = None
         self.sub_mr = None
+        # Testing
+        self._base = None
+
+    def __str__(self):
+        return f"ExternalModule: {self.name}"
 
     @property
     def ghostbus(self):
@@ -279,6 +284,10 @@ class ExternalModule():
     def base(self, ignore_val):
         # Ignoring this. Can only set via the bus
         # Need a setter here for reasons...
+        if self.name == "glue_top":
+            print(f"self.extbus.name = {self.extbus.name}")
+            #raise Exception()
+            self._base = ignore_val
         return
 
 

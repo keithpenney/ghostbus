@@ -487,6 +487,7 @@ class MemoryTree(WalkDict):
             if verbose:
                 print(*args, **kwargs)
         top_memories = []
+        stepchildren = [] # (parent extmod, child bus)
         if not self._resolved:
             for key, node in self.walk():
                 if node is None:
@@ -539,7 +540,12 @@ class MemoryTree(WalkDict):
                                         aw = node.memories[mem_index].aw
                                         printv(f"Setting {ref.name}.aw to {aw} (from {node.memories[mem_index].label}.{node.memories[mem_index].domain})")
                                         ref.aw = aw
-                                        # Here I need to give 'ref' a reference to the memory region node.memories[mem_index]
+                                        # No, what's happening here is setting the AW of the extmod from that of the fully-resolved bus
+                                        # so what I need is to set the bus's base to that of the extmod.
+                                        # Ok, so the extmod doesn't yet have a base, so I need to add it to a list to resolve later.
+                                        stepchildren.append((ref, node.memories[mem_index])) # (parent extmod, child bus)
+                                        # Here I'll give 'ref' a reference to the memory region node.memories[mem_index]
+                                        # in case I need it later
                                         ref.sub_mr = node.memories[mem_index]
                                         del extmod_map[ref.name]
                                     else:
@@ -582,6 +588,12 @@ class MemoryTree(WalkDict):
         for mem in self.memories:
             if hasattr(mem, "resolve"):
                 mem.resolve()
+        # Finalize the stitching together of child bus with parent extmod
+        for parent_extmod, child_bus in stepchildren:
+            if parent_extmod._base is not None:
+                child_bus.base = parent_extmod._base
+            else:
+                raise GhostbusException("Failed to give an explicit base address to the child bus.")
         # Delete any zero-sized memories (they weren't added anyhow)
         for key, node in self.walk():
             todelete = []
@@ -868,7 +880,6 @@ class GhostBusser(VParser):
         #print_dict(module_info)
         #self._busValid = self._top_bus.validate()
         self._top = top_mod
-        #self._resolveExt(module_info)
         #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
         #print_dict(modtree, dohash=True)
         #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -1069,65 +1080,6 @@ class GhostBusser(VParser):
             busses[instname] = bus
             #print_dict(busses[instname])
         return busses
-
-    # TODO DELETEME
-    def _handleExt(self, module, netname, vals, dw, source, addr=None, sub=None):
-        if self._ext_dict.get(module, None) is None:
-            self._ext_dict[module] = []
-        portnames = []
-        instnames = []
-        allowed_ports = BusLB._alias_keys
-        if len(vals) > 1:
-            for val in vals:
-                if BusLB.allowed_portname(val):
-                    portnames.append(val)
-                else:
-                    if val not in instnames:
-                        instnames.append(val)
-        else:
-            val = vals[0]
-            if BusLB.allowed_portname(val):
-                # It's a port name
-                portnames.append(val)
-            else:
-                # Assume it's an inst name
-                if val not in instnames:
-                    instnames.append(val)
-        if len(instnames) > 1:
-            if 'dout' in portnames or 'wdata' in portnames:
-                serr = "The 'dout' vector cannot be shared between multiple instances " + \
-                      f"({instnames}). See: {source}"
-                raise GhostbusException(serr)
-        # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
-        self._ext_dict[module].append((netname, dw, portnames, instnames, source, addr, sub))
-        return
-
-    # TODO DELETEME
-    def _resolveExt(self, module_info):
-        #self._ext_modules = {}
-        for module, data in self._ext_dict.items():
-            busses = self._resolveExtmod(data)
-            #self._ext_modules[module] = []
-            for instname, bus in busses.items():
-                extinst = ExternalModule(instname, extbus=bus)
-                printd(f"  Resolving ExternalModule {instname}")
-                added = False
-                for mod_hash, infodict in module_info.items():
-                    mrs = infodict.get("memory", None)
-                    if len(mrs) == 0:
-                        continue
-                    for busname, mr in mrs.items():
-                        if mr.label == module and mr.domain == extinst.busname:
-                            # I need to not just ensure I'm adding to the right module, but also the right domain!
-                            mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
-                            printd(f"  added {extinst.name} to MemoryRegion {mr.label} in domain {mr.domain}")
-                            added = True
-                            break
-                if not added:
-                    serr = f"Ext module somehow references a non-existant module {module}?"
-                    print(f"module_info.keys() = {[x for x in module_info.keys()]}")
-                    raise GhostbusInternalException(serr)
-        return
 
     def _resetGenerates(self):
         """Get ready to handle a new module with potentitally more generate blocks."""

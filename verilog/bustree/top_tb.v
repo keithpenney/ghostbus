@@ -47,7 +47,7 @@ top #(
 // =========== Stimulus =============
 `define GHOSTBUS_TEST_CSRS
 `define DEBUG_WRITES
-//`define DEBUG_READS
+`define DEBUG_READS
 `include "memory_map.vh"
 
 endmodule

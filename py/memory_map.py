@@ -333,7 +333,7 @@ class MemoryRegion():
 
     @base.setter
     def base(self, value):
-        #print(f"***************** base => {self._offset:x} -> {value:x} ({self._top:x})")
+        #print(f"***************** base => {self._offset} -> {value} ({self._top})")
         self._offset = value
         for n in range(len(self.map)):
             start, end, ref = self.map[n]
