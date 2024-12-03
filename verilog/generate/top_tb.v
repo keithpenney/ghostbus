@@ -27,11 +27,18 @@ wire to = ~(|r_timeout);
 localparam FOO_COPIES = 4;
 localparam TOP_BAZ = 1;
 
+wire [31:0] gb_rdata;
+`ifdef HAND_ROLLED
 wire [23:0] gb_addr;
 wire [31:0] gb_wdata;
-wire [31:0] gb_rdata;
 wire gb_wen;
 wire gb_rstb;
+`else
+reg [23:0] gb_addr=0;
+reg [31:0] gb_wdata=0;
+reg gb_wen=1'b0;
+reg gb_rstb=1'b0;
+`endif
 top #(
   .FOO_COPIES(FOO_COPIES),
   .TOP_BAZ(TOP_BAZ)
@@ -47,6 +54,7 @@ top #(
 localparam LB_ADW = 24;
 localparam LB_READ_DELAY = 3;
 
+`ifdef HAND_ROLLED
 wire lb_clk = gb_clk;
 `include "localbus.vh"
 assign gb_addr = lb_addr;
@@ -54,6 +62,7 @@ assign gb_wdata = lb_wdata;
 assign lb_rdata = gb_rdata;
 assign gb_wen = lb_write;
 assign gb_rstb = lb_rstb;
+`endif
 
 // =========== Stimulus =============
 `ifdef HAND_ROLLED
@@ -136,6 +145,9 @@ initial begin
   end
 end
 `else // ndef HAND_ROLLED
+`define GHOSTBUS_TEST_CSRS
+`define DEBUG_READS
+`define DEBUG_WRITES
 `include "memory_map.vh"
 `endif
 

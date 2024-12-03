@@ -3,6 +3,8 @@
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUSPORTS
   `define GHOSTBUS_submod_bar
+`else
+  `include "defs.vh"
 `endif
 
 module submod_bar #(

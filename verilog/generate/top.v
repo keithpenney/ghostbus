@@ -3,9 +3,11 @@
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUS_top
   `define GHOSTBUS_top_baz
-  `define GHOSTBUS_top_foo
+  `define GHOSTBUS_top_foo_generator_foo
   `define GHOSTBUS_top_foo_generator
   `define GHOSTBUS_top_baz_generator
+`else
+  `include "defs.vh"
 `endif
 
 module top #(
@@ -229,7 +231,8 @@ generate
       ,.GBPORT_wstb(GBPORT_wstb_foo[N]) // input
       ,.GBPORT_rstb(GBPORT_rstb_foo[N]) // input
 `else
-      `GHOSTBUS_top_foo
+      // TODO Can I make this just GHOSTBUS_top_foo?
+      `GHOSTBUS_top_foo_generator_foo
 `endif
     );
   end

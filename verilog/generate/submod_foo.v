@@ -5,6 +5,8 @@
   `define GHOSTBUS_submod_foo
   `define GHOSTBUS_submod_foo_bar_0
   `define GHOSTBUS_submod_foo_baz_0
+`else
+  `include "defs.vh"
 `endif
 
 module submod_foo #(
@@ -29,6 +31,8 @@ module submod_foo #(
 
 (* ghostbus *) reg [GW-1:0] foo_reg=8'h42;  // Host-accessible register (will be auto-decoded)
 (* ghostbus_addr='h40 *) reg [3:0] foo_ram [0:RD-1]; // Host-accessible RAM with pre-defined relative address (0x40)
+
+`GHOSTBUS_submod_foo
 
 submod_baz #(
   .AW(AW),
@@ -58,7 +62,5 @@ submod_bar #(
   .demo_sig(foo_reg[1])
   `GHOSTBUS_submod_foo_bar_0
 );
-
-`GHOSTBUS_submod_foo
 
 endmodule

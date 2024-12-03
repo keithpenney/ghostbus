@@ -508,8 +508,22 @@ class DecoderLB():
 
     def GhostbusMagic(self, dest_dir="_auto"):
         self._clearDef(dest_dir)
-        for domain, decoder in self.domains.items():
-            decoder.GhostbusMagic(dest_dir)
+        self._addGhostbusLive(dest_dir)
+        self._addGhostPortsDef(dest_dir)
+        self._GhostbusDoSubmods(dest_dir)
+        #for domain, decoder in self.domains.items():
+        #    decoder.GhostbusMagic(dest_dir)
+        return
+
+    def _addGhostbusLive(self, dest_dir):
+        live = "GHOSTBUS_LIVE"
+        macrostr = (
+            f"`ifndef {live}",
+            f"`define {live}",
+            f"`endif // ifndef {live}",
+        )
+        with open(os.path.join(dest_dir, self._def_file), "a") as fd:
+            fd.write("\n".join(macrostr) + "\n")
         return
 
     def _collectCSRs(self, csrlist):
@@ -532,13 +546,16 @@ class DecoderLB():
         return self.parent_domain_decoder._WriteGhostbusSubmodMap(dest_dir, parentname)
 
     def _GhostbusDoSubmods(self, dest_dir):
-        # TODO - Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
+        # Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
+        ss = []
         global_inits = self._globalInit()
+        ss.append(global_inits)
         # First, generate own internal bus decoding code in all domains
         decode = self._GhostbusDecoding()
+        ss.append(decode)
         fname = f"ghostbus_{self.name}.vh"
         with open(os.path.join(dest_dir, fname), "w") as fd:
-            fd.write(decode)
+            fd.write('\n'.join(ss))
             print(f"Wrote to {fname}")
         self.parent_domain_decoder._addGhostbusDef(dest_dir, self.name)
         # Then, generate decoding logic for each block scope
@@ -561,6 +578,12 @@ class DecoderLB():
             for base, submod in decoder.submods:
                 ss = submod._WriteGhostbusSubmodMap(dest_dir, self.name)
                 submod._GhostbusDoSubmods(dest_dir)
+            # TODO Where are the submods instantiated in block scope?
+            # oh right, decoder.block_submods # {branch_name: [], ...}
+            for branch, submods in decoder.block_submods.items():
+                for submod in submods:
+                    ss = submod._WriteGhostbusSubmodMap(dest_dir, self.name + "_" + branch)
+                    submod._GhostbusDoSubmods(dest_dir)
         return
 
     @property
@@ -596,26 +619,6 @@ class DecoderLB():
                 ss = block_decode.get(branch, "")
                 block_decode[branch] = ss + decodestr + "\n"
         return block_decode
-
-    def GhostbusMagic(self, dest_dir="_auto"):
-        """Generate the automatic files for this project and write to
-        output directory 'dest_dir'."""
-        import os
-        self._addGhostbusLive(dest_dir)
-        self._addGhostPortsDef(dest_dir)
-        self._GhostbusDoSubmods(dest_dir)
-        return
-
-    def _addGhostbusLive(self, dest_dir):
-        live = "GHOSTBUS_LIVE"
-        macrostr = (
-            f"`ifndef {live}",
-            f"`define {live}",
-            f"`endif // ifndef {live}",
-        )
-        with open(os.path.join(dest_dir, self._def_file), "a") as fd:
-            fd.write("\n".join(macrostr) + "\n")
-        return
 
     def _addGhostPortsDef(self, dest_dir):
         gbports = self._GhostbusPorts()
@@ -1116,10 +1119,23 @@ class DecoderDomainLB():
         ss = []
         for port in portlist:
             portkey, portname, rangestr, _dir = port
+            # TODO If I'm instantiated within a for-loop, I need to use
+            #,.GBPORT_din(GBPORT_din_foo[((N+1)*32)-1-:32]) // output [31:0]
+            # instead of,
+            #,.GBPORT_din(GBPORT_din_foo) // output [31:0]
+            # So I need to know the for-loop index and dw
             if len(rangestr):
                 rangestr = " " + rangestr
             dirstr = BusLB.direction_string_periph(_dir)
-            ss.append(f",.{portname}({portname}_{self.inst}) // {dirstr}{rangestr}")
+            sel = ""
+            if portkey not in ('clk', 'addr', 'dout') and isForLoop(self.genblock):
+                index = self.genblock.index
+                dw = self.gbportbus['dw']
+                if portkey == 'din':
+                    sel = f"[(({index}+1)*{dw})-1-:{dw}]"
+                else:
+                    sel = f"[{index}]"
+            ss.append(f",.{portname}({portname}_{self.inst}{sel}) // {dirstr}{rangestr}")
         return "\n".join(ss)
 
     def localInit(self):
@@ -1315,10 +1331,12 @@ class DecoderDomainLB():
         # If this is in a For-Loop, addrHit needs to be declared here as a vector then assigned within the loop
         loopsize = ""
         loopvector = ""
+        branch = ""
         if isForLoop(self.genblock):
             loopsize = self.genblock.unrolled_size
             loopvector = f"[{loopsize}-1:0] "
-            ss.append(f"wire {loopvector} addrhit_{self.inst};")
+            branch = self.genblock.branch
+            ss.append(f"wire {loopvector} addrhit_{branch}_{self.inst};")
         else:
             addrHit = self._addrHit(base_rel, self, parent)
             ss.append(addrHit)
@@ -1347,7 +1365,10 @@ class DecoderDomainLB():
                     else:
                         pbk = f"{{{loopsize}{{{parentbus[netkey]}}}}}"
                         rangestr = loopvector
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{self.inst};")
+                    inst = self.inst
+                    if len(branch) > 0:
+                        inst = f"{branch}_{self.inst}"
+                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
                 elif netkey in ('din',):
                     if isForLoop(self.genblock):
                         rangestr = self.genblock.unrollRangeString(rangestr) + " "
@@ -1802,10 +1823,10 @@ class DecoderDomainLB():
             for ram in rams:
                 if ram.genblock.isIf():
                     continue
-                index = csr.genblock.index
+                index = ram.genblock.index
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
-                sizestr = csr.size_str
-                awstr = f"{branch.upper()}_{csr.name.upper()}_AW"
+                sizestr = ram.size_str
+                awstr = f"{branch.upper()}_{ram.name.upper()}_AW"
                 ss.append(f"// RAM {ram.name}")
                 awdiff = self.ghostbus.aw - ram.aw
                 gbah = self.ghostbus.get_range('addr')[0]
@@ -1831,8 +1852,9 @@ class DecoderDomainLB():
                 base = submod.domains[None].mod.base
                 awdiff = self.ghostbus.aw - aw
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
-                ss.append(f"// Submodule {submod.name}")
-                ss.append(f"assign addrhit_{branch}_{submod.name}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
+                ss.append(f"// Submodule {submod.name} {submod.inst}")
+                # TODO - This needs to be the submod instance, not the module name!
+                ss.append(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
             dd[branch].extend(ss)
         for key in dd.keys():
             ss = "\n".join(dd[key])
