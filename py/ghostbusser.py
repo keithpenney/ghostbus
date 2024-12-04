@@ -650,7 +650,6 @@ class GhostBusser(VParser):
         modtree = {}
         top_mod = None
         top_dict = self._dict["modules"]
-        handledExtModules = []
         module_info = {}
         for mod_hash, mod_dict in top_dict.items():
             associated_strobes = {}
@@ -765,12 +764,13 @@ class GhostBusser(VParser):
                                 printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                             mrs[busname].add(width=0, ref=reg, addr=addr)
                     elif exts is not None:
+                        if generate is not None:
+                            print(f"  Boy howdy! I found extmod {exts} inside generate block {generate.branch}")
                         dw = len(net_dict['bits'])
-                        if module_name not in handledExtModules:
-                            self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname)
-                            if mrs.get(busname, None) is None:
-                                mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                                printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                        self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
+                        if mrs.get(busname, None) is None:
+                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                            printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -868,7 +868,6 @@ class GhostBusser(VParser):
             module_info[mod_hash]["memory"] = mrs
             module_info[mod_hash]["explicit_busses"] = busnames_explicit
             module_info[mod_hash]["implicit_busses"] = busnames_implicit
-            handledExtModules.append(module_name)
         self._busValid = True
         for bus in self._ghostbusses:
             valid, msg = bus.validate()
@@ -969,7 +968,7 @@ class GhostBusser(VParser):
         self._extmod_list = []
         return
 
-    def _handleExtmod(self, module, netname, vals, dw, source, addr=None, sub=None):
+    def _handleExtmod(self, module, netname, vals, dw, source, addr=None, sub=None, generate=None):
         block_name, extname, loop_index = block_inst(netname)
         if block_name is not None:
             print(f"Extmod {extname} is instantiated within a Generate Block!")
@@ -999,7 +998,7 @@ class GhostBusser(VParser):
                 # SHARED_WDATA
                 raise GhostbusException(serr)
         # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
-        self._extmod_list.append((netname, dw, portnames, instnames, source, addr, sub))
+        self._extmod_list.append((netname, dw, portnames, instnames, source, addr, sub, generate))
         return
 
     def _resolveExtmods(self):
@@ -1023,7 +1022,7 @@ class GhostBusser(VParser):
                     "each net in the bus (e.g. 'clk', 'addr', 'din', 'dout', 'we')."
         module_instnames = []
         for datum in data:
-            #netname, dw, portnames, instnames, source, addr = datum
+            #netname, dw, portnames, instnames, source, addr, sub, generate = datum
             instnames = datum[3]
             for instname in instnames:
                 if instname not in module_instnames:
@@ -1049,7 +1048,8 @@ class GhostBusser(VParser):
                 #print(f"len(data) = {len(data)}")
                 for datum in data:
                     #print(f"  datum = {datum}")
-                    netname, dw, portnames, instnames, source, addr, sub = datum
+                    netname, dw, portnames, instnames, source, addr, sub, generate = datum
+                    bus.genblock = generate
                     rangestr = getUnparsedWidthRange(source)
                     if len(instnames) == 0 and universal_inst is not None:
                         instnames.append(universal_inst)

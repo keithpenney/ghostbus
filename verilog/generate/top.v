@@ -26,6 +26,8 @@ localparam FOO_AW = 24;
 localparam FOO_DW = 32;
 localparam FOO_GW = 8;
 localparam FOO_RD = 8;
+localparam EXT_AW = 4;
+localparam EXT_DW = 8;
 
 (* ghostbus *) reg [7:0] top_reg=8'h42;
 
@@ -50,6 +52,7 @@ localparam FOO_RD = 8;
  * submod_bar needs 6 bits AW
  * submod_baz needs 7 bits AW
  * submod_foo needs 8 bits AW
+ * extmod_bar needs 4 bits AW
 
  * Start    Stop      Mod
  * ----------------------
@@ -60,6 +63,7 @@ localparam FOO_RD = 8;
  * 0x0006   0x0006    top_foo_n[2]
  * 0x0007   0x0007    top_foo_n[3]
  * 0x0008   0x000f    baz_ram
+ * 0x0010   0x001f    extmod_bar
  * 0x0020   0x0027    foo_ram[0]
  * 0x0028   0x002f    foo_ram[1]
  * 0x0030   0x0037    foo_ram[2]
@@ -266,6 +270,24 @@ generate
         baz_ram[RAM_N] = (RAM_N[3:0] << 4) | 4'hb;
       end
     end
+
+    (* ghostbus_ext="extmod_bar, clk" *)   wire ext_clk;
+    (* ghostbus_ext="extmod_bar, addr" *)  wire [EXT_AW-1:0] ext_addr;
+    (* ghostbus_ext="extmod_bar, wdata" *) wire [EXT_DW-1:0] ext_wdata;
+    (* ghostbus_ext="extmod_bar, rdata" *) wire [EXT_DW-1:0] ext_rdata;
+    (* ghostbus_ext="extmod_bar, we" *)    wire ext_we;
+
+    extmod #(
+      .aw(EXT_AW),
+      .dw(EXT_DW)
+    ) extmod_bar (
+      .clk(ext_clk), // input
+      .addr(ext_addr), // input [aw-1:0]
+      .din(ext_wdata), // input [dw-1:0]
+      .dout(ext_rdata), // output [dw-1:0]
+      .we(ext_we) // input
+    );
+
 `ifdef HAND_ROLLED
     // CSR top_baz
     initial begin

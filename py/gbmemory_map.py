@@ -239,6 +239,10 @@ class ExternalModule():
         return f"ExternalModule: {self.name}"
 
     @property
+    def genblock(self):
+        return self.extbus.genblock
+
+    @property
     def ghostbus(self):
         return self._ghostbus
 

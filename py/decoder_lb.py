@@ -107,6 +107,7 @@ class BusLB():
         # declared in the same module
         self.extmod_name = None
         self._port_list = None
+        self.genblock = None
 
     @property
     def sub(self):
@@ -415,6 +416,20 @@ def createPortBus(busses):
 #   via the "inside" API while the "outside" API is singular (one-domain always).
 
 class DecoderLB():
+    doneModules = []
+
+    @classmethod
+    def jobDone(cls, modulename):
+        """Keep global track of files created so we don't repeat work.
+        The 'modulename' name of the Ghostbus module (ghostmod) being analyzed.
+        Each ghostmod will generate at least one file but can be encountered
+        many times across the memory map (once for each instance in the project).
+        """
+        if modulename in cls.doneModules:
+            return True
+        cls.doneModules.append(modulename)
+        return False
+
     def __init__(self, memorytree, ghostbusses, gbportbus, debug=False):
         self._debug = debug
         self.domains = {}
@@ -463,7 +478,6 @@ class DecoderLB():
             block_submods = decoder._resolveSubmods()
             for branch, submods in block_submods.items():
                 for submod in submods:
-                    print(f"Adding Verilogger for {submod.inst}")
                     self.veriloggers_inst[submod.inst] = Verilogger(self._debug)
 
     def init_veriloggers(self):
@@ -489,7 +503,6 @@ class DecoderLB():
                 # Generate-if, just strip the branch name from the submod name
                 #gen_branch, instname, gen_index = block_inst(submod.inst)
                 #submod.setInst(instname)
-        print(f"Adding Verilogger for {submod.inst}")
         self.veriloggers_inst[submod.inst] = Verilogger(self._debug)
         self.domains[domain].add_submod(submod, start_addr)
         return
@@ -530,7 +543,7 @@ class DecoderLB():
         self._clearDef(dest_dir)
         self._addGhostbusLive(dest_dir)
         self._addGhostPortsDef(dest_dir)
-        self._GhostbusDoSubmods(dest_dir)
+        self._GhostbusAutogen(dest_dir)
         #for domain, decoder in self.domains.items():
         #    decoder.GhostbusMagic(dest_dir)
         return
@@ -565,20 +578,28 @@ class DecoderLB():
     def _WriteGhostbusSubmodMap(self, dest_dir, parentname, verilogger):
         return self.parent_domain_decoder._WriteGhostbusSubmodMap(dest_dir, parentname, verilogger)
 
-    def _GhostbusDoSubmods(self, dest_dir):
-        # Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
-        self._globalInit()
-        # First, generate own internal bus decoding code in all domains
-        self._GhostbusDecoding()
-        fname = f"ghostbus_{self.name}.vh"
-        self.verilogger_top.write(dest_dir=dest_dir, filename=fname)
-        self.parent_domain_decoder._addGhostbusDef(dest_dir, self.name)
-        # Then, generate decoding logic for each block scope
-        self._GhostbusBlockDecoding()
-        for branch, verilogger in self.veriloggers_block.items():
-            fname = f"ghostbus_{self.name}_{branch}.vh"
-            verilogger.write(dest_dir=dest_dir, filename=fname)
-            self.parent_domain_decoder._addGhostbusDef(dest_dir, f"{self.name}_{branch}")
+    def _GhostbusAutogen(self, dest_dir):
+        """For each Ghostbus module, we will create the following files:
+        * 1 top file: top-level decoding logic
+        * 0 or more instance files: port connection for submod instances within a module
+        * 0 or more block files: block-scope decoding logic
+        Also, for a given memory structure, the same module can be traversed many times
+        (depending on how many times it's instantiated).  If we did things correctly, the
+        generated code will be identical for each pass, so we should only do it once.
+        """
+        doThis = True
+        if self.jobDone(f"{self.name}"):
+            doThis = False
+        if doThis:
+            # Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
+            self._globalInit()
+            # First, generate own internal bus decoding code in all domains
+            self._GhostbusDecoding()
+            fname = f"ghostbus_{self.name}.vh"
+            self.verilogger_top.write(dest_dir=dest_dir, filename=fname)
+            self.parent_domain_decoder._addGhostbusDef(dest_dir, self.name)
+            # Then, generate decoding logic for each block scope
+            self._GhostbusBlockDecoding(dest_dir)
         # Then generate instantiation code for any children in their appropriate domains
         for domain, decoder in self.domains.items():
             if domain in decoder.mod.declared_busses:
@@ -590,15 +611,17 @@ class DecoderLB():
                 parentbus = self.GhostbusPortBus
             for base, submod in decoder.submods:
                 vl = self.veriloggers_inst[submod.inst]
-                submod._WriteGhostbusSubmodMap(dest_dir, self.name, vl)
-                submod._GhostbusDoSubmods(dest_dir)
+                if doThis:
+                    submod._WriteGhostbusSubmodMap(dest_dir, self.name, vl)
+                submod._GhostbusAutogen(dest_dir)
             # TODO Where are the submods instantiated in block scope?
             # oh right, decoder.block_submods # {branch_name: [], ...}
             for branch, submods in decoder.block_submods.items():
                 for submod in submods:
                     vl = self.veriloggers_inst[submod.inst]
-                    submod._WriteGhostbusSubmodMap(dest_dir, self.name + "_" + branch, vl)
-                    submod._GhostbusDoSubmods(dest_dir)
+                    if doThis:
+                        submod._WriteGhostbusSubmodMap(dest_dir, self.name + "_" + branch, vl)
+                    submod._GhostbusAutogen(dest_dir)
         return
 
     @property
@@ -621,9 +644,13 @@ class DecoderLB():
             decoder.topDecoding(self.verilogger_top)
         return
 
-    def _GhostbusBlockDecoding(self):
+    def _GhostbusBlockDecoding(self, dest_dir):
         for domain, decoder in self.domains.items():
             decoder.blockDecoding(self.veriloggers_block)
+        for branch, verilogger in self.veriloggers_block.items():
+            fname = f"ghostbus_{self.name}_{branch}.vh"
+            verilogger.write(dest_dir=dest_dir, filename=fname)
+            self.parent_domain_decoder._addGhostbusDef(dest_dir, f"{self.name}_{branch}")
         return
 
     def _addGhostPortsDef(self, dest_dir):
@@ -946,6 +973,7 @@ class DecoderDomainLB():
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
                 else:
+                    #print(f"ExternalModule {ref.name} is at the top level")
                     self.exts.append((start, ref))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
@@ -1180,9 +1208,9 @@ class DecoderDomainLB():
             if len(csrs) == 0:
                 continue
             if not any_block:
-                vl.comment("// CSRs in block scope")
+                vl.comment("CSRs in block scope")
                 any_block = True
-            vl.comment(f"//   Generate Block {branch}")
+            vl.comment(f"Generate Block {branch}")
             for csr in csrs:
                 vl.add(self._blockCsrInit(csr, branch))
         any_block = False
@@ -1212,10 +1240,12 @@ class DecoderDomainLB():
 
     def extmodsTopInit(self):
         vl = self._vl
+        if len(self.exts) == 0:
+            print(f"  {self.name} No External Modules")
         for base_rel, ext in self.exts:
-            vl.add(f"// External Module Instance {ext.name}")
+            print(f"  {self.name} External Module Instance {ext.name}")
+            vl.comment(f"External Module Instance {ext.name}")
             vl.add(self._addrHit(base_rel, ext, self))
-            #vl.add(self.busHookup(ext, self))
             self.busHookup(ext, vl, self)
         any_block = False
         for branch, exts in self.block_exts.items():
@@ -1226,7 +1256,7 @@ class DecoderDomainLB():
                 any_block = True
             vl.comment(f"Generate Block {branch}")
             for ext in exts:
-                #vl.add(self._blockExtInit(ext, branch))
+                print(f"  {self.name} Block-Scope External Module Instance {ext.name} in branch {branch}")
                 self._blockExtInit(ext, branch, vl)
         return
 
@@ -1411,9 +1441,9 @@ class DecoderDomainLB():
         #                 en_local ? local_din :
         #                 32'h00000000;
         if self._no_reads:
-            return ""
+            return
         if self.ghostbus["din"] is None:
-            return ""
+            return
         en_local = self.en_local
         local_din = self.local_din
         if self.domain is not None:
