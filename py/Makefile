@@ -11,7 +11,7 @@ VVP = vvp$(ICARUS_SUFFIX) -N
 VVP_FLAGS = ${VVP_FLAGS_$@}
 VERILOG_CHECK = $(VVP) $< $(VVP_FLAGS)
 
-TESTFILE=test
+TESTFILE=test_tb
 
 .PHONY: all
 all: statictests mem_map_test $(TESTFILE)_check
@@ -25,19 +25,18 @@ statictests:
 mem_map_test:
 	$(PYTHON) $(PY_DIR)/memory_map.py
 
-$(TESTFILE)_tb.v: $(PY_DIR)/verilogger.py
-	$(PYTHON) $< $(TESTFILE)_tb.v
+$(TESTFILE).v: $(PY_DIR)/verilogger.py
+	$(PYTHON) $< $(TESTFILE).v
 
-$(TESTFILE)_tb: $(TESTFILE)_tb.v
+$(TESTFILE): $(TESTFILE).v
 	$(VERILOG_TB)
 
 .PHONY: $(TESTFILE)_check
-$(TESTFILE).vcd $(TESTFILE)_check: $(TESTFILE)_tb
+$(TESTFILE).vcd $(TESTFILE)_check: $(TESTFILE)
 	$(VERILOG_CHECK)
 
 CLEANS  = $(TESTFILE).v
-CLEANS += $(TESTFILE)_tb.v
-CLEANS += $(TESTFILE)_tb
+CLEANS += $(TESTFILE)
 CLEANS += $(TESTFILE).vcd
 
 clean:
