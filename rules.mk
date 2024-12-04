@@ -14,15 +14,12 @@ PY_DIR=$(GHOSTBUS_DIR)/py
 PYTHON?=python3
 
 GHOSTBUS_IGNORES?=rom
+GHOSTBUS_FLAGS=--live --flat --mangle --debug
 ignore_args=$(addprefix --ignore ,$(GHOSTBUS_IGNORES))
 
 $(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py --live --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) --flat --mangle $(ignore_args) $^
+	$(PYTHON) $(PY_DIR)/ghostbusser.py $(GHOSTBUS_FLAGS) --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) $(ignore_args) $^
 
 ghostbus.d: $(AUTOGEN_DIR)/defs.vh
 	ls $(AUTOGEN_DIR)/ghostbus* > $@
-
-#$(AUTOGEN_DIR)/regmap.json: $(GHOSTBUS_SOURCES)
-#	mkdir -p $(AUTOGEN_DIR)
-#	$(PYTHON) $(PY_DIR)/ghostbusser.py json $^ -t $(GHOSTBUS_TOP) -o $@ --flat --mangle $(ignore_args)

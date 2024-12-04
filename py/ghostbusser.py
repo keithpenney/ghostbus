@@ -1451,7 +1451,7 @@ def handleGhostbus(args):
     gbportbus = createPortBus(gbusses)
     try:
         if args.live or (args.map is not None):
-            dec = DecoderLB(memtree, gbusses, gbportbus)
+            dec = DecoderLB(memtree, gbusses, gbportbus, debug=args.debug)
             if args.live:
                 dec.GhostbusMagic(dest_dir=args.dest)
             if args.map is not None:
@@ -1491,6 +1491,7 @@ def doGhostbus():
     parser.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
     parser.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
     parser.add_argument("--short",  default=False, action="store_true", help="Names are maximally shortened (remaining unique).")
+    parser.add_argument("--debug",  default=False, action="store_true", help="Append debug trace comments to generated code.")
     parser.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
     parser.add_argument("files",    default=[], action="append", nargs="+", help="Source files.")
     args = parser.parse_args()

@@ -415,8 +415,8 @@ def createPortBus(busses):
 #   via the "inside" API while the "outside" API is singular (one-domain always).
 
 class DecoderLB():
-    def __init__(self, memorytree, ghostbusses, gbportbus):
-        self._debug = True
+    def __init__(self, memorytree, ghostbusses, gbportbus, debug=False):
+        self._debug = debug
         self.domains = {}
         self.ghostbusses = {bus.name: bus for bus in ghostbusses}
         self.GhostbusPortBus = gbportbus
@@ -460,7 +460,11 @@ class DecoderLB():
             submod = self.__class__(node, ghostbusses, self.GhostbusPortBus)
             self._handleSubmod(submod, domain, start)
         for domain, decoder in self.domains.items():
-            decoder._resolveSubmods()
+            block_submods = decoder._resolveSubmods()
+            for branch, submods in block_submods.items():
+                for submod in submods:
+                    print(f"Adding Verilogger for {submod.inst}")
+                    self.veriloggers_inst[submod.inst] = Verilogger(self._debug)
 
     def init_veriloggers(self):
         self.verilogger_top = Verilogger(self._debug)
@@ -485,8 +489,9 @@ class DecoderLB():
                 # Generate-if, just strip the branch name from the submod name
                 #gen_branch, instname, gen_index = block_inst(submod.inst)
                 #submod.setInst(instname)
-        self.domains[domain].add_submod(submod, start_addr)
+        print(f"Adding Verilogger for {submod.inst}")
         self.veriloggers_inst[submod.inst] = Verilogger(self._debug)
+        self.domains[domain].add_submod(submod, start_addr)
         return
 
     def _clearDef(self, dest_dir):
@@ -553,12 +558,12 @@ class DecoderLB():
             decoder._collectRAMs(ramlist)
         return
 
-    def submodInitStr(self, base_rel, parent):
+    def submodInitStr(self, base_rel, parent, verilogger):
         # the declaration of ports that get hooked up in GhostbusSubmodMap
-        return self.parent_domain_decoder.submodInitStr(base_rel, parent)
+        return self.parent_domain_decoder.submodInitStr(base_rel, parent, verilogger)
 
-    def _WriteGhostbusSubmodMap(self, dest_dir, parentname):
-        return self.parent_domain_decoder._WriteGhostbusSubmodMap(dest_dir, parentname)
+    def _WriteGhostbusSubmodMap(self, dest_dir, parentname, verilogger):
+        return self.parent_domain_decoder._WriteGhostbusSubmodMap(dest_dir, parentname, verilogger)
 
     def _GhostbusDoSubmods(self, dest_dir):
         # Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
@@ -569,13 +574,11 @@ class DecoderLB():
         self.verilogger_top.write(dest_dir=dest_dir, filename=fname)
         self.parent_domain_decoder._addGhostbusDef(dest_dir, self.name)
         # Then, generate decoding logic for each block scope
-        block_decode = self._GhostbusBlockDecoding()
-        for branch, decode in block_decode.items():
+        self._GhostbusBlockDecoding()
+        for branch, verilogger in self.veriloggers_block.items():
             fname = f"ghostbus_{self.name}_{branch}.vh"
-            with open(os.path.join(dest_dir, fname), "w") as fd:
-                fd.write(decode)
-                print(f"Wrote to {fname}")
-                self.parent_domain_decoder._addGhostbusDef(dest_dir, f"{self.name}_{branch}")
+            verilogger.write(dest_dir=dest_dir, filename=fname)
+            self.parent_domain_decoder._addGhostbusDef(dest_dir, f"{self.name}_{branch}")
         # Then generate instantiation code for any children in their appropriate domains
         for domain, decoder in self.domains.items():
             if domain in decoder.mod.declared_busses:
@@ -586,13 +589,15 @@ class DecoderLB():
                 # Otherwise, the bus comes in from ports with global (common) names
                 parentbus = self.GhostbusPortBus
             for base, submod in decoder.submods:
-                ss = submod._WriteGhostbusSubmodMap(dest_dir, self.name)
+                vl = self.veriloggers_inst[submod.inst]
+                submod._WriteGhostbusSubmodMap(dest_dir, self.name, vl)
                 submod._GhostbusDoSubmods(dest_dir)
             # TODO Where are the submods instantiated in block scope?
             # oh right, decoder.block_submods # {branch_name: [], ...}
             for branch, submods in decoder.block_submods.items():
                 for submod in submods:
-                    ss = submod._WriteGhostbusSubmodMap(dest_dir, self.name + "_" + branch)
+                    vl = self.veriloggers_inst[submod.inst]
+                    submod._WriteGhostbusSubmodMap(dest_dir, self.name + "_" + branch, vl)
                     submod._GhostbusDoSubmods(dest_dir)
         return
 
@@ -617,13 +622,9 @@ class DecoderLB():
         return
 
     def _GhostbusBlockDecoding(self):
-        block_decode = {}
         for domain, decoder in self.domains.items():
-            decode = decoder.blockDecoding(self.veriloggers_block)
-            for branch, decodestr in decode.items():
-                ss = block_decode.get(branch, "")
-                block_decode[branch] = ss + decodestr + "\n"
-        return block_decode
+            decoder.blockDecoding(self.veriloggers_block)
+        return
 
     def _addGhostPortsDef(self, dest_dir):
         fname = "ghostbusports.vh"
@@ -1012,7 +1013,7 @@ class DecoderDomainLB():
         #for branch, decoders in self.block_submods.items():
         #    for decoder in decoders:
         #        print(f"  decoder.gen_addrs = {decoder.gen_addrs}")
-        return
+        return block_submods
 
     def check_bus(self):
         """If any strobes exist, verify the bus has the appropriate strobe signal
@@ -1105,22 +1106,20 @@ class DecoderDomainLB():
             submod._collectRAMs(ramlist)
         return ramlist
 
-    def _WriteGhostbusSubmodMap(self, dest_dir, parentname):
+    def _WriteGhostbusSubmodMap(self, dest_dir, parentname, verilogger):
         fname = f"ghostbus_{parentname}_{self.inst}.vh"
-        ss = self._GhostbusSubmodMap()
-        with open(os.path.join(dest_dir, fname), "w") as fd:
-            fd.write(ss)
-            print(f"Wrote to {fname}")
+        self._GhostbusSubmodMap(verilogger)
+        verilogger.write(dest_dir=dest_dir, filename=fname)
         self._addGhostbusDef(dest_dir, f"{parentname}_{self.inst}")
         return
 
-    def _GhostbusSubmodMap(self):
+    def _GhostbusSubmodMap(self, verilogger):
         """Generate the necessary ghostbus Verilog port map for this instance
         within its parent module.
         This will hook up all nets in the ghostbus, even if they are not used
         in this particular domain.  The nets are declared in submodInitStr()."""
+        vl = verilogger
         portlist = self.gbportbus.getPortList() # (key, name, rangestr, dirstr)
-        ss = []
         for port in portlist:
             portkey, portname, rangestr, _dir = port
             # TODO If I'm instantiated within a for-loop, I need to use
@@ -1139,8 +1138,8 @@ class DecoderDomainLB():
                     sel = f"[(({index}+1)*{dw})-1-:{dw}]"
                 else:
                     sel = f"[{index}]"
-            ss.append(f",.{portname}({portname}_{self.inst}{sel}) // {dirstr}{rangestr}")
-        return "\n".join(ss)
+            vl.add(f",.{portname}({portname}_{self.inst}{sel}) // {dirstr}{rangestr}")
+        return
 
     def topDecoding(self, verilogger):
         self._vl = verilogger
@@ -1201,12 +1200,14 @@ class DecoderDomainLB():
     def submodsTopInit(self):
         vl = self._vl
         for base, submod in self.submods:
-            vl.add(submod.submodInitStr(base, self))
+            #vl.add(submod.submodInitStr(base, self, self._vl))
+            submod.submodInitStr(base, self, vl)
 
         for branch, submods in self.block_submods.items():
-            vl.add(f"// Branch {branch}")
+            vl.comment(f"Branch {branch}")
             for submod in submods:
-                vl.add(submod.submodInitStr(None, self))
+                #vl.add(submod.submodInitStr(None, self, self._vl))
+                submod.submodInitStr(None, self, self._vl)
         return
 
     def extmodsTopInit(self):
@@ -1214,17 +1215,19 @@ class DecoderDomainLB():
         for base_rel, ext in self.exts:
             vl.add(f"// External Module Instance {ext.name}")
             vl.add(self._addrHit(base_rel, ext, self))
-            vl.add(self.busHookup(ext, self))
+            #vl.add(self.busHookup(ext, self))
+            self.busHookup(ext, vl, self)
         any_block = False
         for branch, exts in self.block_exts.items():
             if len(exts) == 0:
                 continue
             if not any_block:
-                vl.add("// Extmods in block scope")
+                vl.comment("Extmods in block scope")
                 any_block = True
-            vl.add(f"//   Generate Block {branch}")
+            vl.comment(f"Generate Block {branch}")
             for ext in exts:
-                vl.add(self._blockExtInit(ext, branch))
+                #vl.add(self._blockExtInit(ext, branch))
+                self._blockExtInit(ext, branch, vl)
         return
 
     def _ramInit(self, mod):
@@ -1283,9 +1286,11 @@ class DecoderDomainLB():
         ])
         return "\n".join(ss)
 
-    def _blockExtInit(self, extmod, branch):
+    def _blockExtInit(self, extmod, branch, verilogger):
         # TODO
-        return f"// TODO - Initialize extmod {extmod.name} in branch {branch}"
+        vl = verilogger
+        vl.comment(f"TODO - Initialize extmod {extmod.name} in branch {branch}")
+        return
 
     @staticmethod
     def _addrHit(base_rel, mod, parent=None):
@@ -1328,17 +1333,19 @@ class DecoderDomainLB():
             parent_signal = signal
         return f"wire {signal}_{mod.inst}={parent_signal} & addrhit_{mod.inst};"
 
-    def submodInitStr(self, base_rel, parent):
+    def submodInitStr(self, base_rel, parent, verilogger):
         """Declare and assign the nets required to attach a submod to the ghostbus.
         'parent' is the module in which the submodule is instantiated.
         For a multi-domain codebase, it's possible that parent.ghostbus does not use all
         the nets in the ghostbus.  In this case, unused nets are still declared.
         Unused inputs into the submod are tied low (assigned to 0).
         """
+        vl = verilogger
         parentbus = parent.ghostbus
         gbports = self.gbportbus
         addrMask = self._addrMask(self, parent)
-        ss = [f"// submodule {self.inst}"]
+        #ss = [f"// submodule {self.inst}"]
+        vl.comment(f"submodule {self.inst}")
         # If this is in a For-Loop, addrHit needs to be declared here as a vector then assigned within the loop
         loopsize = ""
         loopvector = ""
@@ -1347,29 +1354,35 @@ class DecoderDomainLB():
             loopsize = self.genblock.unrolled_size
             loopvector = f"[{loopsize}-1:0] "
             branch = self.genblock.branch
-            ss.append(f"wire {loopvector} addrhit_{branch}_{self.inst};")
+            #ss.append(f"wire {loopvector} addrhit_{branch}_{self.inst};")
+            vl.add(f"wire {loopvector} addrhit_{branch}_{self.inst};")
         else:
             addrHit = self._addrHit(base_rel, self, parent)
-            ss.append(addrHit)
+            #ss.append(addrHit)
+            vl.add(addrHit)
         netlist = self.gbportbus.getPortList() # (key, name, rangestr, dirstr)
         for net in netlist:
             netkey, netname, rangestr, _dir = net
             if netkey == "addr":
-                ss.append(addrMask)
+                #ss.append(addrMask)
+                vl.add(addrMask)
                 continue
             # If net is unused in parentbus
             if parentbus[netkey] is None:
                 # If it's an input to the submod (host-centric output)
                 if _dir == BusLB._output:
                     # Wire to 0
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = 0; // (unused submod input)")
+                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = 0; // (unused submod input)")
+                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = 0; // (unused submod input)")
                 else:
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst}; // (unused submod output)")
+                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst}; // (unused submod output)")
+                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst}; // (unused submod output)")
             else:
                 if len(rangestr):
                     rangestr += " "
                 if netkey in ('clk', 'addr', 'dout'):
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
+                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
+                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
                 elif netkey in ('we', 'wstb', 're', 'rstb'):
                     if loopsize == "":
                         pbk = f"{parentbus[netkey]}"
@@ -1379,14 +1392,18 @@ class DecoderDomainLB():
                     inst = self.inst
                     if len(branch) > 0:
                         inst = f"{branch}_{self.inst}"
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
+                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
+                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
                 elif netkey in ('din',):
                     if isForLoop(self.genblock):
                         rangestr = self.genblock.unrollRangeString(rangestr) + " "
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
+                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
+                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
                 else:
-                    ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
-        return "\n".join(ss)
+                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
+                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
+        #return "\n".join(ss)
+        return
 
     def dinRouting(self):
         # assign gb_din = en_baz_0 ? gb_din_baz_0 :
@@ -1767,13 +1784,14 @@ class DecoderDomainLB():
             return ""
         return "\n".join(ss)
 
-    def busHookup(self, extmod, parent=None):
+    def busHookup(self, extmod, verilogger, parent=None):
         """Create code to attach an extmod (ExternalModule) to a ghostbus."""
         if parent is None:
             ghostbus = extmod.ghostbus
         else:
             ghostbus = parent.ghostbus
-        ss = []
+        #ss = []
+        vl = verilogger
         for portname, ext_port in extmod.extbus.outputs_and_clock().items():
             if ext_port is None:
                 continue
@@ -1785,86 +1803,75 @@ class DecoderDomainLB():
                 # To:
                 #   assign extmod_addr = {{true_aw-aw{1'b0}}, GBPORT_addr[aw-1:0]};
                 true_aw_str = extmod.extbus.get_width(portname)
-                ss.append(f"assign {ext_port} = {{{{{true_aw_str}-{extmod.aw}{{1'b0}}}}, {gb_port}[{extmod.aw}-1:0]}};")
+                #ss.append(f"assign {ext_port} = {{{{{true_aw_str}-{extmod.aw}{{1'b0}}}}, {gb_port}[{extmod.aw}-1:0]}};")
+                vl.add(f"assign {ext_port} = {{{{{true_aw_str}-{extmod.aw}{{1'b0}}}}, {gb_port}[{extmod.aw}-1:0]}};")
             else:
                 #print(f"  portname = {portname}; ext_port = {ext_port}; gb_port = {gb_port}")
                 _range = extmod.extbus.get_range(portname)
                 if _range is not None:
                     _s, _e = _range
-                    ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+                    #ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
+                    vl.add(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
                 elif portname in ('wen', 'ren', 'wstb', 'rstb'):
-                    ss.append(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name};")
+                    vl.add(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name};")
                 else:
-                    ss.append(f"assign {ext_port} = {gb_port};")
-        return "\n".join(ss)
+                    vl.add(f"assign {ext_port} = {gb_port};")
+        #return "\n".join(ss)
+        return
 
     def blockDecoding(self, verilogger_dict):
-        dd = {} # {branch: decodestring}
         # CSRs
         for branch, csrs in self.block_csrs.items():
-            vl = verilogger_dict[branch]
-            if dd.get(branch) is None:
-                dd[branch] = []
-            ss = []
             for csr in csrs:
                 if csr.genblock.isIf():
                     continue
+                vl = verilogger_dict[branch]
                 index = csr.genblock.index
-                ss.append(f"// CSR {csr.name}")
-                ss.append("initial begin")
-                ss.append(f"  {branch}_{csr.name}_w[{index}] = {csr.name};")
-                ss.append("end")
-                ss.append(f"always @({csr.name} or {branch}_{csr.name}_w[{index}]) begin")
-                ss.append(f"  {branch}_{csr.name}_r[{index}] <= {csr.name};")
-                ss.append(f"  {csr.name} <= {branch}_{csr.name}_w[{index}];")
-                ss.append("end")
-            dd[branch].extend(ss)
+                vl.comment(f"CSR {csr.name}")
+                vl.initial()
+                vl.add(f"{branch}_{csr.name}_w[{index}] = {csr.name};")
+                vl.end()
+                vl.always_at_clk(f"{csr.name} or {branch}_{csr.name}_w[{index}]")
+                vl.add(f"{branch}_{csr.name}_r[{index}] <= {csr.name};")
+                vl.add(f"{csr.name} <= {branch}_{csr.name}_w[{index}];")
+                vl.end()
         # RAMs
         for branch, rams in self.block_rams.items():
-            if dd.get(branch) is None:
-                dd[branch] = []
-            ss = []
             for ram in rams:
                 if ram.genblock.isIf():
                     continue
+                vl = verilogger_dict[branch]
                 index = ram.genblock.index
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
                 sizestr = ram.size_str
                 awstr = f"{branch.upper()}_{ram.name.upper()}_AW"
-                ss.append(f"// RAM {ram.name}")
+                vl.comment(f"RAM {ram.name}")
                 awdiff = self.ghostbus.aw - ram.aw
                 gbah = self.ghostbus.get_range('addr')[0]
                 ramname = f"{branch}_{ram.name}"
-                ss.append(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.aw}] == {vhex(ram.base>>ram.aw, awdiff)} + {index}[{awdiff}-1:0];")
-                ss.append(f"assign {ramname}_r[(({index}+1)*{sizestr})-1-:{sizestr}] = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
-                ss.append(f"always @(posedge {self.ghostbus['clk']}) begin")
-                ss.append(f"  if (addrhit_{ramname}[{index}] & {self.ghostbus['we']}) begin")
-                ss.append(f"    {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
-                ss.append( "  end")
-                ss.append( "end")
-            dd[branch].extend(ss)
+                vl.add(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.aw}] == {vhex(ram.base>>ram.aw, awdiff)} + {index}[{awdiff}-1:0];")
+                vl.add(f"assign {ramname}_r[(({index}+1)*{sizestr})-1-:{sizestr}] = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
+                vl.always_at_clk(f"{self.ghostbus['clk']}")
+                vl._if(f"addrhit_{ramname}[{index}] & {self.ghostbus['we']}")
+                vl.add(f"{ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
+                vl.end()
+                vl.end()
         # Submods
         for branch, submods in self.block_submods.items():
-            if dd.get(branch) is None:
-                dd[branch] = []
-            ss = []
             for submod in submods:
                 if submod.genblock.isIf():
                     continue
+                vl = verilogger_dict[branch]
                 index = csr.genblock.index
                 aw = submod.domains[None].mod.aw
                 base = submod.domains[None].mod.base
                 awdiff = self.ghostbus.aw - aw
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
-                ss.append(f"// Submodule {submod.name} {submod.inst}")
+                vl.comment(f"Submodule {submod.name} {submod.inst}")
                 # TODO - This needs to be the submod instance, not the module name!
-                ss.append(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
-            dd[branch].extend(ss)
-        for key in dd.keys():
-            ss = "\n".join(dd[key])
-            dd[key] = ss
+                vl.add(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
         # Extmods TODO
-        return dd
+        return
 
 def test_createPortBus():
     # Bus 1 is write-only
