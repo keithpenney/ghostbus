@@ -10,14 +10,12 @@ PYTHON=python3
 SAFERM_ROOT=$(THIS_DIR)
 RM=$(SCRIPTS_DIR)/saferm.sh $(SAFERM_ROOT) -rf
 
-# Python Tests
-.PHONY: statictests
-statictests:
-	$(PYTHON) $(PY_DIR)/statictests.py
+.PHONY: all
+all: test
 
-.PHONY: mem_map_test
-mem_map_test:
-	$(PYTHON) $(PY_DIR)/memory_map.py
+.PHONY: python_tests
+python_tests:
+	$(MAKE) -C $(PY_DIR) clean all
 
 # Codebase Directories
 VERILOG_SIMPLE_DIR=$(VERILOG_DIR)/simple
@@ -40,8 +38,11 @@ VERILOG_TESTS += verilog_bustree_test
 VERILOG_TESTS += verilog_generate_test
 
 .PHONY: test
-test: mem_map_test statictests $(VERILOG_TESTS)
+test: python_tests $(VERILOG_TESTS)
 
 .PHONY: clean
 clean:
-	$(RM) $(AUTOGEN_DIR) foo_tb foo.vcd
+	$(MAKE) -C $(PY_DIR) clean
+	$(MAKE) -C $(VERILOG_SIMPLE_DIR) clean
+	$(MAKE) -C $(VERILOG_BUSTREE_DIR) clean
+	$(MAKE) -C $(VERILOG_GENERATE_DIR) clean

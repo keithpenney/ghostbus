@@ -7,6 +7,7 @@ from gbexception import GhostbusException, GhostbusFeatureRequest
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, isForLoop
 from util import strDict, check_complete_indices
 from yoparse import block_inst
+from verilogger import Verilogger
 
 
 def vhex(num, width):
@@ -415,6 +416,7 @@ def createPortBus(busses):
 
 class DecoderLB():
     def __init__(self, memorytree, ghostbusses, gbportbus):
+        self._debug = True
         self.domains = {}
         self.ghostbusses = {bus.name: bus for bus in ghostbusses}
         self.GhostbusPortBus = gbportbus
@@ -547,16 +549,20 @@ class DecoderLB():
 
     def _GhostbusDoSubmods(self, dest_dir):
         # Global init e.g. integer GHOSTBUS_AUTOGEN_INDEX=0;
-        ss = []
+        vl = Verilogger(self._debug)
+        #ss = []
         global_inits = self._globalInit()
-        ss.append(global_inits)
+        #ss.append(global_inits)
+        vl.add(global_inits)
         # First, generate own internal bus decoding code in all domains
         decode = self._GhostbusDecoding()
-        ss.append(decode)
+        #ss.append(decode)
+        vl.add(decode)
         fname = f"ghostbus_{self.name}.vh"
-        with open(os.path.join(dest_dir, fname), "w") as fd:
-            fd.write('\n'.join(ss))
-            print(f"Wrote to {fname}")
+        #with open(os.path.join(dest_dir, fname), "w") as fd:
+        #    fd.write('\n'.join(ss))
+        #    print(f"Wrote to {fname}")
+        vl.write(dest_dir=dest_dir, filename=fname)
         self.parent_domain_decoder._addGhostbusDef(dest_dir, self.name)
         # Then, generate decoding logic for each block scope
         block_decode = self._GhostbusBlockDecoding()
@@ -595,21 +601,22 @@ class DecoderLB():
 
     def _globalInit(self):
         """Some generated code needs to be done once for all domains."""
-        ss = []
+        vl = Verilogger(self._debug)
+        #ss = []
         if self.has_gens:
-            ss.append(f"integer {self.autogen_loop_index}=0;")
-        return "\n".join(ss)
+            #ss.append(f"integer {self.autogen_loop_index}=0;")
+            vl.add(f"integer {self.autogen_loop_index}=0;")
+        #return "\n".join(ss)
+        return vl.get()
 
     def _GhostbusDecoding(self):
         """Generate the bus decoding logic for this instance."""
-        ss = []
+        vl = Verilogger(self._debug)
+        #ss = []
         for domain, decoder in self.domains.items():
-            ss.append(decoder.localInit())
-            ss.append(decoder.submodsTopInit())
-            ss.append(decoder.extmodsTopInit())
-            ss.append(decoder.dinRouting())
-            ss.append(decoder.busDecoding())
-        return "\n".join(ss)
+            vl.add(decoder.topDecoding(self._debug))
+        #return "\n".join(ss)
+        return vl.get()
 
     def _GhostbusBlockDecoding(self):
         block_decode = {}
@@ -621,24 +628,23 @@ class DecoderLB():
         return block_decode
 
     def _addGhostPortsDef(self, dest_dir):
-        gbports = self._GhostbusPorts()
         fname = "ghostbusports.vh"
-        with open(os.path.join(dest_dir, fname), "w") as fd:
-            fd.write(gbports + "\n")
-            print(f"Wrote to {fname}")
+        self._GhostbusPorts(dest_dir=dest_dir, filename=fname)
         macrostr = f"GHOSTBUSPORTS"
         macrodef = f"`include \"{fname}\""
         return self._addDef(dest_dir, macrostr, macrodef)
 
-    def _GhostbusPorts(self):
+    def _GhostbusPorts(self, dest_dir, filename):
         """Generate the necessary ghostbus Verilog port declaration"""
         ghostbus = self.GhostbusPortBus
         ports = ghostbus.getPortList() # (key, name, rangestr, dir)
-        ss = ["// Ghostbus ports"]
+        vl = Verilogger(self._debug)
+        vl.add("// Ghostbus ports")
         for key, portname, rangestr, _dir in ports:
             dirstr = BusLB.direction_string_periph(_dir)
-            ss.append(f",{dirstr} {rangestr} {portname}")
-        return "\n".join(ss)
+            vl.add(f",{dirstr} {rangestr} {portname}")
+        vl.write(filename=filename, dest_dir=dest_dir)
+        return
 
     def ExtraVerilogMemoryMap(self, filename, ghostbusses):
         """An extra (non-core functionality) feature.  Generate a memory
@@ -1138,11 +1144,20 @@ class DecoderDomainLB():
             ss.append(f",.{portname}({portname}_{self.inst}{sel}) // {dirstr}{rangestr}")
         return "\n".join(ss)
 
+    def topDecoding(self, debug=False):
+        self._vl = Verilogger(debug)
+        self.localInit() # CHECK
+        self.submodsTopInit() # CHECK
+        self.extmodsTopInit() # CHECK
+        self.dinRouting() # CHECK
+        self.busDecoding() # CHECK
+        return self._vl.get()
+
     def localInit(self):
         # wire en_local = gb_addr[11:9] == 3'b000; // 0x000-0x1ff
         # reg  [31:0] local_din=0;
         if self.no_local:
-            return ""
+            return
         en_local = self.en_local
         local_din = self.local_din
         if self.domain is not None:
@@ -1150,19 +1165,42 @@ class DecoderDomainLB():
             local_din += "_" + self.domain
         busaw = self.ghostbus.aw
         divwidth = busaw - self.local_aw
-        ss = [
-            f"// local init",
-            f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw-1:x}",
-            f"reg  [{self.ghostbus['dw']-1}:0] {local_din}=0;",
-        ]
+        self._vl.comment(f"local init")
+        self._vl.add(f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw-1:x}")
+        self._vl.add(f"reg  [{self.ghostbus['dw']-1}:0] {local_din}=0;")
         if len(self.rams) > 0:
-            ss.append("// local rams")
+            self._vl.comment("local rams")
             for n in range(len(self.rams)):
-                ss.append(self._ramInit(self.rams[n]))
-        ss.append(self.localBlockInit())
-        return "\n".join(ss)
+                self._vl.add(self._ramInit(self.rams[n]))
+        #self._vl.add(self.localBlockInit())
+        self.localBlockInit()
+        return
 
     def localBlockInit(self):
+        any_block = False
+        for branch, csrs in self.block_csrs.items():
+            if len(csrs) == 0:
+                continue
+            if not any_block:
+                self._vl.comment("// CSRs in block scope")
+                any_block = True
+            self._vl.comment(f"//   Generate Block {branch}")
+            for csr in csrs:
+                self._vl.add(self._blockCsrInit(csr, branch))
+        any_block = False
+        for branch, rams in self.block_rams.items():
+            if len(rams) == 0:
+                continue
+            if not any_block:
+                self._vl.comment("RAMs in block scope")
+                any_block = True
+            self._vl.comment(f"Generate Block {branch}")
+            for ram in rams:
+                self._vl.add(self._blockRamInit(ram, branch))
+        return
+
+    #DELETEME
+    def old_localBlockInit(self):
         ss = []
         any_block = False
         for branch, csrs in self.block_csrs.items():
@@ -1187,34 +1225,41 @@ class DecoderDomainLB():
         return "\n".join(ss)
 
     def submodsTopInit(self):
-        ss = []
+        #ss = []
         for base, submod in self.submods:
-            ss.append(submod.submodInitStr(base, self))
+            #ss.append(submod.submodInitStr(base, self))
+            self._vl.add(submod.submodInitStr(base, self))
 
         for branch, submods in self.block_submods.items():
-            ss.append(f"// Branch {branch}")
+            #ss.append(f"// Branch {branch}")
+            self._vl.add(f"// Branch {branch}")
             for submod in submods:
-                ss.append(submod.submodInitStr(None, self))
-        return "\n".join(ss)
+                self._vl.add(submod.submodInitStr(None, self))
+        return
 
     def extmodsTopInit(self):
-        ss = []
+        #ss = []
         for base_rel, ext in self.exts:
-            ss.append(f"// External Module Instance {ext.name}")
-            ss.append(self._addrHit(base_rel, ext, self))
-            ss.append(self.busHookup(ext, self))
+            #ss.append(f"// External Module Instance {ext.name}")
+            self._vl.add(f"// External Module Instance {ext.name}")
+            #ss.append(self._addrHit(base_rel, ext, self))
+            self._vl.add(self._addrHit(base_rel, ext, self))
+            #ss.append(self.busHookup(ext, self))
+            self._vl.add(self.busHookup(ext, self))
         any_block = False
         for branch, exts in self.block_exts.items():
             if len(exts) == 0:
                 continue
             if not any_block:
-                ss.append("// Extmods in block scope")
+                #ss.append("// Extmods in block scope")
+                self._vl.add("// Extmods in block scope")
                 any_block = True
-            ss.append(f"//   Generate Block {branch}")
+            #ss.append(f"//   Generate Block {branch}")
+            self._vl.add(f"//   Generate Block {branch}")
             for ext in exts:
-                ss.append(self._blockExtInit(ext, branch))
-
-        return "\n".join(ss)
+                #ss.append(self._blockExtInit(ext, branch))
+                self._vl.add(self._blockExtInit(ext, branch))
+        return
 
     def _ramInit(self, mod):
         # localparam FOO_RAM_AW = $clog2(RD);
@@ -1393,20 +1438,19 @@ class DecoderDomainLB():
             local_din += "_" + self.domain
         portdict = self.gbportbus
         namemap = self.ghostbus
-        ss = [
-            "// din routing",
-        ]
+        self._vl.comment("din routing")
         if self.no_local:
-            ss.append(f"assign {namemap['din']} = ")
+            self._vl.add(f"assign {namemap['din']} = ")
         else:
-            ss.append(f"assign {namemap['din']} = {en_local} ? {local_din} :")
+            self._vl.add(f"assign {namemap['din']} = {en_local} ? {local_din} :")
         for n in range(len(self.submods)):
             base, submod = self.submods[n]
             inst = submod.inst
             if n == 0 and self.no_local:
-                ss[-1] = ss[-1] + f"addrhit_{inst} ? {portdict['din']}_{inst} :"
+                # TODO - Find a more elegant way to do this
+                self._vl[-1] = self._vl[-1] + f"addrhit_{inst} ? {portdict['din']}_{inst} :"
             else:
-                ss.append(f"                addrhit_{inst} ? {portdict['din']}_{inst} :")
+                self._vl.add(f"                addrhit_{inst} ? {portdict['din']}_{inst} :")
         for n in range(len(self.exts)):
             base_rel, ext = self.exts[n]
             if not ext.access & Register.READ:
@@ -1415,11 +1459,12 @@ class DecoderDomainLB():
             inst = ext.name
             din = ext.getDinPort()
             if (n == 0) and (self.no_local) and (len(self.submods) == 0):
-                ss[-1] = ss[-1] + f"addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
+                # TODO - Find a more elegant way to do this
+                self._vl[-1] = self._vl[-1] + f"addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
             else:
-                ss.append(f"                addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
-        ss.append(f"                {vhex(0, self.ghostbus['dw'])};")
-        return "\n".join(ss)
+                self._vl.add(f"                addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
+        self._vl.add(f"                {vhex(0, self.ghostbus['dw'])};")
+        return
 
     def busDecoding(self):
         en_local = self.en_local
@@ -1439,7 +1484,6 @@ class DecoderDomainLB():
             csrwrites = _csrwrites
         _ramreads = self.ramReads()
         crindent = 4*" "
-        extraend = ""
         midend = ""
         if len(_ramreads) == 0:
             #crindent = 6*" "
@@ -1454,7 +1498,6 @@ class DecoderDomainLB():
             csrreads = "// No CSRs"
         else:
             csrreads = _csrreads
-        ss = []
         hasclk = False
         csrdefaults.extend(wdefaults)
         csrdefaults.extend(rdefaults)
@@ -1463,34 +1506,33 @@ class DecoderDomainLB():
         if self.domain is not None:
             local_din += "_" + self.domain
         if len(_ramwrites) > 0 or len(_csrwrites) > 0:
-            ss.append(f"always @(posedge {namemap['clk']}) begin")
-            ss.append(f"  {local_din} <= 0;")
+            self._vl.add(f"always @(posedge {namemap['clk']}) begin")
+            self._vl.add(f"  {local_din} <= 0;")
             if len(csrdefaults) > 0:
-                ss.append("  // Strobe default assignments")
+                self._vl.add("  // Strobe default assignments")
             for strobe in csrdefaults:
                 if hasattr(strobe, "name"):
-                    ss.append(f"  {strobe.name} <= {vhex(0, strobe.dw)};")
+                    self._vl.add(f"  {strobe.name} <= {vhex(0, strobe.dw)};")
                 else:
-                    ss.append(f"  {strobe} <= {vhex(0, 1)};")
-            ss.append("  // local writes")
-            ss.append(f"  if ({en_local} & {self._bus_we}) begin")
-            ss.append("    " + ramwrites.replace("\n", "\n    "))
-            ss.append("    " + csrwrites.replace("\n", "\n    "))
-            ss.append(f"  end // if ({en_local} & {self._bus_we})")
+                    self._vl.add(f"  {strobe} <= {vhex(0, 1)};")
+            self._vl.add("  // local writes")
+            self._vl.add(f"  if ({en_local} & {self._bus_we}) begin")
+            self._vl.add("    " + ramwrites.replace("\n", "\n    "))
+            self._vl.add("    " + csrwrites.replace("\n", "\n    "))
+            self._vl.add(f"  end // if ({en_local} & {self._bus_we})")
             hasclk = True
         if len(_ramreads) > 0 or len(_csrreads) > 0:
             if not hasclk:
                 hasclk = True
-                ss.append(f"always @(posedge {namemap['clk']}) begin")
-            ss.append("  // local reads")
-            ss.append(f"  if ({en_local} & {self._bus_re}) begin")
-            ss.append("    " + ramreads.replace("\n", "\n    ") + midend)
-            ss.append(crindent + csrreads.replace("\n", "\n"+crindent))
-            ss.append(extraend)
-            ss.append(f"  end // if ({en_local} & {self._bus_re})")
+                self._vl.add(f"always @(posedge {namemap['clk']}) begin")
+            self._vl.add("  // local reads")
+            self._vl.add(f"  if ({en_local} & {self._bus_re}) begin")
+            self._vl.add("    " + ramreads.replace("\n", "\n    ") + midend)
+            self._vl.add(crindent + csrreads.replace("\n", "\n"+crindent))
+            self._vl.add(f"  end // if ({en_local} & {self._bus_re})")
         if hasclk:
-            ss.append(f"end // always @(posedge {namemap['clk']})")
-        return "\n".join(ss)
+            self._vl.add(f"end // always @(posedge {namemap['clk']})")
+        return
 
     def _get_all_csrs(self, block_append=""):
         csrs = self.csrs.copy()
