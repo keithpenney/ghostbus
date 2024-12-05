@@ -40,8 +40,68 @@ top top_i (
 
 // =========== Stimulus =============
 `define GHOSTBUS_TEST_CSRS
-//`define DEBUG_READS
+`define DEBUG_READS
 `define DEBUG_WRITES
 `include "memory_map.vh"
+
+initial begin
+  @(posedge gb_clk) test_pass=1'b1;
+  $display("Reading CSR init values.");
+  CSR_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else $display("FAIL");
+
+  @(posedge gb_clk);
+  CSR_WRITE_ALL();
+  $display("Writing CSRs with random values.");
+
+  @(posedge gb_clk) test_pass=1'b1;
+  $display("Reading back written values.");
+  CSR_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else $display("FAIL");
+
+  $display("Reading RAM init values.");
+  //TOP_SUBMOD_FOO_0_FOO_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_FOO_RAM_BASE, 32'h00000001);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_FOO_RAM_BASE+1, 32'h00000002);
+
+  //TOP_SUBMOD_FOO_0_BAR_0_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAR_0_BAR_RAM_BASE, 32'h00000080);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+
+  //TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_BAR_RAM_BASE, 32'h00000080);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+
+  //TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_BAR_RAM_BASE, 32'h00000080);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_BAR_RAM_BASE+1, 32'h00000081);
+
+  //TOP_SUBMOD_FOO_1_FOO_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_FOO_RAM_BASE, 32'h00000001);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_FOO_RAM_BASE+1, 32'h00000002);
+
+  //TOP_SUBMOD_FOO_1_BAR_0_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAR_0_BAR_RAM_BASE, 32'h00000080);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+
+  //TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_BAR_RAM_BASE, 32'h00000080);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+
+  //TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_BAR_RAM_BASE, 32'h00000080);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_BAR_RAM_BASE+1, 32'h00000081);
+
+  if (test_pass) $display("PASS");
+  else $display("FAIL");
+
+  if (test_pass) begin
+    $finish(0);
+  end else begin
+    $stop(0);
+  end
+end
 
 endmodule

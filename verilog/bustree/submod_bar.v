@@ -18,6 +18,12 @@ module submod_bar #(
 
 (* ghostbus_ha, ghostbus_addr='h100 *)
 reg [7:0] bar_ram [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
+integer N=0;
+initial begin
+  for (N=0; N<64; N=N+1) begin
+    bar_ram[N] = 8'h81 + N[7:0];
+  end
+end
 
 `GHOSTBUS_submod_bar
 

@@ -149,6 +149,42 @@ end
 `define DEBUG_READS
 `define DEBUG_WRITES
 `include "memory_map.vh"
+
+initial begin
+  @(posedge gb_clk) test_pass=1'b1;
+  $display("Reading init values.");
+  CSR_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else $display("FAIL");
+
+  @(posedge gb_clk);
+  CSR_WRITE_ALL();
+  $display("Writing CSRs with random values.");
+
+  @(posedge gb_clk) test_pass=1'b1;
+  $display("Reading back written values.");
+  CSR_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else $display("FAIL");
+
+  $display("Reading RAM init values.");
+  //TOP_BAZ_BAR_0_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_BAZ_BAR_0_BAR_RAM_BASE, 32'h00000082);
+  GB_READ_CHECK(TOP_BAZ_BAR_0_BAR_RAM_BASE+1, 32'h00000083);
+
+  //TOP_BAZ_BAR_1_BAR_RAM_BASE
+  GB_READ_CHECK(TOP_BAZ_BAR_1_BAR_RAM_BASE, 32'h00000082);
+  GB_READ_CHECK(TOP_BAZ_BAR_1_BAR_RAM_BASE+1, 32'h00000083);
+
+  if (test_pass) $display("PASS");
+  else $display("FAIL");
+
+  if (test_pass) begin
+    $finish(0);
+  end else begin
+    $stop(0);
+  end
+end
 `endif
 
 endmodule

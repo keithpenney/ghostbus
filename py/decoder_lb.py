@@ -723,6 +723,11 @@ class DecoderLB():
         dw = bus["dw"]
         nCSRs = len(csrs)
         nRAMs = len(rams)
+        ram_names = []
+        for n in range(len(rams)):
+            ram = rams[n]
+            name = f"{ram._domain[1].replace('.', '_')}_{ram.name.replace('.', '_')}"
+            ram_names.append(f"localparam {name.upper()}_BASE = {vhex(ram._domain[0] + ram.base, 32)}; // {ram._domain[1]}.{ram.name}")
         # Define the structures
         ss = [
             "// Auto-generated with ghostbusser",
@@ -738,11 +743,11 @@ class DecoderLB():
             f"reg [{dw}-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];",
             f"reg [{aw}-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];",
             f"reg [nRAMs-1:0] GHOSTBUS_RAM_WRITABLE = {vhex(rw, nRAMs)};",
-            "// Initialization",
-            #"integer N;",
-            "initial begin",
-            #"  for (N=0; N<nCSRs; N=N+1) begin: CSR_Init",
         ]
+        ss.append("// RAMs by name")
+        ss.extend(ram_names)
+        ss.append("// Initialization")
+        ss.append("initial begin")
         # Initialize CSR info
         for n in range(len(csrs)):
             csr = csrs[n]
@@ -760,6 +765,7 @@ class DecoderLB():
             ss.append(f"  GHOSTBUS_RAM_DEPTHS[{n}] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
         #ss.append("  end")
         ss.append("end")
+        ss.append("integer LOOPN;")
         # GB tasks
         # TODO - Do it right depending on what bus signals are defined
         atre = f"@(posedge {bus['clk']})"
@@ -814,9 +820,29 @@ class DecoderLB():
             "endtask",
         )
         ss.extend(tasks)
+        csr_read_task = (
+            "// CSR Reads",
+            f"task CSR_READ_CHECK_ALL;",
+            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
+            f"    {atre} GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_INITVALS[LOOPN]);",
+            "  end",
+            "endtask",
+        )
+        ss.extend(csr_read_task)
+        csr_write_task = (
+            "// CSR Writes",
+            f"task CSR_WRITE_ALL;",
+            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
+            "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
+            f"      {atre} GB_WRITE(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
+            f"      GHOSTBUS_INITVALS[LOOPN] = GHOSTBUS_RANDVALS[LOOPN];",
+            "    end",
+            "  end",
+            "endtask",
+        )
+        ss.extend(csr_write_task)
         stimulus = (
             "// Stimulus",
-            "integer LOOPN;",
             "initial begin",
             f"  {atre};",
             "  `ifdef GHOSTBUS_TEST_CSRS",
@@ -855,7 +881,7 @@ class DecoderLB():
             "  end",
             "end",
         )
-        ss.extend(stimulus)
+        #ss.extend(stimulus)
         outs = "\n".join(ss).replace('\n\n', '\n')
         if filename is None:
             print("\n".join(outs))
