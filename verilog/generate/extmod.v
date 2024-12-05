@@ -18,7 +18,7 @@ reg [dw-1:0] ram [0:RAM_SIZE-1];
 integer N;
 initial begin
   for (N=0; N<RAM_SIZE; N=N+1) begin
-    ram[N] = 8'hC0 | N[7:0];
+    ram[N] = 8'h80 | N[7:0];
   end
 end
 

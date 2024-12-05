@@ -22,9 +22,9 @@ gold: $(AUTOGEN_DIR)/regmap.json
 parse: $(GHOSTBUS_SOURCES)
 	$(PYTHON) $(PY_DIR)/ghostbusser.py -t $(GHOSTBUS_TOP) $^
 
-$(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json memory_map.vh: $(GHOSTBUS_SOURCES)
+$(AUTOGEN_DIR)/defs.vh $(AUTOGEN_DIR)/regmap.json gb_testbench.vh: $(GHOSTBUS_SOURCES)
 	mkdir -p $(AUTOGEN_DIR)
-	$(PYTHON) $(PY_DIR)/ghostbusser.py $(GHOSTBUS_FLAGS) --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) $(ignore_args) $^ --map memory_map.vh
+	$(PYTHON) $(PY_DIR)/ghostbusser.py $(GHOSTBUS_FLAGS) --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) $(ignore_args) $^ --map gb_testbench.vh
 
 ICARUS_SUFFIX =
 VERILOG = iverilog$(ICARUS_SUFFIX) -Wall -Wno-macro-redefinition
@@ -37,7 +37,7 @@ VVP_FLAGS = ${VVP_FLAGS_$@}
 VERILOG_CHECK = $(VVP) $< $(VVP_FLAGS)
 
 VFLAGS_top_tb = -DGHOSTBUS_LIVE
-top_tb: top_tb.v $(GHOSTBUS_SOURCES) memory_map.vh
+top_tb: top_tb.v $(GHOSTBUS_SOURCES) gb_testbench.vh
 	$(VERILOG_TB)
 
 %_check: %_tb
@@ -49,7 +49,7 @@ top_tb: top_tb.v $(GHOSTBUS_SOURCES) memory_map.vh
 .PHONY: test
 test: top_check
 
-CLEANS=top_tb memory_map.vh
+CLEANS=top_tb gb_testbench.vh top.vcd
 
 RM=rm -rf
 .PHONY: clean

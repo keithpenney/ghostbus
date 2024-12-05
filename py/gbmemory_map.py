@@ -209,12 +209,32 @@ class GBMemoryRegionStager(MemoryRegionStager):
 
 
 class ExternalModule():
+    _attrs = {
+        "signed": None,
+        "name": None,
+        "inst": None,
+        "_ghostbus": None,
+        "extbus": None,
+        "_aw": None,
+        "true_aw": None,
+        "access": None,
+        "READ": None,
+        "WRITE": None,
+        "RW": None,
+        "busname": None,
+        "manually_assigned": False,
+        "_base": None,
+        "sub_bus": None,
+        "sub_mr": None,
+    }
     def __init__(self, name, extbus):
+        for attr, default in self._attrs.items():
+            if hasattr(default, "copy"):
+                default = default.copy()
+            setattr(self, attr, default)
         size = 1<<extbus.aw
-        self.signed = None
         self.name = name
         self.inst = name # alias
-        self._ghostbus = None
         self.extbus = extbus
         self._aw = self.extbus.aw # This is clobbered during resolution if the extmod is connected to a pseudo-domain
         self.true_aw = self.extbus.aw # This will always show the number of address bits as specified in the source
@@ -222,21 +242,23 @@ class ExternalModule():
         self.READ = self.extbus.READ
         self.WRITE = self.extbus.WRITE
         self.RW = self.extbus.RW
-        self.busname = None
-        self.manually_assigned = False
         if self.base is None:
             printd(f"New external module: {name}; size = 0x{size:x}")
         else:
             self.manually_assigned = True
             printd(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
-        # New additions for the 'stepchild' feature
-        self.sub_bus = None
-        self.sub_mr = None
-        # Testing
-        self._base = None
 
     def __str__(self):
         return f"ExternalModule: {self.name}"
+
+    def copy(self):
+        ref = self.__class__(self.name, self.extbus)
+        for name, default in self._attrs.items():
+            val = getattr(self, name)
+            if hasattr(val, "copy"):
+                val = val.copy()
+            setattr(ref, name, val)
+        return ref
 
     @property
     def genblock(self):
@@ -282,16 +304,13 @@ class ExternalModule():
 
     @property
     def base(self):
-        return self.extbus.base
+        if self._base is None:
+            return self.extbus.base
+        return self._base
 
     @base.setter
-    def base(self, ignore_val):
-        # Ignoring this. Can only set via the bus
-        # Need a setter here for reasons...
-        if self.name == "glue_top":
-            print(f"self.extbus.name = {self.extbus.name}")
-            #raise Exception()
-            self._base = ignore_val
+    def base(self, val):
+        self._base = val
         return
 
 

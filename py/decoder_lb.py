@@ -472,7 +472,7 @@ class DecoderLB():
                     break
             if start is None:
                 raise Exception(f"Failed to find start address for {key}, {node.label}")
-            submod = self.__class__(node, ghostbusses, self.GhostbusPortBus)
+            submod = self.__class__(node, ghostbusses, self.GhostbusPortBus, debug=self._debug)
             self._handleSubmod(submod, domain, start)
         for domain, decoder in self.domains.items():
             block_submods = decoder._resolveSubmods()
@@ -569,6 +569,12 @@ class DecoderLB():
         # optional, only used for testbench magic
         for domain, decoder in self.domains.items():
             decoder._collectRAMs(ramlist)
+        return
+
+    def _collectExtmods(self, extlist):
+        # optional, only used for testbench magic
+        for domain, decoder in self.domains.items():
+            decoder._collectExtmods(extlist)
         return
 
     def submodInitStr(self, base_rel, parent, verilogger):
@@ -672,106 +678,13 @@ class DecoderLB():
         vl.write(filename=filename, dest_dir=dest_dir)
         return
 
-    def ExtraVerilogMemoryMap(self, filename, ghostbusses):
-        """An extra (non-core functionality) feature.  Generate a memory
-        map in Verilog syntax which can be used for automatic testbench
-        decoder validation.
-        Generates:
-            localparam nCSRs = X;
-            localparam nRAMs = Y;
-            // For CSRs
-            reg [aw-1:0] GHOSTBUS_ADDRS [0:nCSRs-1];
-            reg [dw-1:0] GHOSTBUS_INITVALS [0:nCSRs-1];
-            reg [dw-1:0] GHOSTBUS_RANDVALS [0:nCSRs-1];
-            reg [nCSRs-1:0] GHOSTBUS_WRITABLE;
-            // For RAMs
-            reg [aw-1:0] GHOSTBUS_RAM_BASES [0:nRAMs-1];
-            reg [dw-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];
-            reg [dw-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];
-            reg [nRAMs-1:0]GHOSTBUS_RAM_WRITABLE;
-        """
-        import random
-        def flatten_bits(ll):
-            v = 0
-            for n in range(len(ll)):
-                if ll[n]:
-                    v |= (1<<n)
-            return v
-
-        # TODO - Enable all the ghostbusses
-        bus = ghostbusses[0]
-        csrs = []
-        rams = []
-        self._collectCSRs(csrs)
-        self._collectRAMs(rams)
-        # TODO - Find and remove any prefix common to all CSRs (this is done elsewhere a bit sloppily)
-        print("CSRs:")
-        csr_writeable = []
-        for csr in csrs:
-            print("{}.{}: 0x{:x}".format(csr._domain[1], csr.name, csr._domain[0] + csr.base))
-            wa = 1 if (((csr.access & Register.WRITE) > 0) and not csr.strobe) else 0
-            csr_writeable.append(wa)
-        cw = flatten_bits(csr_writeable)
-        print("RAMs:")
-        ram_writeable = []
-        for ram in rams:
-            print("{}.{}: 0x{:x}".format(ram._domain[1], ram.name, ram._domain[0] + ram.base))
-            wa = 1 if (ram.access & Register.WRITE) > 0 else 0
-            ram_writeable.append(wa)
-        rw = flatten_bits(ram_writeable)
+    def ExtraVerilogTasks(self, ghostbus):
+        bus = ghostbus
         aw = bus["aw"]
         dw = bus["dw"]
-        nCSRs = len(csrs)
-        nRAMs = len(rams)
-        ram_names = []
-        for n in range(len(rams)):
-            ram = rams[n]
-            name = f"{ram._domain[1].replace('.', '_')}_{ram.name.replace('.', '_')}"
-            ram_names.append(f"localparam {name.upper()}_BASE = {vhex(ram._domain[0] + ram.base, 32)}; // {ram._domain[1]}.{ram.name}")
-        # Define the structures
-        ss = [
-            "// Auto-generated with ghostbusser",
-            f"localparam nCSRs = {len(csrs)};",
-            f"localparam nRAMs = {len(rams)};",
-            "// For CSRs",
-            f"reg [{aw}-1:0] GHOSTBUS_ADDRS [0:nCSRs-1];",
-            f"reg [{dw}-1:0] GHOSTBUS_INITVALS [0:nCSRs-1];",
-            f"reg [{dw}-1:0] GHOSTBUS_RANDVALS [0:nCSRs-1];",
-            f"reg [nCSRs-1:0] GHOSTBUS_WRITABLE = {vhex(cw, nCSRs)};",
-            "// For RAMs",
-            f"reg [{aw}-1:0] GHOSTBUS_RAM_BASES [0:nRAMs-1];",
-            f"reg [{dw}-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];",
-            f"reg [{aw}-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];",
-            f"reg [nRAMs-1:0] GHOSTBUS_RAM_WRITABLE = {vhex(rw, nRAMs)};",
-        ]
-        ss.append("// RAMs by name")
-        ss.extend(ram_names)
-        ss.append("// Initialization")
-        ss.append("initial begin")
-        # Initialize CSR info
-        for n in range(len(csrs)):
-            csr = csrs[n]
-            ss.append(f"  GHOSTBUS_ADDRS[{n}] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.name}")
-            ss.append(f"  GHOSTBUS_INITVALS[{n}] = {vhex(csr.initval, dw)};")
-            randval = random.randint(0, (1<<csr.dw)-1) # Random number within the range of the CSR's width
-            ss.append(f"  GHOSTBUS_RANDVALS[{n}] = {vhex(randval, dw)}; // 0 <= x <= 0x{(1<<csr.dw) - 1:x}")
-        #ss.append("  end")
-        # Initialize RAM info
-        #ss.append("  for (N=0; N<nRAMs; N=N+1) begin: RAM_Init")
-        for n in range(len(rams)):
-            ram = rams[n]
-            ss.append(f"  GHOSTBUS_RAM_BASES[{n}] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.name}")
-            ss.append(f"  GHOSTBUS_RAM_WIDTHS[{n}] = {vhex(ram.dw, dw)}; // TODO - may not be accurate due to parameterization...")
-            ss.append(f"  GHOSTBUS_RAM_DEPTHS[{n}] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
-        #ss.append("  end")
-        ss.append("end")
-        ss.append("integer LOOPN;")
-        # GB tasks
-        # TODO - Do it right depending on what bus signals are defined
         atre = f"@(posedge {bus['clk']})"
-        tasks = (
+        gb_write_task = (
             "// Bus transaction tasks",
-            "reg test_pass=1'b1;",
             f"task GB_WRITE (input [{aw-1}:0] addr, input [{dw-1}:0] data);",
             "  begin",
             f"    {atre} {bus['addr']} = addr;",
@@ -790,7 +703,8 @@ class DecoderLB():
             "`endif",
             "  end",
             "endtask",
-
+        )
+        gb_read_task = (
             "`ifndef RDDELAY",
             "  `define RDDELAY 2",  # TODO parameterize somehow
             "`endif",
@@ -819,7 +733,15 @@ class DecoderLB():
             "  end",
             "endtask",
         )
-        ss.extend(tasks)
+        gb_write_read_task = (
+            "// RAM Write/Read",
+            "task WRITE_READ_CHECK (input [23:0] addr, input [31:0] checkval);",
+            "  begin",
+            "    GB_WRITE(addr, checkval);",
+            f"    {atre} GB_READ_CHECK(addr, checkval);",
+            "  end",
+            "endtask",
+        )
         csr_read_task = (
             "// CSR Reads",
             f"task CSR_READ_CHECK_ALL;",
@@ -828,7 +750,6 @@ class DecoderLB():
             "  end",
             "endtask",
         )
-        ss.extend(csr_read_task)
         csr_write_task = (
             "// CSR Writes",
             f"task CSR_WRITE_ALL;",
@@ -840,48 +761,161 @@ class DecoderLB():
             "  end",
             "endtask",
         )
-        ss.extend(csr_write_task)
-        stimulus = (
-            "// Stimulus",
-            "initial begin",
-            f"  {atre};",
-            "  `ifdef GHOSTBUS_TEST_CSRS",
-            "  $display(\"Reading init values.\");",
-            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
-            f"    {atre} GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_INITVALS[LOOPN]);",
-            "  end",
-            "  if (test_pass) $display(\"PASS\");",
-            "  else $display(\"FAIL\");",
-            f"  {atre} test_pass = 1'b1;",
-            "  $display(\"Writing CSRs with random values.\");",
-            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
+
+        csr_write_read_all_task = (
+            "// CSR Write/Read All",
+            "task CSR_WRITE_READ_CHECK_ALL;",
+            "  for (LOOPN=0; LOOPN<nRAMs; LOOPN=LOOPN+1) begin",
             "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
-            f"      {atre} GB_WRITE(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
+            f"      {atre} WRITE_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
             "    end",
             "  end",
-            "  $display(\"Reading back written values.\");",
-            "  for (LOOPN=0; LOOPN<nCSRs; LOOPN=LOOPN+1) begin",
-            "    if (GHOSTBUS_WRITABLE[LOOPN]) begin",
-            f"      {atre} GB_READ_CHECK(GHOSTBUS_ADDRS[LOOPN], GHOSTBUS_RANDVALS[LOOPN]);",
-            "    end",
-            "  end",
-            "  if (test_pass) $display(\"PASS\");",
-            "  else $display(\"FAIL\");",
-            f"  {atre} test_pass = 1'b1;",
-            "  `endif // GHOSTBUS_TEST_CSRS",
-            "  `ifdef GHOSTBUS_TEST_RAMS",
-            "  // TODO", # TODO
-            "  `endif // GHOSTBUS_TEST_RAMS",
-            "  if (test_pass) begin",
-            "    $display(\"PASS\");",
-            "    $finish(0);",
-            "  end else begin",
-            "    $display(\"FAIL\");",
-            "    $stop(0);",
-            "  end",
-            "end",
+            "endtask",
         )
-        #ss.extend(stimulus)
+
+        ram_write_read_all_task = (
+            "// RAM Write/Read All",
+            "`ifndef MAX_RAM_CHECKS",
+            "`define MAX_RAM_CHECKS 4",
+            "`endif",
+            "task RAM_WRITE_READ_CHECK_ALL;",
+            "  for (LOOPN=0; LOOPN<nRAMs; LOOPN=LOOPN+1) begin",
+            "    for (LOOPM=0; LOOPM<(GHOSTBUS_RAM_DEPTHS[LOOPN] > `MAX_RAM_CHECKS ? `MAX_RAM_CHECKS : GHOSTBUS_RAM_DEPTHS[LOOPN]); LOOPM=LOOPM+1) begin",
+            "      if (GHOSTBUS_RAM_WRITABLE[LOOPN]) begin",
+            f"        {atre} WRITE_READ_CHECK(GHOSTBUS_RAM_BASES[LOOPN]+LOOPM, $urandom & ((1<<GHOSTBUS_RAM_WIDTHS[LOOPN])-1));",
+            "      end",
+            "    end",
+            "  end",
+            "endtask",
+        )
+
+        ss = []
+        ss.append("reg test_pass=1'b1;")
+        ss.append("integer LOOPN;")
+        ss.append("integer LOOPM;")
+        ss.extend(gb_write_task)
+        ss.extend(gb_read_task)
+        ss.extend(gb_write_read_task)
+        ss.extend(csr_read_task)
+        ss.extend(csr_write_task)
+        ss.extend(csr_write_read_all_task)
+        ss.extend(ram_write_read_all_task)
+        return "\n".join(ss)
+
+    def ExtraVerilogMemoryMap(self, ghostbus):
+        """An extra (non-core functionality) feature.  Generate a memory
+        map in Verilog syntax which can be used for automatic testbench
+        decoder validation.
+        Generates:
+            localparam nCSRs = X;
+            localparam nRAMs = Y;
+            // For CSRs
+            reg [aw-1:0] GHOSTBUS_ADDRS [0:nCSRs-1];
+            reg [dw-1:0] GHOSTBUS_INITVALS [0:nCSRs-1];
+            reg [dw-1:0] GHOSTBUS_RANDVALS [0:nCSRs-1];
+            reg [nCSRs-1:0] GHOSTBUS_WRITABLE;
+            // For RAMs
+            reg [aw-1:0] GHOSTBUS_RAM_BASES [0:nRAMs-1];
+            reg [dw-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];
+            reg [dw-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];
+            reg [nRAMs-1:0] GHOSTBUS_RAM_WRITABLE;
+        """
+        import random
+        def flatten_bits(ll):
+            v = 0
+            for n in range(len(ll)):
+                if ll[n]:
+                    v |= (1<<n)
+            return v
+        bus = ghostbus
+        aw = bus["aw"]
+        dw = bus["dw"]
+        csrs = []
+        rams = []
+        exts = []
+        self._collectCSRs(csrs)
+        self._collectRAMs(rams)
+        self._collectExtmods(exts)
+        print("CSRs:")
+        csr_writeable = []
+        for csr in csrs:
+            print("{}.{}: 0x{:x}".format(csr._domain[1], csr.name, csr._domain[0] + csr.base))
+            wa = 1 if (((csr.access & Register.WRITE) > 0) and not csr.strobe) else 0
+            csr_writeable.append(wa)
+        cw = flatten_bits(csr_writeable)
+        print("RAMs:")
+        ram_writeable = []
+        for ram in rams:
+            print("{}.{}: 0x{:x}".format(ram._domain[1], ram.name, ram._domain[0] + ram.base))
+            wa = 1 if (ram.access & Register.WRITE) > 0 else 0
+            ram_writeable.append(wa)
+        rw = flatten_bits(ram_writeable)
+        print("Extmods:")
+        ext_writeable = []
+        for ext in exts:
+            print("{}.{}: 0x{:x}".format(ext._domain[1], ext.name, ext._domain[0] + ext.base))
+            wa = 1 if (ext.access & ext.WRITE) > 0 else 0
+            ext_writeable.append(wa)
+        ew = flatten_bits(ext_writeable)
+        nCSRs = len(csrs)
+        nRAMs = len(rams)
+        ram_names = []
+        for n in range(len(rams)):
+            ram = rams[n]
+            name = f"{ram._domain[1].replace('.', '_')}_{ram.name.replace('.', '_')}"
+            ram_names.append(f"localparam {name.upper()}_BASE = {vhex(ram._domain[0] + ram.base, 32)}; // {ram._domain[1]}.{ram.name}")
+        ext_names = []
+        for n in range(len(exts)):
+            ext = exts[n]
+            name = f"{ext._domain[1].replace('.', '_')}_{ext.name.replace('.', '_')}"
+            ext_names.append(f"localparam {name.upper()}_BASE = {vhex(ext._domain[0] + ext.base, 32)}; // {ext._domain[1]}.{ext.name}")
+        # Define the structures
+        ss = [
+            "// Auto-generated with ghostbusser",
+            f"localparam nCSRs = {len(csrs)};",
+            f"localparam nRAMs = {len(rams)};",
+            "// For CSRs",
+            f"reg [{aw}-1:0] GHOSTBUS_ADDRS [0:nCSRs-1];",
+            f"reg [{dw}-1:0] GHOSTBUS_INITVALS [0:nCSRs-1];",
+            f"reg [{dw}-1:0] GHOSTBUS_RANDVALS [0:nCSRs-1];",
+            f"reg [nCSRs-1:0] GHOSTBUS_WRITABLE = {vhex(cw, nCSRs)};",
+            "// For RAMs",
+            f"reg [{aw}-1:0] GHOSTBUS_RAM_BASES [0:nRAMs-1];",
+            f"reg [{dw}-1:0] GHOSTBUS_RAM_WIDTHS [0:nRAMs-1];",
+            f"reg [{aw}-1:0] GHOSTBUS_RAM_DEPTHS [0:nRAMs-1];",
+            f"reg [nRAMs-1:0] GHOSTBUS_RAM_WRITABLE = {vhex(rw, nRAMs)};",
+        ]
+        ss.append("// RAMs by name")
+        ss.extend(ram_names)
+        ss.append("// External Modules by name")
+        ss.extend(ext_names)
+        ss.append("// Initialization")
+        ss.append("initial begin")
+        # Initialize CSR info
+        for n in range(len(csrs)):
+            csr = csrs[n]
+            ss.append(f"  GHOSTBUS_ADDRS[{n}] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.name}")
+            ss.append(f"  GHOSTBUS_INITVALS[{n}] = {vhex(csr.initval, dw)};")
+            randval = random.randint(0, (1<<csr.dw)-1) # Random number within the range of the CSR's width
+            ss.append(f"  GHOSTBUS_RANDVALS[{n}] = {vhex(randval, dw)}; // 0 <= x <= 0x{(1<<csr.dw) - 1:x}")
+        # Initialize RAM info
+        for n in range(len(rams)):
+            ram = rams[n]
+            ss.append(f"  GHOSTBUS_RAM_BASES[{n}] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.name}")
+            ss.append(f"  GHOSTBUS_RAM_WIDTHS[{n}] = {vhex(ram.dw, dw)}; // TODO - may not be accurate due to parameterization...")
+            ss.append(f"  GHOSTBUS_RAM_DEPTHS[{n}] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
+        #ss.append("  end")
+        ss.append("end")
+        return "\n".join(ss)
+
+    def ExtraVerilogTestbench(self, filename, ghostbusses):
+        # TODO - Enable all the ghostbusses
+        ghostbus = ghostbusses[0]
+        ss = []
+        # GB Memory Map
+        ss.append(self.ExtraVerilogMemoryMap(ghostbus))
+        # GB Tasks
+        ss.append(self.ExtraVerilogTasks(ghostbus))
         outs = "\n".join(ss).replace('\n\n', '\n')
         if filename is None:
             print("\n".join(outs))
@@ -1003,6 +1037,7 @@ class DecoderDomainLB():
                     self.exts.append((start, ref))
             if isinstance(ref, Register): # Should catch MetaRegister and MetaMemory
                 if stop > self.max_local:
+                    #print(f"    =============== {self.name}: max_local {self.max_local} -> {stop} (ref.name = {ref.name})")
                     self.max_local = stop
         return
 
@@ -1145,8 +1180,10 @@ class DecoderDomainLB():
             copy = csr.copy()
             copy._domain = (self.base, self.mod.name)
             csrlist.append(copy)
+        # TODO: include CSRs in generate blocks
         for base, submod in self.submods:
             submod._collectCSRs(csrlist)
+        # TODO: include submods in generate blocks
         return csrlist
 
     def _collectRAMs(self, ramlist):
@@ -1156,9 +1193,23 @@ class DecoderDomainLB():
             # Adding attribute!
             copy._domain = (self.base, self.mod.name)
             ramlist.append(copy)
+        # TODO: include RAMs in generate blocks
         for base, submod in self.submods:
             submod._collectRAMs(ramlist)
+        # TODO: include submods in generate blocks
         return ramlist
+
+    def _collectExtmods(self, extlist):
+        for base, extmod in self.exts:
+            copy = extmod.copy()
+            # Adding attribute!
+            copy._domain = (self.base, self.mod.name)
+            extlist.append(copy)
+        # TODO: include extmods in generate blocks
+        for base, submod in self.submods:
+            submod._collectExtmods(extlist)
+        # TODO: include submods in generate blocks
+        return extlist
 
     def _WriteGhostbusSubmodMap(self, dest_dir, parentname, verilogger):
         fname = f"ghostbus_{parentname}_{self.inst}.vh"
@@ -1218,7 +1269,7 @@ class DecoderDomainLB():
         divwidth = busaw - self.local_aw
         vl = self._vl
         vl.comment(f"local init")
-        vl.add(f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{1<<self.local_aw-1:x}")
+        vl.add(f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{(1<<self.local_aw)-1:x}")
         vl.add(f"reg  [{self.ghostbus['dw']-1}:0] {local_din}=0;")
         if len(self.rams) > 0:
             vl.comment("local rams")
@@ -1267,9 +1318,10 @@ class DecoderDomainLB():
     def extmodsTopInit(self):
         vl = self._vl
         if len(self.exts) == 0:
-            print(f"  {self.name} No External Modules")
+            #print(f"  {self.name} No External Modules")
+            pass
         for base_rel, ext in self.exts:
-            print(f"  {self.name} External Module Instance {ext.name}")
+            #print(f"  {self.name} External Module Instance {ext.name}; {base_rel}")
             vl.comment(f"External Module Instance {ext.name}")
             vl.add(self._addrHit(base_rel, ext, self))
             self.busHookup(ext, vl, self)
@@ -1479,18 +1531,19 @@ class DecoderDomainLB():
         namemap = self.ghostbus
         vl = self._vl
         vl.comment("din routing")
-        if self.no_local:
-            vl.add(f"assign {namemap['din']} = ")
-        else:
-            vl.add(f"assign {namemap['din']} = {en_local} ? {local_din} :")
+        vl.add(f"assign {namemap['din']} =")
+        #if self.no_local:
+        #    vl.add(f"assign {namemap['din']} = ")
+        #else:
         for n in range(len(self.submods)):
             base, submod = self.submods[n]
             inst = submod.inst
-            if n == 0 and self.no_local:
-                # TODO - Find a more elegant way to do this
-                vl[-1] = vl[-1] + f"addrhit_{inst} ? {portdict['din']}_{inst} :"
-            else:
-                vl.add(f"                addrhit_{inst} ? {portdict['din']}_{inst} :")
+            #if n == 0 and self.no_local:
+            #    # TODO - Find a more elegant way to do this
+            #    vl[-1] = vl[-1] + f"addrhit_{inst} ? {portdict['din']}_{inst} :"
+            #else:
+            #    vl.add(f"                addrhit_{inst} ? {portdict['din']}_{inst} :")
+            vl.add(f"  addrhit_{inst} ? {portdict['din']}_{inst} :")
         for n in range(len(self.exts)):
             base_rel, ext = self.exts[n]
             if not ext.access & Register.READ:
@@ -1498,12 +1551,15 @@ class DecoderDomainLB():
                 continue
             inst = ext.name
             din = ext.getDinPort()
-            if (n == 0) and (self.no_local) and (len(self.submods) == 0):
-                # TODO - Find a more elegant way to do this
-                vl[-1] = vl[-1] + f"addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
-            else:
-                vl.add(f"                addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
-        vl.add(f"                {vhex(0, self.ghostbus['dw'])};")
+            #if (n == 0) and (self.no_local) and (len(self.submods) == 0):
+            #    # TODO - Find a more elegant way to do this
+            #    vl[-1] = vl[-1] + f"addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :"
+            #else:
+            #    vl.add(f"  addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
+            vl.add(f"  addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
+        if not self.no_local:
+            vl.add(f"  {en_local} ? {local_din} :")
+        vl.add(f"  {vhex(0, self.ghostbus['dw'])};")
         return
 
     def busDecoding(self):
@@ -1868,7 +1924,7 @@ class DecoderDomainLB():
                     _s, _e = _range
                     #ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
                     vl.add(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
-                elif portname in ('wen', 'ren', 'wstb', 'rstb'):
+                elif portname in ('we', 're', 'wstb', 'rstb'):
                     vl.add(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name};")
                 else:
                     vl.add(f"assign {ext_port} = {gb_port};")

@@ -1455,7 +1455,7 @@ def handleGhostbus(args):
             if args.live:
                 dec.GhostbusMagic(dest_dir=args.dest)
             if args.map is not None:
-                dec.ExtraVerilogMemoryMap(args.map, gbusses)
+                dec.ExtraVerilogTestbench(args.map, gbusses)
         if args.json is not None:
             # JSON
             if trim:

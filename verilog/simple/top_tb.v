@@ -42,60 +42,74 @@ top top_i (
 `define GHOSTBUS_TEST_CSRS
 `define DEBUG_READS
 `define DEBUG_WRITES
-`include "memory_map.vh"
+`include "gb_testbench.vh"
 
 initial begin
   @(posedge gb_clk) test_pass=1'b1;
   $display("Reading CSR init values.");
   CSR_READ_CHECK_ALL();
   if (test_pass) $display("PASS");
-  else $display("FAIL");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
 
   @(posedge gb_clk);
-  CSR_WRITE_ALL();
-  $display("Writing CSRs with random values.");
-
-  @(posedge gb_clk) test_pass=1'b1;
-  $display("Reading back written values.");
-  CSR_READ_CHECK_ALL();
+  $display("CSR Write+Read All");
+  CSR_WRITE_READ_CHECK_ALL();
   if (test_pass) $display("PASS");
-  else $display("FAIL");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
 
-  $display("Reading RAM init values.");
+  @(posedge gb_clk);
+  $display("RAM Write+Read All");
+  RAM_WRITE_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
+
+  /*
+  $display("Reading ROMs.");
+  // This necessarily needs to be hand-written (Ghostbus does not know the contents of ROMs)
   //TOP_SUBMOD_FOO_0_FOO_RAM_BASE
   GB_READ_CHECK(TOP_SUBMOD_FOO_0_FOO_RAM_BASE, 32'h00000001);
   GB_READ_CHECK(TOP_SUBMOD_FOO_0_FOO_RAM_BASE+1, 32'h00000002);
+  */
 
-  //TOP_SUBMOD_FOO_0_BAR_0_BAR_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAR_0_BAR_RAM_BASE, 32'h00000080);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+  $display("Reading Extmod init values.");
+  // This necessarily needs to be hand-written (Ghostbus does not know the contents of External Modules)
+  //TOP_SUBMOD_FOO_0_BAR_0_EXT_I_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAR_0_EXT_I_BASE, 32'h000000C0);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAR_0_EXT_I_BASE+1, 32'h000000C1);
 
-  //TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_BAR_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_BAR_RAM_BASE, 32'h00000080);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+  //TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_EXT_I_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_EXT_I_BASE, 32'h000000C0);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_0_EXT_I_BASE+1, 32'h000000C1);
 
-  //TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_BAR_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_BAR_RAM_BASE, 32'h00000080);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_BAR_RAM_BASE+1, 32'h00000081);
+  //TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_EXT_I_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_EXT_I_BASE, 32'h000000C0);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_0_BAZ_0_BAR_1_EXT_I_BASE+1, 32'h000000C1);
 
-  //TOP_SUBMOD_FOO_1_FOO_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_FOO_RAM_BASE, 32'h00000001);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_FOO_RAM_BASE+1, 32'h00000002);
+  //TOP_SUBMOD_FOO_1_BAR_0_EXT_I_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAR_0_EXT_I_BASE, 32'h000000C0);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAR_0_EXT_I_BASE+1, 32'h000000C1);
 
-  //TOP_SUBMOD_FOO_1_BAR_0_BAR_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAR_0_BAR_RAM_BASE, 32'h00000080);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
+  //TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_EXT_I_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_EXT_I_BASE, 32'h000000C0);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_EXT_I_BASE+1, 32'h000000C1);
 
-  //TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_BAR_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_BAR_RAM_BASE, 32'h00000080);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_0_BAR_RAM_BASE+1, 32'h00000081);
-
-  //TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_BAR_RAM_BASE
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_BAR_RAM_BASE, 32'h00000080);
-  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_BAR_RAM_BASE+1, 32'h00000081);
-
+  //TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_EXT_I_BASE
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_EXT_I_BASE, 32'h000000C0);
+  GB_READ_CHECK(TOP_SUBMOD_FOO_1_BAZ_0_BAR_1_EXT_I_BASE+1, 32'h000000C1);
   if (test_pass) $display("PASS");
-  else $display("FAIL");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
 
   if (test_pass) begin
     $finish(0);

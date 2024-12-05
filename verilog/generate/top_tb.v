@@ -148,15 +148,18 @@ end
 `define GHOSTBUS_TEST_CSRS
 `define DEBUG_READS
 `define DEBUG_WRITES
-`include "memory_map.vh"
+`include "gb_testbench.vh"
 
 initial begin
   @(posedge gb_clk) test_pass=1'b1;
   $display("Reading init values.");
   CSR_READ_CHECK_ALL();
   if (test_pass) $display("PASS");
-  else $display("FAIL");
-
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
+  /*
   @(posedge gb_clk);
   CSR_WRITE_ALL();
   $display("Writing CSRs with random values.");
@@ -166,7 +169,26 @@ initial begin
   CSR_READ_CHECK_ALL();
   if (test_pass) $display("PASS");
   else $display("FAIL");
+  */
+  @(posedge gb_clk);
+  $display("CSR Write+Read All");
+  CSR_WRITE_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
 
+  @(posedge gb_clk);
+  $display("RAM Write+Read All");
+  RAM_WRITE_READ_CHECK_ALL();
+  if (test_pass) $display("PASS");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
+
+  /*
   $display("Reading RAM init values.");
   //TOP_BAZ_BAR_0_BAR_RAM_BASE
   GB_READ_CHECK(TOP_BAZ_BAR_0_BAR_RAM_BASE, 32'h00000082);
@@ -175,9 +197,13 @@ initial begin
   //TOP_BAZ_BAR_1_BAR_RAM_BASE
   GB_READ_CHECK(TOP_BAZ_BAR_1_BAR_RAM_BASE, 32'h00000082);
   GB_READ_CHECK(TOP_BAZ_BAR_1_BAR_RAM_BASE+1, 32'h00000083);
-
   if (test_pass) $display("PASS");
-  else $display("FAIL");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
+  */
+  $display("WARNING: This testbench does not collect CSRs/RAMs/Extmods in block scope yet!");
 
   if (test_pass) begin
     $finish(0);
