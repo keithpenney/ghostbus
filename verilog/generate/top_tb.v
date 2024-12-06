@@ -203,7 +203,6 @@ initial begin
     $stop(0);
   end
   */
-  $display("WARNING: This testbench does not collect CSRs/RAMs/Extmods in block scope yet!");
 
   if (test_pass) begin
     $finish(0);

@@ -1140,6 +1140,7 @@ class GhostBusser(VParser):
                     new_aw = aw + bits(loop_len) - 1 # I'm pretty sure it's -1
                     ref.aw = new_aw
                     ref.name = netname
+                    forloop.loop_len = loop_len
                     ref.genblock = forloop
                     if hasattr(ref, "_readRangeDepth"):
                         # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
