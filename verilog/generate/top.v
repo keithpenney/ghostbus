@@ -75,6 +75,10 @@ localparam EXT_DW = 8;
  * 0x0400   0x04ff    foo[3]
  */
 
+// Extmod extmod_bar
+wire addrhit_extmod_bar = gb_addr[23:4] == 20'h00001; // 0x10-0x1f
+wire [EXT_DW-1:0] ext_rdata_topscope;
+
 wire en_local = gb_addr[23:6] == 18'h00000; // 0x0-0x3f
 reg  [31:0] local_din=0;
 
@@ -93,8 +97,10 @@ localparam BAZ_RAM_AW = $clog2(7+1);
 wire addrhit_baz_ram = gb_addr[23:3] == 21'h000001; // 0x8-0xf
 
 // din routing
-assign gb_rdata = en_local ? local_din :
-                32'h00000000;
+assign gb_rdata = 
+    addrhit_extmod_bar ? {{32-EXT_DW{1'b0}}, ext_rdata_topscope} :
+    en_local ? local_din :
+    32'h00000000;
 
 localparam FOO_GENERATOR_TOP_FOO_N_BASE = 'h04;
 
@@ -190,6 +196,26 @@ generate
         foo_ram[RAM_N] = (N[3:0]<<4) | RAM_N[3:0];
       end
     end
+
+    /*
+    (* ghostbus_ext="extmod_foo, clk" *)   wire fooext_clk;
+    (* ghostbus_ext="extmod_foo, addr" *)  wire [EXT_AW-1:0] fooext_addr;
+    (* ghostbus_ext="extmod_foo, wdata" *) wire [EXT_DW-1:0] fooext_wdata;
+    (* ghostbus_ext="extmod_foo, rdata" *) wire [EXT_DW-1:0] fooext_rdata;
+    (* ghostbus_ext="extmod_foo, we" *)    wire fooext_we;
+
+    extmod #(
+      .aw(EXT_AW),
+      .dw(EXT_DW)
+    ) extmod_foo (
+      .clk(fooext_clk), // input
+      .addr(fooext_addr), // input [aw-1:0]
+      .din(fooext_wdata), // input [dw-1:0]
+      .dout(fooext_rdata), // output [dw-1:0]
+      .we(fooext_we) // input
+    );
+    */
+
 `ifdef HAND_ROLLED
     // Submodule foo
     assign addrhit_foo[N] = gb_addr[23:8] == 16'h0001 + N[15:0];
@@ -216,6 +242,7 @@ generate
       foo_generator_top_foo_n_r[N] <= top_foo_n;
       top_foo_n <= foo_generator_top_foo_n_w[N];
     end
+
 `else
     `GHOSTBUS_top_foo_generator
 `endif
@@ -289,6 +316,13 @@ generate
     );
 
 `ifdef HAND_ROLLED
+    // Extmod extmod_bar
+    assign ext_clk = gb_clk;
+    assign ext_addr = gb_addr[EXT_AW-1:0];
+    assign ext_wdata = gb_wdata[EXT_DW-1:0];
+    assign ext_we = gb_wen & addrhit_extmod_bar;
+    assign ext_rdata_topscope = ext_rdata;
+
     // CSR top_baz
     initial begin
       baz_generator_top_baz_w = top_baz;

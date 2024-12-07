@@ -719,7 +719,8 @@ class GhostBusser(VParser):
                             netname = gen_netname
                         else:
                             print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
-                            #generate = parseForLoop(gen_block, source)
+                            generate = parseForLoop(gen_block, source)
+                            generate._loop_index = gen_index
                             #if generate is None:
                             #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                     signed = net_dict.get("signed", None)
@@ -765,7 +766,12 @@ class GhostBusser(VParser):
                             mrs[busname].add(width=0, ref=reg, addr=addr)
                     elif exts is not None:
                         if generate is not None:
-                            print(f"  Boy howdy! I found extmod {exts} inside generate block {generate.branch}")
+                            branch = generate.branch
+                            if generate.isIf():
+                                gen_index_str = ""
+                            else:
+                                gen_index_str = f"at index {gen_index} "
+                            print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
                         dw = len(net_dict['bits'])
                         self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
                         if mrs.get(busname, None) is None:
@@ -1004,6 +1010,7 @@ class GhostBusser(VParser):
     def _resolveExtmods(self):
         if len(self._extmod_list) == 0:
             return []
+        # TODO FIXME - Here I need to combine all the extbusses from a For-Loop into a single bus
         busses = self._resolveExtmod(self._extmod_list)
         extmods = []
         for instname, bus in busses.items():
@@ -1023,10 +1030,14 @@ class GhostBusser(VParser):
         module_instnames = []
         for datum in data:
             #netname, dw, portnames, instnames, source, addr, sub, generate = datum
+            generate = datum[7]
             instnames = datum[3]
+            postfix = ""
+            if generate is not None and generate.isFor():
+                postfix = f"_{generate._loop_index}"
             for instname in instnames:
                 if instname not in module_instnames:
-                    module_instnames.append(instname)
+                    module_instnames.append(instname + postfix)
         inst_err = False
         busses = {}
         universal_inst = None

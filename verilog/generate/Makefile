@@ -54,7 +54,7 @@ top_tb_manual: top_tb.v $(GHOSTBUS_SOURCES)
 	$(VERILOG_TB)
 
 top_check_manual: top_tb_manual
-	$(VERILOG_CHECK)
+	$(VERILOG_CHECK) +vcd
 
 .PHONY: test
 test: top_check_manual top_check

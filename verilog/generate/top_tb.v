@@ -136,6 +136,19 @@ initial begin
     end
   end
 
+  #(4*TICK) $display("Read initial values from extmod_bar");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000010 + N_XACT[23:0];
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result != 32'h00000080 + N_XACT) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000080 + N_XACT);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("TODO Write random values to extmod_bar");
+
   if (PASS) begin
     $display("PASS");
     $finish(0);
@@ -203,6 +216,31 @@ initial begin
     $stop(0);
   end
   */
+
+  //TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE
+  $display("Reading extmod_bar init values.");
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE,   32'h00000080);
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+1, 32'h00000081);
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+2, 32'h00000082);
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+3, 32'h00000083);
+
+  $display("Writing new values to extmod_bar.");
+  GB_WRITE(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE,   32'hbeef0099); // only the last 8 bits are used
+  GB_WRITE(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+1, 32'hcafe445a); // only the last 8 bits are used
+  GB_WRITE(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+2, 32'h00000011); // only the last 8 bits are used
+  GB_WRITE(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+3, 32'h000000bb); // only the last 8 bits are used
+
+  $display("Reading back values written to extmod_bar.");
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE,   32'h00000099);
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+1, 32'h0000005a);
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+2, 32'h00000011);
+  GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+3, 32'h000000bb);
+
+  if (test_pass) $display("PASS");
+  else begin
+    $display("FAIL");
+    $stop(0);
+  end
 
   if (test_pass) begin
     $finish(0);

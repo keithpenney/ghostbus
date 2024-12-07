@@ -405,6 +405,7 @@ class GenerateFor(GenerateBranch):
         self.loop_range = f"[0:{self.unrolled_size}-1]"
         # This will get set by the resolution function Ghostbusser._resolveGenerates
         self.loop_len = None
+        self._loop_index = 0
 
     def _getUnrolledSizeStr(self):
         """Try to divine the size of the unrolled loop using the strings parsed from the for loop

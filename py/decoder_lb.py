@@ -140,6 +140,11 @@ class BusLB():
         return self._port_dict
 
     def getPortList(self):
+        """Returns list of (key, portname, rangestr, _dir) for all ports used in the bus.
+        where 'key' is one of self._bus_info.keys(),
+        and 'portname' is the net name used for the port in the codebase,
+        and 'rangestr' is the bit range as a string
+        and '_dir' is one of (self._input, self._output, self._inout)"""
         if self._port_list is not None:
             return self._port_list
         # (name, rangestr, dir)
@@ -327,6 +332,14 @@ class BusLB():
                     self._bus[wparam+"_range"] = (rangestr, None)
                     self._bus[wparam+"_str"] = (rangestr[0] + "+1", None)
         return
+
+    @property
+    def aw_str(self):
+        return self._bus["aw_str"][0]
+
+    @property
+    def dw_str(self):
+        return self._bus["dw_str"][0]
 
     def validate(self):
         _valid = True
@@ -1060,7 +1073,7 @@ class DecoderDomainLB():
         self.block_csrs = {} # {branch_name: [], ...}
         self.block_exts = {} # {branch_name: [], ...}
         self.max_local = 0
-        self._no_reads = False # TODO Assume True and prove me wrong by finding something readable
+        self._no_reads = False # Assume True and prove me wrong by finding something readable
         self._parseMemoryRegion(memregion)
 
         if self.max_local == 0:
@@ -1071,8 +1084,8 @@ class DecoderDomainLB():
         self._def_file = "defs.vh"
         self.check_bus()
         # Net names for universal auto-generated nets
-        self.en_local = "ghostbus_addrhit_local" # TODO - Harmonize this with a singleton netname generator class
-        self.local_din = "ghostbus_rdata_local"  # TODO - Harmonize this with a singleton netname generator class
+        self.en_local = "ghostbus_addrhit_local" # TODO - Harmonize this with a per-module netname generator class
+        self.local_din = "ghostbus_rdata_local"  # TODO - Harmonize this with a per-module netname generator class
         self.autogen_loop_index = self.parent.autogen_loop_index
 
     def _parseMemoryRegion(self, memregion):
@@ -1099,7 +1112,8 @@ class DecoderDomainLB():
             elif isinstance(ref, ExternalModule):
                 ref.ghostbus = self.ghostbus
                 if hasattr(ref, "genblock") and ref.genblock is not None:
-                    print(f"ExternalModule {ref.name} is instantiated within generate block {ref.genblock.branch}")
+                    print(f"ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
+                    # BUBBLES - The relative address 'start' is available here.  Do I need to store it for future use, or is extmod.base equivalent?
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
@@ -1286,7 +1300,11 @@ class DecoderDomainLB():
             # Adding attribute!
             copy._domain = (self.base, self.mod.name)
             extlist.append(copy)
-        # TODO: include extmods in generate blocks
+        for branch, exts in self.block_exts.items():
+            for ext in exts:
+                copy = ext.copy()
+                copy._domain = (self.base, f"{self.mod.name}_{branch}")
+                extlist.append(copy)
         for base, submod in self.submods:
             submod._collectExtmods(extlist)
         # TODO: include submods in generate blocks
@@ -1308,11 +1326,6 @@ class DecoderDomainLB():
         portlist = self.gbportbus.getPortList() # (key, name, rangestr, dirstr)
         for port in portlist:
             portkey, portname, rangestr, _dir = port
-            # TODO If I'm instantiated within a for-loop, I need to use
-            #,.GBPORT_din(GBPORT_din_foo[((N+1)*32)-1-:32]) // output [31:0]
-            # instead of,
-            #,.GBPORT_din(GBPORT_din_foo) // output [31:0]
-            # So I need to know the for-loop index and dw
             if len(rangestr):
                 rangestr = " " + rangestr
             dirstr = BusLB.direction_string_periph(_dir)
@@ -1431,7 +1444,7 @@ class DecoderDomainLB():
             f"wire addrhit_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)}; // 0x{ram.base:x}-0x{end:x}",
         ]
         if Policy.registered_rams:
-            ss.append(f"reg [{dw}-1:0] {ram.name}_registered_read=0;") # TODO - collect in global net namer class
+            ss.append(f"reg [{dw}-1:0] {ram.name}_registered_read=0;") # TODO - harmonize in per-module net namer class
         else:
             ss.append(f"wire [{dw}-1:0] {ram.name}_registered_read = " \
                     + f"{{{{{self.ghostbus['dw']}-{ram.size_str}{{1'b0}}}}, {ram.name}[{self.ghostbus['addr']}[{ram.name.upper()}_AW-1:0]]}};")
@@ -1481,9 +1494,17 @@ class DecoderDomainLB():
         return "\n".join(ss)
 
     def _blockExtInit(self, extmod, branch, verilogger):
-        # TODO
         vl = verilogger
-        vl.comment(f"TODO - Initialize extmod {extmod.name} in branch {branch}")
+        vl.comment(f"Extmod {extmod.name}")
+        base_rel = extmod.base # BUBBLES Is this right? Or does extmod.base store the global/absolute address?
+        if extmod.genblock.isFor():
+            pass # TODO
+        else:
+            vl.add(self._addrHit(base_rel, extmod, self))
+            dw_range = extmod.extbus["dw_range"]
+            #dw_range = self.ghostbus["dw_range"]
+            rangestr = f"[{dw_range[0]}:{dw_range[1]}]"
+            vl.add(f"wire {rangestr} {extmod.name}_rdata_topscope;")
         return
 
     @staticmethod
@@ -1634,8 +1655,19 @@ class DecoderDomainLB():
                 # Skip non-readable ext modules
                 continue
             inst = ext.name
-            din = ext.getDinPort()
-            vl.add(f"  addrhit_{inst} ? {{{{{self.ghostbus['dw']-ext.dw}{{1'b0}}}}, {din}}} :")
+            gb_dwstr = self.ghostbus.dw_str
+            dwstr = ext.extbus.dw_str
+            din = ext.extbus['din']
+            vl.add(f"  addrhit_{inst} ? {{{{{gb_dwstr}-{dwstr}{{1'b0}}}}, {din}}} :")
+        for branch, extmods in self.block_exts.items():
+            for ext in extmods:
+                if not ext.access & Register.READ:
+                    # Skip non-readable ext modules
+                    continue
+                gb_dwstr = self.ghostbus.dw_str
+                ext_dwstr = ext.extbus.dw_str
+                din = f"{ext.name}_rdata_topscope"
+                vl.add(f"  addrhit_{ext.name} ? {{{{{gb_dwstr}-{ext_dwstr}{{1'b0}}}}, {din}}} :")
         if self.has_local_csrs:
             vl.add(f"  {en_local} ? {local_din} :")
         vl.add(f"  {vhex(0, self.ghostbus['dw'])};")
@@ -2025,8 +2057,8 @@ class DecoderDomainLB():
     def blockDecoding(self, verilogger_dict):
         # CSRs
         for branch, csrs in self.block_csrs.items():
+            vl = verilogger_dict[branch]
             for csr in csrs:
-                vl = verilogger_dict[branch]
                 vl.comment(f"CSR {csr.name}")
                 if csr.genblock.isIf():
                     vl.initial()
@@ -2048,8 +2080,8 @@ class DecoderDomainLB():
         # RAMs
         gbah = self.ghostbus.get_range('addr')[0]
         for branch, rams in self.block_rams.items():
+            vl = verilogger_dict[branch]
             for ram in rams:
-                vl = verilogger_dict[branch]
                 vl.comment(f"RAM {ram.name}")
                 ramname = f"{branch}_{ram.name}"
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
@@ -2077,10 +2109,10 @@ class DecoderDomainLB():
                     vl.end()
         # Submods
         for branch, submods in self.block_submods.items():
+            vl = verilogger_dict[branch]
             for submod in submods:
                 if submod.genblock.isIf():
                     continue
-                vl = verilogger_dict[branch]
                 index = csr.genblock.index
                 aw = submod.domains[None].mod.aw
                 base = submod.domains[None].mod.base
@@ -2090,6 +2122,17 @@ class DecoderDomainLB():
                 # TODO - This needs to be the submod instance, not the module name!
                 vl.add(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
         # Extmods TODO
+        for branch, extmods in self.block_exts.items():
+            vl = verilogger_dict[branch]
+            for extmod in extmods:
+                if extmod.genblock.isFor():
+                    pass # TODO
+                else:
+                    vl.comment("Extmod extmod_bar")
+                    self.busHookup(extmod, vl, self)
+                    if extmod.extbus['din'] is not None: # Recall, some extmods are write-only
+                        #vl.add(f"assign {extmod.name}_rdata_topscope = {{{{{self.ghostbus['dw']-extmod.dw}{{1'b0}}}}, {extmod.extbus['din']}}};")
+                        vl.add(f"assign {extmod.name}_rdata_topscope = {extmod.extbus['din']};")
         return
 
 def test_createPortBus():
