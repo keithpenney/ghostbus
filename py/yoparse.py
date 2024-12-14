@@ -215,11 +215,37 @@ def _getSourceSnippet(yosrc, size=1024):
         return None, None
     return snippet, offset
 
+
+def _getSourceFromStart(yosrc):
+    """Read in the file reference by 'yosrc' and return the portion from the beginning of the file
+    up until the line/char referenced by 'yosrc'."""
+    groups = srcParse(yosrc)
+    if groups is None:
+        return False
+    filepath, linestart, charstart, lineend, charend = groups
+    lines = []
+    try:
+        with open(filepath, 'r') as fd:
+            nline = 0
+            line = True
+            while line:
+                line = fd.readline()
+                nline += 1
+                if nline == linestart:
+                    lines.append(line[:charstart])
+                else:
+                    lines.append(line)
+    except OSError:
+        return None
+    return "".join(lines)
+
+
 def _matchKw(ss):
     for kw in _net_keywords:
         if ss.startswith(kw):
             return kw
     return None
+
 
 def _findRangeStr(snippet, offset, get_type=True):
     """Start at char offset. Read backwards. Look for ']' to open a range.
@@ -350,8 +376,9 @@ def _matchForLoop(ss):
 def findForLoop(yosrc):
     # We want to match the last for-loop in the portion of the string only up to the offset
     # loop_index, start, comp, inc
-    snippet, offset = _getSourceSnippet(yosrc, size=4096)
-    return _matchForLoop(snippet[:offset])
+    #snippet, offset = _getSourceSnippet(yosrc, size=4096)
+    snippet = _getSourceFromStart(yosrc)
+    return _matchForLoop(snippet)
 
 
 class YosysParsingError(Exception):

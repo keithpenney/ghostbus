@@ -226,12 +226,18 @@ class ExternalModule():
         "_base": None,
         "sub_bus": None,
         "sub_mr": None,
+        "base_list": [],
+        "_block_aw": None
     }
-    def __init__(self, name, extbus):
+    def __init__(self, name, extbus, basename=None):
         for attr, default in self._attrs.items():
             if hasattr(default, "copy"):
                 default = default.copy()
             setattr(self, attr, default)
+        if basename is None:
+            self.basename = name
+        else:
+            self.basename = basename
         size = 1<<extbus.aw
         self.name = name
         self.inst = name # alias
@@ -247,6 +253,7 @@ class ExternalModule():
         else:
             self.manually_assigned = True
             printd(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
+        self.base_list.append(self.base)
 
     def __str__(self):
         return f"ExternalModule: {self.name}"
@@ -299,7 +306,18 @@ class ExternalModule():
 
     @aw.setter
     def aw(self, val):
-        self._aw = val
+        self._aw = int(val)
+        return
+
+    @property
+    def block_aw(self):
+        if self._block_aw is None:
+            return self.aw
+        return self._block_aw
+
+    @block_aw.setter
+    def block_aw(self, val):
+        self._block_aw = int(val)
         return
 
     @property

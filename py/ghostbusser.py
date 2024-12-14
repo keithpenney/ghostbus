@@ -1004,6 +1004,8 @@ class GhostBusser(VParser):
                 # SHARED_WDATA
                 raise GhostbusException(serr)
         # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
+        #if generate is not None and generate.isFor():
+        #    netname = f"{generate.branch}_{generate._loop_index}_{netname}"
         self._extmod_list.append((netname, dw, portnames, instnames, source, addr, sub, generate))
         return
 
@@ -1013,9 +1015,11 @@ class GhostBusser(VParser):
         # TODO FIXME - Here I need to combine all the extbusses from a For-Loop into a single bus
         busses = self._resolveExtmod(self._extmod_list)
         extmods = []
-        for instname, bus in busses.items():
-            extmod = ExternalModule(instname, extbus=bus)
-            printd(f"  Resolving ExternalModule {instname}")
+        for instname, data in busses.items():
+            basename, bus = data
+            #print(f"    instname {instname}; bus {bus.name}; bus['addr'] = {bus['addr']}; bus = {bus}")
+            extmod = ExternalModule(instname, extbus=bus, basename=basename)
+            print(f"  Resolving ExternalModule {instname}; bus.genblock = {bus.genblock}")
             extmods.append(extmod)
         return extmods
 
@@ -1036,7 +1040,7 @@ class GhostBusser(VParser):
             if generate is not None and generate.isFor():
                 postfix = f"_{generate._loop_index}"
             for instname in instnames:
-                if instname not in module_instnames:
+                if instname + postfix not in module_instnames:
                     module_instnames.append(instname + postfix)
         inst_err = False
         busses = {}
@@ -1048,28 +1052,35 @@ class GhostBusser(VParser):
         else:
             # print(f"len(module_instnames) = {len(module_instnames)}")
             for instname in module_instnames:
-                # print(f"instname = {instname}")
-                bus = busses.get(instname, None)
-                if bus is None:
-                    #print("    New bus")
+                print(f"instname = {instname}")
+                base_bus = busses.get(instname, None)
+                if base_bus is None:
+                    print("    New bus")
                     bus = BusLB()
                 else:
-                    #print("    Got bus")
-                    pass
+                    print("    Got bus")
+                    bus = base_bus[1]
                 #print(f"len(data) = {len(data)}")
                 for datum in data:
                     #print(f"  datum = {datum}")
                     netname, dw, portnames, instnames, source, addr, sub, generate = datum
-                    bus.genblock = generate
+                    postfix = ""
+                    if generate is not None and generate.isFor():
+                        postfix = f"_{generate._loop_index}"
+                    #print(f"  :::: netname={netname}; dw={dw}; instnames={instnames}; portnames={portnames}; generate={generate}")
+                    #print(f"  :::: bus.genblock = {bus.genblock}; generate={generate}")
                     rangestr = getUnparsedWidthRange(source)
                     if len(instnames) == 0 and universal_inst is not None:
                         instnames.append(universal_inst)
-                    if sub is not None and bus.sub is None:
-                        bus.sub = sub
                     for net_instname in instnames:
-                        if net_instname == instname:
+                        if net_instname+postfix == instname:
+                            if sub is not None and bus.sub is None:
+                                bus.sub = sub
+                            if bus.genblock is not None and bus.genblock.__class__ != generate.__class__:
+                                print(f"%%%%%%%%%%%%%%% Wtf? {bus.genblock} != {generate}. {instname} {netname} {instnames} {portnames}")
+                            bus.genblock = generate
                             for portname in portnames:
-                                #print(f"  instname = {instname}, netname = {netname}, portname = {portname}")
+                                print(f"  bus.set_port({portname}, {netname}, portwidth={dw}, rangestr={rangestr})")
                                 bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
                             if addr is not None:
                                 # print(f"addr is not None: datum = {datum}")
@@ -1081,14 +1092,15 @@ class GhostBusser(VParser):
                                 if errst != None:
                                     # MULTIPLE_ADDRESSES
                                     raise GhostbusException(f"{instnames}: {errst}")
-                busses[instname] = bus
+                busses[instname] = (net_instname, bus) # A funny hack for block-scope extmods
         if inst_err:
             serr = "No instance referenced for external bus. " + ext_advice
             # NO_EXTMOD_INSTANCE
             raise GhostbusException(serr)
-        for instname, bus in busses.items():
+        for instname, data in busses.items():
+            basename, bus = data
             valid, msg = bus.validate()
-            busses[instname] = bus
+            busses[instname] = (basename, bus)
             #print_dict(busses[instname])
         return busses
 

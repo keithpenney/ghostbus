@@ -221,6 +221,16 @@ class BusLB():
     def outputs_and_clock(self):
         return self._get_by_direction((self._output, self._clk))
 
+    def get_data_range(self):
+        if self._bus['din'] is not None:
+            key = 'din'
+        else:
+            key = 'dout'
+        return self[key+"_range"]
+
+    def get_addr_range(self):
+        return self["addr_range"]
+
     def get_range(self, portname):
         #print(f"get_range({portname})")
         for key, value in self._derived.items():
@@ -790,7 +800,7 @@ class DecoderLB():
         )
         gb_read_task = (
             "`ifndef RDDELAY",
-            "  `define RDDELAY 2",  # TODO parameterize somehow
+            "  `define RDDELAY 2",
             "`endif",
             f"task GB_READ_CHECK (input [{aw-1}:0] addr, input [{dw-1}:0] checkval);",
             "  begin",
@@ -1075,6 +1085,7 @@ class DecoderDomainLB():
         self.max_local = 0
         self._no_reads = False # Assume True and prove me wrong by finding something readable
         self._parseMemoryRegion(memregion)
+        self._resolveBlockExts()
 
         if self.max_local == 0:
             self.has_local_csrs = False
@@ -1124,6 +1135,53 @@ class DecoderDomainLB():
                 if stop > self.max_local:
                     #print(f"    =============== {self.name}: max_local {self.max_local} -> {stop} (ref.name = {ref.name})")
                     self.max_local = stop
+        return
+
+    def _resolveBlockExts(self):
+        """Any ExternalModules in a for-loop scope need to be rolled up into a single module before decoding
+        code is generated."""
+        resolved_map = {}
+        for branch, extmods in self.block_exts.items():
+            to_resolve = {}
+            # Gather any extmods that share a base (copies from a for-loop)
+            for extmod in extmods:
+                ll = to_resolve.get(extmod.basename, [])
+                ll.append(extmod)
+                to_resolve[extmod.basename] = ll
+            # Roll up the extmods so we have one of each
+            resolved_list = []
+            for basename, extmods in to_resolve.items():
+                if len(extmods) == 1:
+                    resolved_list.append(extmods[0])
+                else:
+                    # List 'extmods' may not be in address order. Make a list that is.
+                    ext_list = [None]*len(extmods)
+                    # Find the instance with the lowest base address
+                    ext = None
+                    for _ext in extmods:
+                        if ext is None or _ext.base < ext.base:
+                            ext = _ext
+                        ext_list[_ext.genblock._loop_index] = _ext
+                    if None in ext_list:
+                        raise GhostbusInternalException(f"Did not find all indices for {basename}")
+                    if len(ext_list) > 2:
+                        # Ensure consistent offset from lowest base
+                        offset = ext_list[1].base - ext_list[0].base
+                        for n in range(len(ext_list)-2):
+                            _offset = ext_list[2+n].base - ext_list[1+n].base
+                            if offset != _offset:
+                                raise GhostbusInternalException(f"Inconsistent offsets between unrolled instances of {basename} in for loop {ext.genblock.branch}")
+                    # Check alignment of block
+                    new_aw = bits(len(extmods)) + ext.aw
+                    if Policy.aligned_for_loops:
+                        if not is_aligned(ext.base, new_aw):
+                            raise GhostbusInternalException(f"Rolled-up block of instances of extmod {basename} is not aligned. Base = 0x{ext.base}, aw = {new_aw}.")
+                    ext.name = basename
+                    ext.block_aw = new_aw
+                    ext.base_list = [x.base for x in ext_list]
+                    resolved_list.append(ext)
+            resolved_map[branch] = resolved_list
+        self.block_exts = resolved_map
         return
 
     @property
@@ -1302,9 +1360,19 @@ class DecoderDomainLB():
             extlist.append(copy)
         for branch, exts in self.block_exts.items():
             for ext in exts:
-                copy = ext.copy()
-                copy._domain = (self.base, f"{self.mod.name}_{branch}")
-                extlist.append(copy)
+                if ext.genblock.isFor():
+                    # Unroll it here
+                    for n in range(len(ext.base_list)):
+                        base = ext.base_list[n]
+                        copy = ext.copy()
+                        copy.base = base
+                        copy.name = f"{ext.name}_{n}"
+                        copy._domain = (self.base, f"{self.mod.name}_{branch}")
+                        extlist.append(copy)
+                else:
+                    copy = ext.copy()
+                    copy._domain = (self.base, f"{self.mod.name}_{branch}")
+                    extlist.append(copy)
         for base, submod in self.submods:
             submod._collectExtmods(extlist)
         # TODO: include submods in generate blocks
@@ -1417,7 +1485,7 @@ class DecoderDomainLB():
             #print(f"  {self.name} External Module Instance {ext.name}; {base_rel}")
             vl.comment(f"External Module Instance {ext.name}")
             vl.add(self._addrHit(base_rel, ext, self))
-            self.busHookup(ext, vl, self)
+            self.extmodHookup(ext, vl, self)
         any_block = False
         for branch, exts in self.block_exts.items():
             if len(exts) == 0:
@@ -1498,7 +1566,22 @@ class DecoderDomainLB():
         vl.comment(f"Extmod {extmod.name}")
         base_rel = extmod.base # BUBBLES Is this right? Or does extmod.base store the global/absolute address?
         if extmod.genblock.isFor():
-            pass # TODO
+            #vl.comment("TODO! FIXME!")
+            loop_size = extmod.genblock.unrolled_size
+            vl.add(f"wire [{loop_size}-1:0] addrhit_{extmod.name};")
+            if Policy.aligned_for_loops:
+                #`ifdef ALIGNED_FOR_LOOPS
+                bus_aw = self.ghostbus.aw # TODO aw_str!
+                mod_aw = extmod.block_aw
+                vl.add(self._addrhit_logic("wire", f"addrhit_{extmod.name}_any", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw))
+            else:
+                vl.add(f"wire addrhit_{extmod.name}_any = |addrhit_{extmod.name};")
+            #vl.add("wire [EXT_DW-1:0] fooext_rdata_topscope;")
+            #vl.add(self._addrHit(base_rel, extmod, self))
+            dw_range = extmod.extbus["dw_range"]
+            #dw_range = self.ghostbus["dw_range"]
+            rangestr = f"[{dw_range[0]}:{dw_range[1]}]"
+            vl.add(f"wire {rangestr} {extmod.name}_rdata_topscope;")
         else:
             vl.add(self._addrHit(base_rel, extmod, self))
             dw_range = extmod.extbus["dw_range"]
@@ -1508,20 +1591,41 @@ class DecoderDomainLB():
         return
 
     @staticmethod
-    def _addrHit(base_rel, mod, parent=None):
+    def _addrhit_logic_block(prefix, signal, addr_net, base_rel, bus_aw, ref_aw, index):
+        size = 1<<ref_aw
+        divwidth = bus_aw - ref_aw
+        end = base_rel + (1<<ref_aw) - 1
+        # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
+        #        to 'vhex' or do some tricky concatenation
+        postfix = f"{index}[{bus_aw}-{ref_aw}:0]"
+        return f"{prefix} {signal} = {addr_net}[{bus_aw-1}:{ref_aw}] == {vhex(base_rel>>ref_aw, divwidth)} + {postfix}; // 0x{base_rel:x}-0x{end:x} + 0x{size:x}*{index}"
+
+    @staticmethod
+    def _addrhit_logic(prefix, signal, addr_net, base_rel, bus_aw, ref_aw):
+        divwidth = bus_aw - ref_aw
+        end = base_rel + (1<<ref_aw) - 1
+        # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
+        #        to 'vhex' or do some tricky concatenation
+        if divwidth == 0:
+            return f"1'b1; // 0x{base_rel:x}-0x{end:x}"
+        return f"{prefix} {signal} = {addr_net}[{bus_aw-1}:{ref_aw}] == {vhex(base_rel>>ref_aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
+
+    @classmethod
+    def _addrHit(cls, base_rel, mod, parent=None):
         if parent is None:
             bus = mod.ghostbus
         else:
             bus = parent.ghostbus
         busaw = bus['aw']
         addr_net = bus['addr']
-        divwidth = busaw - mod.aw
-        end = base_rel + (1<<mod.aw) - 1
+        #divwidth = busaw - mod.aw
+        #end = base_rel + (1<<mod.aw) - 1
         # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
         #        to 'vhex' or do some tricky concatenation
-        if divwidth == 0:
-            return f"wire addrhit_{mod.inst} = 1'b1; // 0x{base_rel:x}-0x{end:x}"
-        return f"wire addrhit_{mod.inst} = {addr_net}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
+        #if divwidth == 0:
+        #    return f"wire addrhit_{mod.inst} = 1'b1; // 0x{base_rel:x}-0x{end:x}"
+        #return f"wire addrhit_{mod.inst} = {addr_net}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
+        return cls._addrhit_logic("wire", f"addrhit_{mod.inst}", addr_net, base_rel, busaw, mod.aw)
 
     @staticmethod
     def _addrMask(mod, parent):
@@ -2019,7 +2123,7 @@ class DecoderDomainLB():
             return ""
         return "\n".join(ss)
 
-    def busHookup(self, extmod, verilogger, parent=None):
+    def extmodHookup(self, extmod, verilogger, parent=None):
         """Create code to attach an extmod (ExternalModule) to a ghostbus."""
         if parent is None:
             ghostbus = extmod.ghostbus
@@ -2048,7 +2152,10 @@ class DecoderDomainLB():
                     #ss.append(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
                     vl.add(f"assign {ext_port} = {gb_port}[{_s}:{_e}];")
                 elif portname in ('we', 're', 'wstb', 'rstb'):
-                    vl.add(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name};")
+                    sindex = ""
+                    if extmod.genblock is not None and extmod.genblock.isFor():
+                        sindex = f"[{extmod.genblock.index}]"
+                    vl.add(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name}{sindex};")
                 else:
                     vl.add(f"assign {ext_port} = {gb_port};")
         #return "\n".join(ss)
@@ -2125,11 +2232,17 @@ class DecoderDomainLB():
         for branch, extmods in self.block_exts.items():
             vl = verilogger_dict[branch]
             for extmod in extmods:
+                vl.comment(f"Extmod {extmod.name}")
+                self.extmodHookup(extmod, vl, self)
                 if extmod.genblock.isFor():
-                    pass # TODO
+                    index = extmod.genblock.index
+                    bus_aw = self.ghostbus.aw # TODO aw_str!
+                    mod_aw = extmod.aw
+                    vl.add(self._addrhit_logic_block("assign", f"addrhit_{extmod.name}[{index}]", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw, index))
+                    if extmod.extbus['din'] is not None: # Recall, some extmods are write-only
+                        dw_str = extmod.extbus.dw_str
+                        vl.add(f"assign {extmod.name}_rdata_topscope = addrhit_{extmod.name}[{index}] ? {extmod.extbus['din']} : {{{dw_str}{{1'bZ}}}};")
                 else:
-                    vl.comment("Extmod extmod_bar")
-                    self.busHookup(extmod, vl, self)
                     if extmod.extbus['din'] is not None: # Recall, some extmods are write-only
                         #vl.add(f"assign {extmod.name}_rdata_topscope = {{{{{self.ghostbus['dw']-extmod.dw}{{1'b0}}}}, {extmod.extbus['din']}}};")
                         vl.add(f"assign {extmod.name}_rdata_topscope = {extmod.extbus['din']};")

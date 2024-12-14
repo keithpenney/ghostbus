@@ -96,7 +96,7 @@ wire [N_ADDRS*32-1:0] xact_wvals = {
 };
 reg [31:0] xact_rvals [0:N_ADDRS-1];
 
-reg [31:0] read_result=0;
+reg [31:0] read_result=0, expected_val=0;
 integer N_XACT=0;
 reg PASS=1'b1;
 initial begin
@@ -148,6 +148,138 @@ initial begin
   end
 
   #(4*TICK) $display("TODO Write random values to extmod_bar");
+
+  #(4*TICK) $display("Read initial values from extmod_foo[0]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000040 + N_XACT[23:0];
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result != 32'h00000080 + N_XACT) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000080 + N_XACT);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Clobbering one value from extmod_foo[0]");
+  xact_addr = 24'h000040;
+  #(4*TICK) lb_write_task(xact_addr, 32'h12345678);
+  #(4*TICK) lb_read_task(xact_addr, read_result);
+  if (read_result !== 32'h00000078) begin
+    $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000078);
+    PASS <= 1'b0;
+  end
+
+  #(4*TICK) $display("Read initial values from extmod_foo[1]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000050 + N_XACT[23:0];
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result != 32'h00000080 + N_XACT) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000080 + N_XACT);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Clobbering one value from extmod_foo[1]");
+  xact_addr = 24'h000051;
+  #(4*TICK) lb_write_task(xact_addr, 32'h89abcdef);
+  #(4*TICK) lb_read_task(xact_addr, read_result);
+  if (read_result !== 32'h000000ef) begin
+    $display("    ERROR: 0x%x != 0x%x", read_result, 32'h000000ef);
+    PASS <= 1'b0;
+  end
+
+  #(4*TICK) $display("Read initial values from extmod_foo[2]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000060 + N_XACT[23:0];
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result != 32'h00000080 + N_XACT) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000080 + N_XACT);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Clobbering one value from extmod_foo[2]");
+  xact_addr = 24'h000062;
+  #(4*TICK) lb_write_task(xact_addr, 32'h72625242);
+  #(4*TICK) lb_read_task(xact_addr, read_result);
+  if (read_result !== 32'h00000042) begin
+    $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000042);
+    PASS <= 1'b0;
+  end
+
+  #(4*TICK) $display("Read initial values from extmod_foo[3]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000070 + N_XACT[23:0];
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result != 32'h00000080 + N_XACT) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000080 + N_XACT);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Clobbering one value from extmod_foo[3]");
+  xact_addr = 24'h000073;
+  #(4*TICK) lb_write_task(xact_addr, 32'haaaaaa55);
+  #(4*TICK) lb_read_task(xact_addr, read_result);
+  if (read_result !== 32'h00000055) begin
+    $display("    ERROR: 0x%x != 0x%x", read_result, 32'h00000055);
+    PASS <= 1'b0;
+  end
+
+  #(4*TICK) $display("Read current values from extmod_foo[0]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000040 + N_XACT[23:0];
+    if (N_XACT == 0) expected_val = 32'h00000078;
+    else expected_val = 32'h00000080 + N_XACT;
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result !== expected_val) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, expected_val);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Read current values from extmod_foo[1]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000050 + N_XACT[23:0];
+    if (N_XACT == 1) expected_val = 32'h000000ef;
+    else expected_val = 32'h00000080 + N_XACT;
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result !== expected_val) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, expected_val);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Read current values from extmod_foo[2]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000060 + N_XACT[23:0];
+    if (N_XACT == 2) expected_val = 32'h00000042;
+    else expected_val = 32'h00000080 + N_XACT;
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result !== expected_val) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, expected_val);
+      PASS <= 1'b0;
+    end
+  end
+
+  #(4*TICK) $display("Read current values from extmod_foo[3]");
+  for (N_XACT=0; N_XACT<4; N_XACT=N_XACT+1) begin
+    xact_addr = 24'h000070 + N_XACT[23:0];
+    if (N_XACT == 3) expected_val = 32'h00000055;
+    else expected_val = 32'h00000080 + N_XACT;
+    #(4*TICK) lb_read_task(xact_addr, read_result);
+    $display("  addr = 0x%x; read_result = 0x%x", xact_addr, read_result);
+    if (read_result !== expected_val) begin
+      $display("    ERROR: 0x%x != 0x%x", read_result, expected_val);
+      PASS <= 1'b0;
+    end
+  end
 
   if (PASS) begin
     $display("PASS");
@@ -235,6 +367,25 @@ initial begin
   GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+1, 32'h0000005a);
   GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+2, 32'h00000011);
   GB_READ_CHECK(TOP_BAZ_GENERATOR_EXTMOD_BAR_BASE+3, 32'h000000bb);
+
+  //TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE
+  $display("Reading extmod_foo[0] init values.");
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE,   32'h00000080);
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+1, 32'h00000081);
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+2, 32'h00000082);
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+3, 32'h00000083);
+
+  $display("Writing new values to extmod_foo[0].");
+  GB_WRITE(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE,   32'hbeef0032); // only the last 8 bits are used
+  GB_WRITE(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+1, 32'hcafe4409); // only the last 8 bits are used
+  GB_WRITE(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+2, 32'h00000044); // only the last 8 bits are used
+  GB_WRITE(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+3, 32'h000000de); // only the last 8 bits are used
+
+  $display("Reading back values written to extmod_foo[0].");
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE,   32'h00000032);
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+1, 32'h00000009);
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+2, 32'h00000044);
+  GB_READ_CHECK(TOP_FOO_GENERATOR_EXTMOD_FOO_0_BASE+3, 32'h000000de);
 
   if (test_pass) $display("PASS");
   else begin
