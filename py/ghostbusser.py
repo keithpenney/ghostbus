@@ -1018,6 +1018,8 @@ class GhostBusser(VParser):
         for instname, data in busses.items():
             basename, bus = data
             #print(f"    instname {instname}; bus {bus.name}; bus['addr'] = {bus['addr']}; bus = {bus}")
+            # Maybe I'll just sanitize the genblock bus ports names here?
+            bus.deblock()
             extmod = ExternalModule(instname, extbus=bus, basename=basename)
             print(f"  Resolving ExternalModule {instname}; bus.genblock = {bus.genblock}")
             extmods.append(extmod)
@@ -1112,6 +1114,7 @@ class GhostBusser(VParser):
     def _handleGenerates(self, reftype, ref, yosrc, module_name):
         """Handle an item 'ref' of type 'reftype' instantiated inside a generate block within module 'module_name'.
         The 'yosrc' string helps us find and parse the source which is unfortunately necessary."""
+        # TODO - I don't think reftype of 'ext' is ever used.  Can it be?  Currently passed to _handleExtmod()
         block_name, netname, loop_index = block_inst(ref.name)
         if block_name is None:
             raise Exception(f"Internal error. The string {ref.name} somehow got passed to _handleGenerates() even though it fails block_inst()")
@@ -1146,7 +1149,7 @@ class GhostBusser(VParser):
                 # UNPARSED_FOR_LOOP
                 raise GhostbusException(f"Failed to find for-loop around {block_info['source']}")
             loop_len = None
-            for reftype in ("csrs", "rams", "exts"):
+            for reftype in ("csrs", "rams", "exts"): # TODO again, 'exts' is probably unused
                 for netname, netdict in block_info[reftype].items():
                     indices = netdict["indices"]
                     refs = netdict["refs"]
@@ -1161,7 +1164,10 @@ class GhostBusser(VParser):
                         raise GhostbusInternalException()
                     aw = ref.aw
                     new_aw = aw + bits(loop_len) - 1 # I'm pretty sure it's -1
+                    ref.block_aw = aw
                     ref.aw = new_aw
+                    #ref.aw = new_aw
+                    #ref.ref_list = refs
                     ref.name = netname
                     forloop.loop_len = loop_len
                     ref.genblock = forloop
@@ -1334,31 +1340,38 @@ class JSONMaker():
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
-                if ref.signed is not None and ref.signed:
-                    signstr = "signed"
+                # FIXME HACK! Make up your damn mind, Keef!  Are you unrolling ExternalModules before, or AFTER adding to the memory map!?!?!
+                if isinstance(ref, ExternalModule):
+                    copies = (ref,)
                 else:
-                    signstr = "unsigned"
-                entry = {
-                    "access": Register.accessToStr(ref.access),
-                    "addr_width": ref.aw,
-                    "sign": signstr,
-                    "base_addr": mem.base + start,
-                    "data_width": ref.dw,
-                }
-                if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
-                    hier_str = str(ref.alias)
-                elif flat:
-                    hierarchy = list(top_hierarchy)
-                    hierarchy.append(ref.name)
-                    printd(f"{mem.name}: {mem.hierarchy}, {ref.name}: hierarchy = {hierarchy}")
-                    if short or not mangle_names:
-                        hier_str = ".".join(strip_empty(hierarchy))
+                    copies = ref.unroll()
+                for ref in copies:
+                    if ref.signed is not None and ref.signed:
+                        signstr = "signed"
                     else:
-                        hier_str = "_".join(strip_empty(hierarchy))
-                else:
-                    hier_str = ref.name
-                if hier_str not in drops:
-                    dd[hier_str] = entry
+                        signstr = "unsigned"
+                    entry = {
+                        "access": Register.accessToStr(ref.access),
+                        "addr_width": ref.aw,
+                        "sign": signstr,
+                        #"base_addr": mem.base + start,
+                        "base_addr": mem.base + ref.base,
+                        "data_width": ref.dw,
+                    }
+                    if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
+                        hier_str = str(ref.alias)
+                    elif flat:
+                        hierarchy = list(top_hierarchy)
+                        hierarchy.append(ref.name)
+                        printd(f"{mem.name}: {mem.hierarchy}, {ref.name}: hierarchy = {hierarchy}")
+                        if short or not mangle_names:
+                            hier_str = ".".join(strip_empty(hierarchy))
+                        else:
+                            hier_str = "_".join(strip_empty(hierarchy))
+                    else:
+                        hier_str = ref.name
+                    if hier_str not in drops:
+                        dd[hier_str] = entry
             else:
                 print(f"What is this? {ref}")
         if flat and short:

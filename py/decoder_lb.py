@@ -187,6 +187,28 @@ class BusLB():
         self._port_list = ll
         return ll
 
+    def deblock(self):
+        # FIXME
+        """I'd love to make this function unnecessary.  For a bus declared in a generate-for block,
+        the port names will collide if not differentiated with the name of the block scope and index
+        (as Yosys does natively).  Unfortunately, this is not acceptable for generated code, so we
+        need to discard that information.
+        Ultimately, I should find a way to be smarter about my initial digest of busses to allow
+        name collisions.  For now, we remove this block-scope information here."""
+        keys = [key for key in self._bus_info.keys()]
+        for key, val in self._bus.items():
+            if key.startswith("extra_") and val is not None:
+                keys.append(key)
+        for key in keys:
+            _data = self._bus[key]
+            if _data is None:
+                continue
+            portname, src = _data
+            block_name, netname, loop_index = block_inst(portname)
+            if block_name is not None:
+                self._bus[key] = (netname, src)
+        return
+
     @property
     def name(self):
         return self._name
@@ -1318,12 +1340,13 @@ class DecoderDomainLB():
             for csr in csrs:
                 if csr.genblock.isFor():
                     # If the CSR is in a FOR loop, I need to unroll it here
-                    base = csr.base
+                    #base = csr.base
+                    copies = csr.unroll()
                     #print(f"CSR {csr.name} in FOR loop of loop_len {csr.genblock.loop_len} from 0x{csr.base:x}")
-                    for n in range(csr.genblock.loop_len):
-                        copy = csr.copy()
-                        copy.base = base + n
-                        copy._domain = (self.base, f"{self.mod.name}_{branch}_{n}")
+                    for copy in copies:
+                        #copy = csr.copy()
+                        #copy.base = base + n
+                        copy._domain = (self.base, self.mod.name)
                         csrlist.append(copy)
                 else:
                     # CSRs in IF block just go in like normal
@@ -1344,9 +1367,11 @@ class DecoderDomainLB():
             ramlist.append(copy)
         for branch, rams in self.block_rams.items():
             for ram in rams:
-                copy = ram.copy()
-                copy._domain = (self.base, f"{self.mod.name}_{branch}")
-                ramlist.append(copy)
+                copies = ram.unroll()
+                for copy in copies:
+                    #copy = ram.copy()
+                    copy._domain = (self.base, self.mod.name)
+                    ramlist.append(copy)
         for base, submod in self.submods:
             submod._collectRAMs(ramlist)
         # TODO: include submods in generate blocks
@@ -1362,12 +1387,15 @@ class DecoderDomainLB():
             for ext in exts:
                 if ext.genblock.isFor():
                     # Unroll it here
-                    for n in range(len(ext.base_list)):
-                        base = ext.base_list[n]
-                        copy = ext.copy()
-                        copy.base = base
-                        copy.name = f"{ext.name}_{n}"
-                        copy._domain = (self.base, f"{self.mod.name}_{branch}")
+                    print("BRRRRRRRRRRRRRRRAP!")
+                    copies = ext.unroll()
+                    #for n in range(len(ext.base_list)):
+                    for copy in copies:
+                        #base = ext.base_list[n]
+                        #copy = ext.copy()
+                        #copy.base = base
+                        #copy.name = f"{ext.name}_{n}"
+                        copy._domain = (self.base, self.mod.name)
                         extlist.append(copy)
                 else:
                     copy = ext.copy()
@@ -1597,7 +1625,7 @@ class DecoderDomainLB():
         end = base_rel + (1<<ref_aw) - 1
         # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
         #        to 'vhex' or do some tricky concatenation
-        postfix = f"{index}[{bus_aw}-{ref_aw}:0]"
+        postfix = f"{index}[{bus_aw}-{ref_aw}-1:0]"
         return f"{prefix} {signal} = {addr_net}[{bus_aw-1}:{ref_aw}] == {vhex(base_rel>>ref_aw, divwidth)} + {postfix}; // 0x{base_rel:x}-0x{end:x} + 0x{size:x}*{index}"
 
     @staticmethod
@@ -1771,7 +1799,10 @@ class DecoderDomainLB():
                 gb_dwstr = self.ghostbus.dw_str
                 ext_dwstr = ext.extbus.dw_str
                 din = f"{ext.name}_rdata_topscope"
-                vl.add(f"  addrhit_{ext.name} ? {{{{{gb_dwstr}-{ext_dwstr}{{1'b0}}}}, {din}}} :")
+                postfix = ""
+                if ext.genblock.isFor():
+                    postfix = "_any"
+                vl.add(f"  addrhit_{ext.name}{postfix} ? {{{{{gb_dwstr}-{ext_dwstr}{{1'b0}}}}, {din}}} :")
         if self.has_local_csrs:
             vl.add(f"  {en_local} ? {local_din} :")
         vl.add(f"  {vhex(0, self.ghostbus['dw'])};")
@@ -2193,9 +2224,9 @@ class DecoderDomainLB():
                 ramname = f"{branch}_{ram.name}"
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
                 sizestr = ram.size_str
-                awdiff = self.ghostbus.aw - ram.aw
                 awstr = f"{branch.upper()}_{ram.name.upper()}_AW"
                 if ram.genblock.isIf():
+                    awdiff = self.ghostbus.aw - ram.aw
                     vl.add(f"assign {branch}_{ram.name}_r = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
                     vl.always_at_clk(f"{self.ghostbus['clk']}")
                     vl._if(f"addrhit_{ramname} & {self._bus_we}")
@@ -2204,9 +2235,14 @@ class DecoderDomainLB():
                     vl.end()
                 else:
                     index = ram.genblock.index
-                    cmt = f"0x{ram.base:x}-0x{ram.base+(1<<ram.aw)-1:x} (+{index}*0x{1<<ram.aw:x})"
-                    vl.add(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.aw}] == {vhex(ram.base>>ram.aw, awdiff)} + {index}[{awdiff}-1:0];",
+                    # FIXME technically "ram.aw" here in the comment is wrong. I need both "ram.aw" and "ram.block_aw"
+                    cmt = f"0x{ram.base:x}-0x{ram.base+(1<<ram.block_aw)-1:x} (+{index}*0x{1<<ram.block_aw:x})"
+                    awdiff = self.ghostbus.aw - ram.block_aw
+                    vl.add(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.block_aw}] == {vhex(ram.base>>ram.block_aw, awdiff)} + {index}[{awdiff}-1:0];",
                            comment=cmt)
+                    # TODO awstr, not aw
+                    #vl.add(self._addrhit_logic_block("assign", f"assign addrhit_{ramname}[{index}]", self.ghostbus['addr'], ram.base, self.ghostbus.aw, awstr, index))
+                    #vl.add(self._addrhit_logic_block("assign", f"addrhit_{extmod.name}[{index}]", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw, index))
                     vl.add(f"assign {ramname}_r[(({index}+1)*{sizestr})-1-:{sizestr}] = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
                     vl.always_at_clk(f"{self.ghostbus['clk']}")
                     #vl._if(f"addrhit_{ramname}[{index}] & {self.ghostbus['we']}")

@@ -30,6 +30,7 @@ class GBRegister(Register):
         "net_type": None,
         "busname": None,
         "genblock": None,
+        #"ref_list": [],
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -39,6 +40,15 @@ class GBRegister(Register):
             if hasattr(default, "copy"):
                 default = default.copy()
             setattr(self, name, default)
+        # A bit weird, but helpful
+        #self.ref_list.append(self)
+
+    @property
+    def base_list(self):
+        ll = []
+        for n in range(self.genblock.loop_len):
+            ll.append(self.base + n*self.size)
+        return ll
 
     def copy(self):
         ref = super().copy()
@@ -100,6 +110,22 @@ class GBRegister(Register):
             return f"({r0}+1)"
         return f"({r0}-{r1}+1)"
 
+    def unroll(self):
+        if self.genblock is None:
+            return (self,)
+        if not self.genblock.isFor():
+            return (self,)
+        copies = []
+        base_list = self.base_list
+        print(f"++++++++++++++++++++++++++++++++++++ {self.name}: {base_list}")
+        for n in range(len(base_list)):
+            base = base_list[n]
+            copy = self.copy()
+            copy.base = base
+            copy.name = f"{self.genblock.branch}_{self.name}_{n}"
+            copies.append(copy)
+        return copies
+
 
 # TODO - Combine this class with GBRegister
 class GBMemory(Memory):
@@ -115,6 +141,7 @@ class GBMemory(Memory):
         "busname": None,
         "access": Memory.RW,
         "genblock": None,
+        #"ref_list": [],
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -123,6 +150,15 @@ class GBMemory(Memory):
             if hasattr(default, "copy"):
                 default = default.copy()
             setattr(self, name, default)
+        # A bit weird, but helpful
+        #self.ref_list.append(self)
+
+    @property
+    def base_list(self):
+        ll = []
+        for n in range(self.genblock.loop_len):
+            ll.append(self.base + n*self.size)
+        return ll
 
     def copy(self):
         ref = super().copy()
@@ -173,6 +209,22 @@ class GBMemory(Memory):
         if d0 == "0":
             return f"({d1}+1)"
         return f"({d1}-{d0}+1)"
+
+    def unroll(self):
+        if self.genblock is None:
+            return (self,)
+        if not self.genblock.isFor():
+            return (self,)
+        copies = []
+        base_list = self.base_list
+        print(f"++++++++++++++++++++++++++++++++++++ {self.name}: {base_list}")
+        for n in range(len(base_list)):
+            base = base_list[n]
+            copy = self.copy()
+            copy.base = base
+            copy.name = f"{self.genblock.branch}_{self.name}_{n}"
+            copies.append(copy)
+        return copies
 
 
 class GBMemoryRegionStager(MemoryRegionStager):
@@ -330,6 +382,22 @@ class ExternalModule():
     def base(self, val):
         self._base = val
         return
+
+    def unroll(self):
+        if self.genblock is None:
+            return (self,)
+        if not self.genblock.isFor():
+            return (self,)
+        copies = []
+        base_list = self.base_list
+        print(f"++++++++++++++++++++++++++++++++++++ {self.name}: {base_list}")
+        for n in range(len(base_list)):
+            base = base_list[n]
+            copy = self.copy()
+            copy.base = base
+            copy.name = f"{self.genblock.branch}_{self.name}_{n}"
+            copies.append(copy)
+        return copies
 
 
 class GenerateBranch():

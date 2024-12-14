@@ -91,7 +91,7 @@ wire addrhit_extmod_foo_any = gb_addr[23:6] == 18'h00001; // 0x40-0x7f
 `else
 wire addrhit_extmod_foo_any = |addrhit_extmod_foo;
 `endif
-wire [EXT_DW-1:0] fooext_rdata_topscope;
+wire [EXT_DW-1:0] extmod_foo_rdata_topscope;
 
 wire en_local = gb_addr[23:6] == 18'h00000; // 0x0-0x3f
 reg  [31:0] local_din=0;
@@ -113,7 +113,7 @@ wire addrhit_baz_ram = gb_addr[23:3] == 21'h000001; // 0x8-0xf
 // din routing
 assign gb_rdata = 
     addrhit_extmod_bar ? {{32-EXT_DW{1'b0}}, ext_rdata_topscope} :
-    addrhit_extmod_foo_any ? {{32-EXT_DW{1'b0}}, fooext_rdata_topscope} :
+    addrhit_extmod_foo_any ? {{32-EXT_DW{1'b0}}, extmod_foo_rdata_topscope} :
     en_local ? local_din :
     32'h00000000;
 
@@ -236,7 +236,7 @@ generate
     assign fooext_addr = gb_addr[EXT_AW-1:0];
     assign fooext_wdata = gb_wdata[EXT_DW-1:0];
     assign fooext_we = gb_wen & addrhit_extmod_foo[N];
-    assign fooext_rdata_topscope = addrhit_extmod_foo[N] ? fooext_rdata : {EXT_DW{1'bZ}};
+    assign extmod_foo_rdata_topscope = addrhit_extmod_foo[N] ? fooext_rdata : {EXT_DW{1'bZ}};
 
     // Submodule foo
     assign addrhit_foo[N] = gb_addr[23:8] == 16'h0001 + N[15:0];
