@@ -1057,10 +1057,10 @@ class GhostBusser(VParser):
                 print(f"instname = {instname}")
                 base_bus = busses.get(instname, None)
                 if base_bus is None:
-                    print("    New bus")
                     bus = BusLB()
+                    print(f"    New bus id = {id(bus)}")
                 else:
-                    print("    Got bus")
+                    print(f"    Got bus id = {id(bus)}")
                     bus = base_bus[1]
                 #print(f"len(data) = {len(data)}")
                 for datum in data:

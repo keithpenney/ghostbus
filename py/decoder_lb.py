@@ -93,6 +93,7 @@ class BusLB():
         self._bus = {}
         for key, data in self._bus_info.items():
             self._bus[key] = None
+        self.bus_info = self._bus_info.copy()
         # Add derived parameters
         # FIXME - Can we stop storing things in self._bus that aren't actual ports?!
         for key in self._derived.keys():
@@ -128,8 +129,11 @@ class BusLB():
 
     def _get_by_direction(self, _dirs):
         dd = {}
-        for key, data in self._bus_info.items():
+        #print(f" id(self) = {id(self)}; self.bus_info = {self.bus_info}")
+        #print(f" id(self) = {id(self)}; self._bus = {self._bus}")
+        for key, data in self.bus_info.items():
             if data[2] in _dirs:
+                #if self._bus.get(key, None) is not None:
                 if self._bus[key] is not None:
                     dd[key] = self._bus[key][0]
                 else:
@@ -141,7 +145,7 @@ class BusLB():
 
     def getPortList(self):
         """Returns list of (key, portname, rangestr, _dir) for all ports used in the bus.
-        where 'key' is one of self._bus_info.keys(),
+        where 'key' is one of self.bus_info.keys(),
         and 'portname' is the net name used for the port in the codebase,
         and 'rangestr' is the bit range as a string
         and '_dir' is one of (self._input, self._output, self._inout)"""
@@ -151,7 +155,7 @@ class BusLB():
         ll = []
         # I'd like to return the ports in some preferred order
         preferred_order = ('clk', 'addr', 'dout', 'din', 'we', 'wstb', 're', 'rstb')
-        for key, portinfo in self._bus_info.items():
+        for key, portinfo in self.bus_info.items():
             portname = self._bus.get(key)
             if portname is not None:
                 portname = portname[0]
@@ -195,7 +199,7 @@ class BusLB():
         need to discard that information.
         Ultimately, I should find a way to be smarter about my initial digest of busses to allow
         name collisions.  For now, we remove this block-scope information here."""
-        keys = [key for key in self._bus_info.keys()]
+        keys = [key for key in self.bus_info.keys()]
         for key, val in self._bus.items():
             if key.startswith("extra_") and val is not None:
                 keys.append(key)
@@ -332,12 +336,13 @@ class BusLB():
         if _match is not None:
             _dir, portname = _match
             busval = self._bus.get(portname)
-            # Register the direction in _bus_info
-            self._bus_info[portname] = ((), self.optional, _dir)
+            # Register the direction in bus_info
+            self.bus_info[portname] = ((), self.optional, _dir)
         else:
             portname = self._validate_portname(portname)
             busval = self._bus[portname]
         if busval is None:
+            #print(f"  id(self) = {id(self)}; Setting self._bus[{portname}] = ({netname}, ...)")
             self._bus[portname] = (netname, source)
             # Get width of addr/data
             self._set_width(portname, width=portwidth, rangestr=rangestr)
@@ -377,7 +382,7 @@ class BusLB():
         _valid = True
         err = ""
         missing = []
-        for key, data in self._bus_info.items():
+        for key, data in self.bus_info.items():
             mandatory = data[1]
             if mandatory and self._bus[key] is None:
                 missing.append(key)
@@ -1258,9 +1263,9 @@ class DecoderDomainLB():
                     raise GhostbusInternalException()
                 ref.setInst(modname)
                 ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
-                print(f"Submod {modname} gets addresses: {ref.gen_addrs}")
+                #print(f"Submod {modname} gets addresses: {ref.gen_addrs}")
                 block_submods[branch].append(ref)
-            print(f"Branch {branch}: submods = {block_submods[branch]}")
+            #print(f"Branch {branch}: submods = {block_submods[branch]}")
         # Clobber block_submods
         self.block_submods = block_submods
         #print(f"self.block_submods = {self.block_submods}")
@@ -1387,7 +1392,6 @@ class DecoderDomainLB():
             for ext in exts:
                 if ext.genblock.isFor():
                     # Unroll it here
-                    print("BRRRRRRRRRRRRRRRAP!")
                     copies = ext.unroll()
                     #for n in range(len(ext.base_list)):
                     for copy in copies:
@@ -1523,7 +1527,7 @@ class DecoderDomainLB():
                 any_block = True
             vl.comment(f"Generate Block {branch}")
             for ext in exts:
-                print(f"  {self.name} Block-Scope External Module Instance {ext.name} in branch {branch}")
+                #print(f"  {self.name} Block-Scope External Module Instance {ext.name} in branch {branch}")
                 self._blockExtInit(ext, branch, vl)
         return
 
