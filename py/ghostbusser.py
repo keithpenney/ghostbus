@@ -139,6 +139,8 @@ class GhostbusInterface():
                     access |= Register.WRITE
                 if 'r' in val:
                     access |= Register.READ
+                if access == 0:
+                    access = Register.UNSPECIFIED
         return access
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -178,7 +180,7 @@ class GhostbusInterface():
         if rvals.get(cls.tokens.ADDR) is not None:
             # Only imply HA if not an ExternalModule
             if rvals.get(cls.tokens.EXTERNAL) is None:
-                rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA](1)
+                rvals[cls.tokens.HA] = Register.UNSPECIFIED
         elif rvals.get(cls.tokens.STROBE) is not None:
             # Strobes are write-only
             rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA]("w")
