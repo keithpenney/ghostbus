@@ -17,6 +17,12 @@ MEMORY_RANGE_ARRAY  = (1024, (1<<23))
 def bits(v):
     return int(math.ceil(math.log2(v+1)))
 
+def is_aligned(base, aw):
+    """Return True if address 'base' is aligned to an address width of 'aw'"""
+    mask = (1<<aw)-1
+    if (base & mask) == 0:
+        return True
+    return False
 
 class Register():
     READ = 1
@@ -56,6 +62,11 @@ class Register():
             return "Register_{}".format(size)
         return self._name
 
+    @name.setter
+    def name(self, ss):
+        self._name = ss
+        return
+
     @property
     def size(self):
         return self._size
@@ -68,6 +79,11 @@ class Register():
     def aw(self):
         """Alias for width"""
         return self._addr_width
+
+    @aw.setter
+    def aw(self, _aw):
+        self._addr_width = int(_aw)
+        return
 
     @property
     def datawidth(self):
@@ -323,7 +339,7 @@ class MemoryRegion():
 
     @base.setter
     def base(self, value):
-        #print(f"***************** base => {self._offset:x} -> {value:x} ({self._top:x})")
+        #print(f"***************** base => {self._offset} -> {value} ({self._top})")
         self._offset = value
         for n in range(len(self.map)):
             start, end, ref = self.map[n]

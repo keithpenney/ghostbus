@@ -1,4 +1,4 @@
-# A single-bus codebase
+# A codebase with generate-if and generate-for blocks
 THIS_DIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
 GHOSTBUS_DIR=$(THIS_DIR)/../..
@@ -36,20 +36,30 @@ VVP = vvp$(ICARUS_SUFFIX) -N
 VVP_FLAGS = ${VVP_FLAGS_$@}
 VERILOG_CHECK = $(VVP) $< $(VVP_FLAGS)
 
+# gb_testbench.vh
+
 VFLAGS_top_tb = -DGHOSTBUS_LIVE
 top_tb: top_tb.v $(GHOSTBUS_SOURCES) gb_testbench.vh
 	$(VERILOG_TB)
 
+#VVP_FLAGS_top_check=+vcd
 %_check: %_tb
 	$(VERILOG_CHECK)
 
 %.vcd: %_tb
 	$(VERILOG_CHECK) +vcd
 
-.PHONY: test
-test: top_check
+VFLAGS_top_tb_manual = -DHAND_ROLLED
+top_tb_manual: top_tb.v $(GHOSTBUS_SOURCES)
+	$(VERILOG_TB)
 
-CLEANS=top_tb gb_testbench.vh top.vcd
+top_check_manual: top_tb_manual
+	$(VERILOG_CHECK) +vcd
+
+.PHONY: test
+test: top_check_manual top_check
+
+CLEANS=top_tb gb_testbench.vh top_tb_manual top.vcd
 
 RM=rm -rf
 .PHONY: clean

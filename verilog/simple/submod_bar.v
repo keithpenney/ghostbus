@@ -3,6 +3,8 @@
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUSPORTS
   `define GHOSTBUS_submod_bar
+`else
+  `include "defs.vh"
 `endif
 
 module submod_bar #(
@@ -21,6 +23,12 @@ reg [3:0] bar_reg=1;                            // Non-host-accessible register
 
 (* ghostbus_ha, ghostbus_addr='h100 *)
 reg [7:0] bar_ram [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
+integer N=0;
+initial begin
+  for (N=0; N<64; N=N+1) begin
+    bar_ram[N] = 8'h80 + N[7:0];
+  end
+end
 
 localparam ext_aw = 2;
 localparam ext_dw = 8;

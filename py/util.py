@@ -29,16 +29,38 @@ def print_dict(dd, depth=-1, dohash=False):
 class enum():
     """A slightly fancy enum"""
     def __init__(self, names, base=0):
-        self._strs = {}
+        self._strs = []
+        self._offset = base
         for n in range(len(names)):
             setattr(self, names[n], base+n)
-            self._strs[base+n] = names[n]
+            self._strs.append(names[n])
+        self._items = False
 
     def __getitem__(self, item):
         return getattr(self, item)
 
+    def __iter__(self):
+        self._ix = 0
+        #self._items = False
+        return self
+
+    def items(self):
+        self._ix = 0
+        self._items = True
+        return self
+
+    def __next__(self):
+        if self._ix >= len(self._strs):
+            self._items = False
+            raise StopIteration
+        ss = self._strs[self._ix]
+        self._ix += 1
+        if self._items:
+            return (ss, getattr(self, ss))
+        return getattr(self, ss)
+
     def str(self, val):
-        return self._strs[val]
+        return self._strs[val-self._offset]
 
     def get(self, item):
         if hasattr(self, item):
@@ -63,3 +85,24 @@ def deep_copy(dd):
         else:
             cp[key] = val
     return cp
+
+def check_complete_indices(ll):
+    """Ensure that the list 'll' is identical to [x for x in range(len(ll))]
+    """
+    llc = ll.copy()
+    llc.sort()
+    comp = [x for x in range(len(llc))]
+    for n in range(len(llc)):
+        if comp[n] != llc[n]:
+            return False
+    return True
+
+def identical(ll):
+    """Return True if all items in list 'll' are the same"""
+    if len(ll) <= 1:
+        return True
+    l0 = ll[0]
+    for l in ll[1:]:
+        if l != l0:
+            return False
+    return True

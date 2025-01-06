@@ -16,7 +16,7 @@
 
 * [Assign a CSR/RAM a global alias for the JSON memory map](#alias)
 
-[Routing Macros](#routing-macros)
+[Routing Macros](#macros)
 
 * [Adding the "magic" ports to your module declaration (i.e. "let the ghostbus in")](#ghost_in)
 
@@ -39,7 +39,7 @@ The auto-generated decoding and routing is placed into a series of files which a
 specially-named macros.  While this is a bit painful, please blaim the limitations of the Verilog language,
 not the author of this tool.  Complexity has been minimized as much as possible.
 
-## Attributes
+## Attributes <a name="attributes"></a>
 
 ### Define the Ghostbus <a name="busdefine"></a>
 ```verilog
@@ -248,7 +248,7 @@ _Example_:
 (* ghostbus, ghostbus_alias="mark_twain" *) reg [7:0] sam_clemens=0;
 ```
 
-## Routing Macros
+## Routing Macros  <a name="macros"></a>
 
 For any module through with the __ghostbus__ routes, there are 3 places where you will need to add guarded macros.
 

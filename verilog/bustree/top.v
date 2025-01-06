@@ -2,8 +2,10 @@
 
 `ifndef GHOSTBUS_LIVE
   `define GHOSTBUS_top
-  `define GHOSTBUS_submod_foo_top
-  `define GHOSTBUS_submod_foo_bottom
+  `define GHOSTBUS_top_submod_foo_top
+  `define GHOSTBUS_top_submod_foo_bottom
+`else
+  `include "defs.vh"
 `endif
 
 module top #(
@@ -25,11 +27,11 @@ module top #(
 (* ghostbus_ext="glue_top, rdata" *) wire [GB_DW-1:0] gluetop_rdata;
 (* ghostbus_ext="glue_top, wstb"  *) wire gluetop_wstb;
 
-(* ghostbus_port="clk",       ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_clk;
-(* ghostbus_port="addr",      ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_AW-1:0] gluebottom_addr;
-(* ghostbus_port="wdata",     ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_wdata;
-(* ghostbus_port="rdata",     ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_rdata;
-(* ghostbus_port="wstb, wen", ghostbus_name="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_wstb;
+(* ghostbus_port="clk",       ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_clk;
+(* ghostbus_port="addr",      ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_AW-1:0] gluebottom_addr;
+(* ghostbus_port="wdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_wdata;
+(* ghostbus_port="rdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_rdata;
+(* ghostbus_port="wstb, wen", ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_wstb;
 
 bus_glue #(
   .AW(GB_AW),
@@ -40,7 +42,7 @@ bus_glue #(
   .i_wdata(gluetop_wdata), // input [DW-1:0]
   .i_rdata(gluetop_rdata), // output [DW-1:0]
   .i_wstb(gluetop_wstb), // input
-  .o_clk(gluebottom_clk), // input
+  .o_clk(gluebottom_clk), // output
   .o_addr(gluebottom_addr), // output [AW-1:0]
   .o_wdata(gluebottom_wdata), // output [DW-1:0]
   .o_rdata(gluebottom_rdata), // input [DW-1:0]
@@ -51,6 +53,14 @@ localparam FOO_GW = 8;
 localparam FOO_RD_TOP = 8;
 localparam FOO_RD_BOTTOM = 16;
 
+// A CSR in the default domain
+(* ghostbus *) reg [7:0] top_ha_reg=8'h42;
+
+// A CSR in the "glue_bottom" domain
+(* ghostbus, ghostbus_domain="glue_bottom" *) reg [7:0] bottom_ha_reg=8'h42;
+
+`GHOSTBUS_top
+
 wire clk = gb_clk;
 // submod_foo_top lives in the default domain
 submod_foo #(
@@ -60,7 +70,7 @@ submod_foo #(
   .RD(FOO_RD_TOP)
 ) submod_foo_top (
   .clk(clk)
-  `GHOSTBUS_submod_foo_top
+  `GHOSTBUS_top_submod_foo_top
 );
 
 // submod_foo_bottom lives in the "glue_bottom" domain
@@ -71,15 +81,7 @@ submod_foo #(
   .RD(FOO_RD_BOTTOM)
 ) submod_foo_bottom (
   .clk(clk)
-  `GHOSTBUS_submod_foo_bottom
+  `GHOSTBUS_top_submod_foo_bottom
 );
-
-// A CSR in the default domain
-(* ghostbus *) reg [7:0] top_ha_reg=8'h42;
-
-// A CSR in the "glue_bottom" domain
-(* ghostbus, ghostbus_name="glue_bottom" *) reg [7:0] bottom_ha_reg=8'h42;
-
-`GHOSTBUS_top
 
 endmodule

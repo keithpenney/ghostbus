@@ -20,6 +20,7 @@ def srcParse(s):
     filepath, linestart, charstart, lineend, charend = _match.groups()
     return (filepath, int(linestart), int(charstart), int(lineend), int(charend))
 
+
 def ismodule(s):
     restr = r"^\$(\w+)[\$\\]"
     _match = re.search(restr, s)
@@ -30,6 +31,49 @@ def ismodule(s):
             return True
     else:
         # If it gets here, it's probably a module
+        return True
+    return False
+
+
+def isgenerate(inst_name):
+    """Match "gen_block[index].instance" string."""
+    gen_block, inst, index = block_inst(inst_name)
+    if gen_block is None:
+        return False
+    return True
+
+
+def block_inst(inst_name):
+    """
+    If inst_name matches "gen_block[index].instance",
+        return gen_block, instance, index
+    elif inst_name matches "gen_block.instance",
+        return gen_block, instance, None
+    else:
+        return None, None, None
+    """
+    restr = "([^.$]+)\.(\w+)"
+    reindex = "(\w+)\[(\d+)\]"
+    gen_block = None
+    inst = None
+    index = None
+    _match = re.match(restr, inst_name)
+    if _match:
+        groups = _match.groups()
+        gen_block, inst = groups[:2]
+        imatch = re.match(reindex, gen_block)
+        if imatch:
+            gen_block, index = imatch.groups()
+            index = int(index)
+    return gen_block, inst, index
+
+
+def autogenblk(gen_block):
+    """Yosys lazily gives names to anonymous generate blocks and doesn't detect collisions if you happen
+    to name a block with the same auto-generated internal names assigned by Yosys.
+    Return True if the string 'gen_block' matches Yosys's internal naming convention (else False)."""
+    restr = "genblk(\d+)"
+    if re.match(restr, gen_block):
         return True
     return False
 
@@ -155,27 +199,53 @@ def _getSourceSnippet(yosrc, size=1024):
         with open(filepath, 'r') as fd:
             for n in range(linestart):
                 line = fd.readline()
-            # Rewind up to 512 chars before start of register name
+            # Rewind up to size/2 chars before start of register name
             tell = fd.tell()
             # Set tell to the start of the identifier
             tell -= 1+len(line)-charstart
-            fd.seek(max(0, tell-512))
+            fd.seek(max(0, tell-int(size//2)))
             # Read up to 1024 chars
-            snippet = fd.read(1024)
-            offset = min(tell, 512)
+            snippet = fd.read(int(size))
+            offset = min(tell, int(size//2))
             #namestr = snippet[offset:offset+charend-charstart]
             #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
             #    namestr, offset, len(snippet), rangeStr))
     except OSError:
-        print("Cannot open file {}".format(filepath))
+        # print("Cannot open file {}".format(filepath))
         return None, None
     return snippet, offset
+
+
+def _getSourceFromStart(yosrc):
+    """Read in the file reference by 'yosrc' and return the portion from the beginning of the file
+    up until the line/char referenced by 'yosrc'."""
+    groups = srcParse(yosrc)
+    if groups is None:
+        return False
+    filepath, linestart, charstart, lineend, charend = groups
+    lines = []
+    try:
+        with open(filepath, 'r') as fd:
+            nline = 0
+            line = True
+            while line:
+                line = fd.readline()
+                nline += 1
+                if nline == linestart:
+                    lines.append(line[:charstart])
+                else:
+                    lines.append(line)
+    except OSError:
+        return None
+    return "".join(lines)
+
 
 def _matchKw(ss):
     for kw in _net_keywords:
         if ss.startswith(kw):
             return kw
     return None
+
 
 def _findRangeStr(snippet, offset, get_type=True):
     """Start at char offset. Read backwards. Look for ']' to open a range.
@@ -236,6 +306,79 @@ def _findDepthStr(snippet, offset):
         elif char == ';':
             break
     return depthstr
+
+
+# HACK ALERT!
+def _decomment(ss):
+    """A hackish attempt to de-comment a block of Verilog code"""
+    cbs = "/*"
+    cbe = "*/"
+    cls = "//"
+    cle = "\n"
+    result = []
+    start = 0
+    NO_COMMENT = 0
+    BLOCK_COMMENT = 1
+    LINE_COMMENT = 2
+    comment = NO_COMMENT
+    for n in range(2, len(ss)):
+        chrs = ss[n-2:n]
+        if comment == NO_COMMENT:
+            if cbs in chrs:
+                comment = BLOCK_COMMENT
+            elif cls in chrs:
+                comment = LINE_COMMENT
+            if comment != NO_COMMENT:
+                result.append(ss[start:n-2])
+        elif comment == BLOCK_COMMENT:
+            if cbe in chrs:
+                start = n
+                comment = NO_COMMENT
+        elif comment == LINE_COMMENT:
+            if cle in chrs:
+                start = n-1 # Will hit when cle is chrs[0]
+                comment = NO_COMMENT
+    if comment == NO_COMMENT:
+        result.append(ss[start:])
+    return "".join(result)
+
+def _matchForLoop(ss):
+    """Match the last Verilog generate-for-loop opening statement in the string 'ss'
+    NOTE: This hack only catches simple for-loops.  It's pretty easy to break this if you're trying.
+    I need a proper lexer to do this generically.
+    Return (loop_index, start, stop, inc)"""
+    ss = _decomment(ss)
+    restr = "generate\s+for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
+    #_match = re.search(restr, ss)
+    #if _match:
+    _matches = re.findall(restr, ss)
+    if len(_matches) > 0:
+        groups = _matches[-1]
+        #groups = _match.groups()
+        loop_index = groups[0]
+        # We can only understand simple for loops such that loop_index also appears at groups()[2, 5, and 6]
+        for x in (2, 5, 6):
+            if loop_index != groups[x].strip():
+                ms = ss[_match.start(), _match.end()]
+                raise YosysParsingError(f"I'm not smart enough to parse this construct; please simplify it: {ms}")
+        start = groups[1].strip()
+        comp_op = groups[3]
+        comp_val = groups[4]
+        inc_op = groups[7]
+        inc_val = groups[8]
+        return (loop_index, start, comp_op, comp_val, inc_op+inc_val)
+    else:
+        #print(f"Failed to find for-loop in the following:\n  {ss}")
+        pass
+    return (None, None, None, None, None)
+
+
+def findForLoop(yosrc):
+    # We want to match the last for-loop in the portion of the string only up to the offset
+    # loop_index, start, comp, inc
+    #snippet, offset = _getSourceSnippet(yosrc, size=4096)
+    snippet = _getSourceFromStart(yosrc)
+    return _matchForLoop(snippet)
 
 
 class YosysParsingError(Exception):
@@ -520,17 +663,20 @@ class VParser():
         return True
 
 
-def test_get_modname():
-    td = {
-        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : "axi_lb",
-        r"$paramod\nco_control\NDACS=s32'00000000000000000000000000000011" : "nco_control",
-    }
-    for ss, name in td.items():
-        modname = get_modname(ss)
-        if modname != name:
-            raise Exception(f"get_modname({ss}) = {modname} != {name}")
+def doBrowse():
+    import argparse
+    parser = argparse.ArgumentParser("Browse a JSON AST from a verilog codebase")
+    parser.add_argument("-d", "--depth", default=4, help="Depth to browse from the partselect.")
+    parser.add_argument("-s", "--select", default=None, help="Partselect string.")
+    parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parser.add_argument("files", default=None, action="append", nargs="+", help="Source files.")
+    args = parser.parse_args()
+    vp = VParser(args.files[0], top=args.top)
+    if not vp.valid:
+        return False
+    print(vp.strToDepth(int(args.depth), args.select))
     return True
 
 
 if __name__ == "__main__":
-    test_get_modname()
+    doBrowse()

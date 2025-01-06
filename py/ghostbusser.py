@@ -8,12 +8,13 @@ import re
 from yoparse import VParser, ismodule, get_modname, get_value, \
                     getUnparsedWidthRange, getUnparsedDepthRange, \
                     getUnparsedWidthAndDepthRange, getUnparsedWidth, \
-                    YosysParsingError, getUnparsedWidthRangeType, NetTypes
+                    YosysParsingError, getUnparsedWidthRangeType, NetTypes, \
+                    block_inst, autogenblk, findForLoop
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
-from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule
+from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, GenerateFor, GenerateIf
 from decoder_lb import DecoderLB, BusLB, createPortBus
 from gbexception import GhostbusException, GhostbusNameCollision
-from util import enum, strDict, print_dict, strip_empty, deep_copy
+from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices
 
 # TODO: Multi-ghostbus hierarchy parsing
 #   1. If nbusses > 1:
@@ -138,6 +139,8 @@ class GhostbusInterface():
                     access |= Register.WRITE
                 if 'r' in val:
                     access |= Register.READ
+                if access == 0:
+                    access = Register.UNSPECIFIED
         return access
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -177,7 +180,7 @@ class GhostbusInterface():
         if rvals.get(cls.tokens.ADDR) is not None:
             # Only imply HA if not an ExternalModule
             if rvals.get(cls.tokens.EXTERNAL) is None:
-                rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA](1)
+                rvals[cls.tokens.HA] = Register.UNSPECIFIED
         elif rvals.get(cls.tokens.STROBE) is not None:
             # Strobes are write-only
             rvals[cls.tokens.HA] = cls._val_decoders[cls.tokens.HA]("w")
@@ -298,6 +301,13 @@ class MemoryTree(WalkDict):
         self.memories = []
         self.domain_map = {}
         self.toptag_map = {}
+        # This is a map of instances within generate branches.  This should be distributed to child nodes.
+        # What changes if an instance is instantiated within a generate block? The hookup auto-generated code.
+        # So every node needs to know which instances are instantiated within a generate block
+        self.genblock_map = {}
+        # Because of the weirdness of recursive structures, each node will also keep track of whether it's
+        # instantiated within a generate branch as well
+        self.genblock = None
         # Transform whole structure into a MemoryTree
         for key, inst_dict in self._dd.items():
             inst_name = key[0]
@@ -395,6 +405,7 @@ class MemoryTree(WalkDict):
             unfound = ", ".join([val for val in pseudo_name_map.values()])
             err = f"Could not find the following extmods in module {module_name}: {unfound}\n" + \
                   "These extmod names were referenced by a declared bus in the module."
+            # MISSING_EXTMOD
             raise GhostbusException(err)
         # THIRD: sort the indices
         nmems = cls._orderDependencies(pseudo_index_map)
@@ -473,20 +484,26 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
+        verbose = False
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
         top_memories = []
+        stepchildren = [] # (parent extmod, child bus)
         if not self._resolved:
             for key, node in self.walk():
                 if node is None:
                     print(f"WARNING! node is None! key = {key}")
+                    continue
                 printv(f" $$$$$$$$ Considering {key}: {node.label}")
+                if node._parent is None:
+                    toptag = True
+                    genblock = None
+                else:
+                    toptag = node._parent.toptag_map[node.label]
+                    genblock = node._parent.genblock_map[node.label]
+                node.genblock = genblock
                 if hasattr(node, "memories"):
-                    if node._parent is None:
-                        toptag = True
-                    if node._parent is not None:
-                        toptag = node._parent.toptag_map[node.label]
                     # =========================================================
                     # At this point, a module with a declared bus but no implied bus will have
                     # a MemoryRegion object incorrectly associated with domain 'None'.
@@ -503,6 +520,7 @@ class MemoryTree(WalkDict):
                                     err = f"Module {node.label} declares {ldb} busses and has no implied busses." \
                                         + " In such a case, every CSR, RAM, submodule, and external module needs to be disambiguated" \
                                         + " with the (* ghostbus_domain=\"domain_name\" *) attribute which indicates the inteded domain."
+                                    # UNSPECIFIED_DOMAIN
                                     raise GhostbusException(err)
                     nmems, extmod_map = self._getMemoryOrder(node.memories, module_name=node.label)
                     printv(" *** Parsing in this order:", end="")
@@ -524,7 +542,12 @@ class MemoryTree(WalkDict):
                                         aw = node.memories[mem_index].aw
                                         printv(f"Setting {ref.name}.aw to {aw} (from {node.memories[mem_index].label}.{node.memories[mem_index].domain})")
                                         ref.aw = aw
-                                        # Here I need to give 'ref' a reference to the memory region node.memories[mem_index]
+                                        # No, what's happening here is setting the AW of the extmod from that of the fully-resolved bus
+                                        # so what I need is to set the bus's base to that of the extmod.
+                                        # Ok, so the extmod doesn't yet have a base, so I need to add it to a list to resolve later.
+                                        stepchildren.append((ref, node.memories[mem_index])) # (parent extmod, child bus)
+                                        # Here I'll give 'ref' a reference to the memory region node.memories[mem_index]
+                                        # in case I need it later
                                         ref.sub_mr = node.memories[mem_index]
                                         del extmod_map[ref.name]
                                     else:
@@ -567,6 +590,12 @@ class MemoryTree(WalkDict):
         for mem in self.memories:
             if hasattr(mem, "resolve"):
                 mem.resolve()
+        # Finalize the stitching together of child bus with parent extmod
+        for parent_extmod, child_bus in stepchildren:
+            if parent_extmod._base is not None:
+                child_bus.base = parent_extmod._base
+            else:
+                raise GhostbusException("Failed to give an explicit base address to the child bus.")
         # Delete any zero-sized memories (they weren't added anyhow)
         for key, node in self.walk():
             todelete = []
@@ -602,12 +631,16 @@ class MemoryTree(WalkDict):
                                 err = f"Domain name {mem.domain} is declared in multiple modules " + \
                                        "or multiple instances of a single module.  Separate bus " + \
                                        "domains need to be globally unique."
+                                # DOMAIN_COLLISION
                                 raise GhostbusException(err)
                             domain_memories[mem.domain] = mem
         return domain_memories
 
 
 class GhostBusser(VParser):
+    _REFTYPE_CSR = 1
+    _REFTYPE_RAM = 2
+    _REFTYPE_EXT = 3
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.memory_map = None
@@ -619,7 +652,6 @@ class GhostBusser(VParser):
         modtree = {}
         top_mod = None
         top_dict = self._dict["modules"]
-        handledExtModules = []
         module_info = {}
         for mod_hash, mod_dict in top_dict.items():
             associated_strobes = {}
@@ -636,14 +668,34 @@ class GhostBusser(VParser):
             cells = mod_dict.get("cells")
             if cells is not None:
                 for inst_name, inst_dict in cells.items():
+                    gen_block, inst, gen_index = block_inst(inst_name)
+                    generate = None
+                    if gen_block is not None:
+                        attr_dict = inst_dict["attributes"]
+                        source = attr_dict.get('src', None)
+                        if autogenblk(gen_block):
+                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        if gen_index is None:
+                            print(f"Found instance {inst} inside a generate-if block {gen_block}")
+                            generate = GenerateIf(gen_block)
+                            inst_name = inst
+                        else:
+                            print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
+                            generate = parseForLoop(gen_block, source)
+                            if generate is None:
+                                # UNPARSED_FOR_LOOP
+                                raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
+                        print(generate)
                     if ismodule(inst_name):
                         attr_dict = inst_dict["attributes"]
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
                         busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                         toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
-                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag}
+                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             mrs = {}
+            self._resetExtmods()
+            self._resetGenerates()
             # Check for regs
             netnames = mod_dict.get("netnames")
             entries = []
@@ -658,6 +710,21 @@ class GhostBusser(VParser):
                     # for token, val in token_dict.items():
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
+                    gen_block, gen_netname, gen_index = block_inst(netname)
+                    generate = None
+                    if gen_block is not None:
+                        if gen_index is None:
+                            print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
+                            generate = GenerateIf(gen_block)
+                            if autogenblk(gen_block):
+                                print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                            netname = gen_netname
+                        else:
+                            print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
+                            generate = parseForLoop(gen_block, source)
+                            generate._loop_index = gen_index
+                            #if generate is None:
+                            #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                     signed = net_dict.get("signed", None)
                     hit = False
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
@@ -685,22 +752,33 @@ class GhostBusser(VParser):
                         reg.alias = alias
                         reg.signed = signed
                         reg.busname = busname
-                        # print("{} gets initval 0x{:x}".format(netname, initval))
-                        if mrs.get(busname, None) is None:
-                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                        reg.genblock = generate
+                        reg.manual_addr = addr
                         if addr is not None:
                             reg.manually_assigned = True
-                        # This may not be the best place for this step, but at least it gets done.
-                        reg._readRangeDepth()
-                        mrs[busname].add(width=0, ref=reg, addr=addr)
-                    elif exts is not None:
-                        dw = len(net_dict['bits'])
-                        if module_name not in handledExtModules:
-                            self._handleExt(module_name, netname, exts, dw, source, addr=addr, sub=subname)
+                        if gen_block is not None and gen_index is not None:
+                            # Only handling generate-for's.  generate-if's are easier
+                            self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
+                        else:
+                            # This may not be the best place for this step, but at least it gets done.
+                            reg._readRangeDepth()
                             if mrs.get(busname, None) is None:
                                 mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                                printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                                printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
+                            mrs[busname].add(width=0, ref=reg, addr=addr)
+                    elif exts is not None:
+                        if generate is not None:
+                            branch = generate.branch
+                            if generate.isIf():
+                                gen_index_str = ""
+                            else:
+                                gen_index_str = f"at index {gen_index} "
+                            print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
+                        dw = len(net_dict['bits'])
+                        self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
+                        if mrs.get(busname, None) is None:
+                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                            printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                     ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -715,6 +793,21 @@ class GhostBusser(VParser):
             memories = mod_dict.get("memories")
             if memories is not None:
                 for memname, mem_dict in memories.items():
+                    gen_block, gen_netname, gen_index = block_inst(memname)
+                    generate = None
+                    source = mem_dict['attributes']['src']
+                    if gen_block is not None:
+                        if autogenblk(gen_block):
+                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        if gen_index is None:
+                            print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
+                            generate = GenerateIf(gen_block)
+                            memname = gen_netname
+                        else:
+                            print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
+                            #generate = parseForLoop(gen_block, source)
+                            #if generate is None:
+                            #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                     attr_dict = mem_dict["attributes"]
                     signed = net_dict.get("signed", None)
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
@@ -724,22 +817,27 @@ class GhostBusser(VParser):
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
                     busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
                     if access is not None:
-                        source = mem_dict['attributes']['src']
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
                         mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source)
                         mem.signed = signed
                         mem.busname = busname
-                        if mrs.get(busname, None) is None:
-                            module_name = get_modname(mod_hash)
-                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
+                        mem.genblock = generate
+                        mem.manual_addr = addr
                         if addr is not None:
                             mem.manually_assigned = True
-                        # This may not be the best place for this step, but at least it gets done.
-                        mem._readRangeDepth()
-                        mrs[busname].add(width=aw, ref=mem, addr=addr)
+                        if gen_block is not None and gen_index is not None:
+                            # Only handling generate-for's.  generate-if's are easier
+                            self._handleGenerates(self._REFTYPE_RAM, mem, source, module_name)
+                        else:
+                            if mrs.get(busname, None) is None:
+                                module_name = get_modname(mod_hash)
+                                mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                                printd("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
+                            # This may not be the best place for this step, but at least it gets done.
+                            mem._readRangeDepth()
+                            mrs[busname].add(width=aw, ref=mem, addr=addr)
             for busname, mr in mrs.items():
                 for strobe_name, reg_type in associated_strobes.items():
                     associated_reg, _read = reg_type
@@ -758,21 +856,37 @@ class GhostBusser(VParser):
                 # Any ghostmod has an implied ghostbus coming in
                 if None not in busnames_implicit:
                     busnames_implicit.append(None)
+            generates = self._resolveGenerates()
+            for ref in generates:
+                # TODO - ExternalModule has no 'manual_addr', but I haven't yet figured out how to handle extmods
+                #        instantiated within a generate block anyhow.
+                mrs[ref.busname].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
+            extmods = self._resolveExtmods()
+            for extmod in extmods:
+                added = False
+                for busname, mr in mrs.items():
+                    if mr.domain == extmod.busname:
+                        # I need to ensure I'm adding to the right domain!
+                        mr.add(width=extmod.aw, ref=extmod, addr=extmod.base)
+                        printd(f"  added {extmod.name} to MemoryRegion {mr.label} in domain {mr.domain}")
+                        added = True
+                if not added:
+                    # UNKNOWN_DOMAIN
+                    raise GhostbusException("Could not find the referenced domain {extmod.busname} for extmod {extmod.name} in module {module_name}.")
             module_info[mod_hash]["memory"] = mrs
             module_info[mod_hash]["explicit_busses"] = busnames_explicit
             module_info[mod_hash]["implicit_busses"] = busnames_implicit
-            handledExtModules.append(module_name)
         self._busValid = True
         for bus in self._ghostbusses:
             valid, msg = bus.validate()
             if not valid:
                 self._busValid = False
         if len(self._ghostbusses) == 0:
+            # NO_GHOSTBUS
             raise GhostbusException("No ghostbus found in codebase.")
         #print_dict(module_info)
         #self._busValid = self._top_bus.validate()
         self._top = top_mod
-        self._resolveExt(module_info)
         #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
         #print_dict(modtree, dohash=True)
         #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -814,12 +928,14 @@ class GhostBusser(VParser):
                     if alias is not None:
                         if bus.alias is not None:
                             if alias != bus.alias:
+                                # NAME_COLLISION
                                 raise GhostbusException(f"Cannot give multiple aliases to the same bus ({alias} and {bus.alias}).")
                         else:
                             bus.alias = alias
                     if extmod_name is not None:
                         if bus.extmod_name is not None:
                             if extmod_name != bus.extmod_name:
+                                # MULTIPLE_ASSOCIATION
                                 raise GhostbusException(f"Cannot give multiple extmod_names to the same bus ({extmod_name} and {bus.extmod_name}).")
                         else:
                             bus.extmod_name = extmod_name
@@ -832,9 +948,38 @@ class GhostBusser(VParser):
                 self._ghostbusses.append(newbus)
         return
 
-    def _handleExt(self, module, netname, vals, dw, source, addr=None, sub=None):
-        if self._ext_dict.get(module, None) is None:
-            self._ext_dict[module] = []
+    # TODO DELETEME
+    def _getRefByAttr(self, name, attr):
+        for start, stop, ref in self.memory_map.get_entries():
+            if hasattr(ref, attr):
+                item = getattr(ref, attr)
+                if name == getattr(ref, attr):
+                    return ref
+        return None
+
+    # TODO DELETEME
+    def _getRefByName(self, name):
+        return self._getRefByAttr(name, 'name')
+
+    # TODO DELETEME
+    def _getRefByLabel(self, label):
+        return self._getRefByAttr(label, 'label')
+
+    # TODO DELETEME
+    def findBusByName(self, busname):
+        for bus in self._ghostbusses:
+            if bus.name == busname:
+                return bus
+        return None
+
+    def _resetExtmods(self):
+        self._extmod_list = []
+        return
+
+    def _handleExtmod(self, module, netname, vals, dw, source, addr=None, sub=None, generate=None):
+        block_name, extname, loop_index = block_inst(netname)
+        if block_name is not None:
+            print(f"Extmod {extname} is instantiated within a Generate Block!")
         portnames = []
         instnames = []
         allowed_ports = BusLB._alias_keys
@@ -856,89 +1001,51 @@ class GhostBusser(VParser):
                     instnames.append(val)
         if len(instnames) > 1:
             if 'dout' in portnames or 'wdata' in portnames:
-                serr = "The 'dout' vector cannot be shared between multiple instances " + \
+                serr = "The 'dout' ('wdata') vector cannot be shared between multiple instances " + \
                       f"({instnames}). See: {source}"
+                # SHARED_WDATA
                 raise GhostbusException(serr)
         # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
-        self._ext_dict[module].append((netname, dw, portnames, instnames, source, addr, sub))
+        #if generate is not None and generate.isFor():
+        #    netname = f"{generate.branch}_{generate._loop_index}_{netname}"
+        self._extmod_list.append((netname, dw, portnames, instnames, source, addr, sub, generate))
         return
 
-    def _getRefByAttr(self, name, attr):
-        for start, stop, ref in self.memory_map.get_entries():
-            if hasattr(ref, attr):
-                item = getattr(ref, attr)
-                if name == getattr(ref, attr):
-                    return ref
-        return None
+    def _resolveExtmods(self):
+        if len(self._extmod_list) == 0:
+            return []
+        # TODO FIXME - Here I need to combine all the extbusses from a For-Loop into a single bus
+        busses = self._resolveExtmod(self._extmod_list)
+        extmods = []
+        for instname, data in busses.items():
+            basename, bus = data
+            #print(f"    instname {instname}; bus {bus.name}; bus['addr'] = {bus['addr']}; bus = {bus}")
+            # Maybe I'll just sanitize the genblock bus ports names here?
+            bus.deblock()
+            extmod = ExternalModule(instname, extbus=bus, basename=basename)
+            print(f"  Resolving ExternalModule {instname}; bus.genblock = {bus.genblock}")
+            extmods.append(extmod)
+        return extmods
 
-    def _getRefByName(self, name):
-        return self._getRefByAttr(name, 'name')
-
-    def _getRefByLabel(self, label):
-        return self._getRefByAttr(label, 'label')
-
-    def findBusByName(self, busname):
-        for bus in self._ghostbusses:
-            if bus.name == busname:
-                return bus
-        return None
-
-    def _resolveExt(self, module_info):
-        #self._ext_modules = {}
-        #ghostbus = self._top_bus
-        ghostbus = self.getBusDict()
-        special_mod_hash = None # FIXME
-        special_busname = None # FIXME
-        for module, data in self._ext_dict.items():
-            busses = self._resolveExtModule(module, data)
-            #self._ext_modules[module] = []
-            for instname, bus in busses.items():
-                extinst = ExternalModule(instname, ghostbus=ghostbus, extbus=bus)
-                printd(f"  Resolving ExternalModule {instname}")
-                #if bus.sub is not None:
-                #    print(f"######################## {extinst.name}. I need to get my 'AW' from a ghostbus named {bus.sub}")
-                #    sub_bus = self.findBusByName(bus.sub)
-                #    if sub_bus is not None:
-                #        print(f"$$$$$$$$$$$$$$$$$ Found the sub_bus {sub_bus.name}")
-                #        extinst.sub_bus = sub_bus
-                #        extinst.sub_mr = GBMemoryRegionStager(label=sub_bus.name, hierarchy=(sub_bus.name,))
-                #    else:
-                #        print(f"$$$$$$$$$$$$$$$$$ Failed to find {bus.sub} in {self._ghostbusses}")
-                added = False
-                for mod_hash, infodict in module_info.items():
-                    mrs = infodict.get("memory", None)
-                    if len(mrs) == 0:
-                        continue
-                    for busname, mr in mrs.items():
-                        if mr.label == module and mr.domain == extinst.busname:
-                            # I need to not just ensure I'm adding to the right module, but also the right domain!
-                            mr.add(width=extinst.aw, ref=extinst, addr=extinst.base)
-                            special_mod_hash = mod_hash
-                            special_busname = busname
-                            printd(f"  added {extinst.name} to MemoryRegion {mr.label} in domain {mr.domain}")
-                            added = True
-                            break
-                if not added:
-                    serr = f"Ext module somehow references a non-existant module {module}?"
-                    print(f"module_info.keys() = {[x for x in module_info.keys()]}")
-                    raise GhostbusException(serr)
-        return
-
-    def _resolveExtModule(self, module, data):
+    def _resolveExtmod(self, data):
         ext_advice = "If there's only a " + \
                     "single external instance in this module, you must label at " + \
                     "least one net with the instance name, e.g.:\n" + \
                     '  (* ghostbus_ext="inst_name, clk" *) wire ext_clk;\n' + \
                     "If there is more than one external instance in this module, " + \
-                    "you need to include the instance in the attribute value for " + \
+                    "you need to include the instance name in the attribute value for " + \
                     "each net in the bus (e.g. 'clk', 'addr', 'din', 'dout', 'we')."
         module_instnames = []
         for datum in data:
-            #netname, dw, portnames, instnames, source, addr = datum
+            #netname, dw, portnames, instnames, source, addr, sub, generate = datum
+            generate = datum[7]
             instnames = datum[3]
+            postfix = ""
+            if generate is not None and generate.isFor():
+                postfix = f"_{generate._loop_index}"
             for instname in instnames:
-                if instname not in module_instnames:
-                    module_instnames.append(instname)
+                if instname + postfix not in module_instnames:
+                    module_instnames.append(instname + postfix)
         inst_err = False
         busses = {}
         universal_inst = None
@@ -949,27 +1056,35 @@ class GhostBusser(VParser):
         else:
             # print(f"len(module_instnames) = {len(module_instnames)}")
             for instname in module_instnames:
-                # print(f"instname = {instname}")
-                bus = busses.get(instname, None)
-                if bus is None:
-                    #print("    New bus")
+                print(f"instname = {instname}")
+                base_bus = busses.get(instname, None)
+                if base_bus is None:
                     bus = BusLB()
+                    print(f"    New bus id = {id(bus)}")
                 else:
-                    #print("    Got bus")
-                    pass
+                    print(f"    Got bus id = {id(bus)}")
+                    bus = base_bus[1]
                 #print(f"len(data) = {len(data)}")
                 for datum in data:
                     #print(f"  datum = {datum}")
-                    netname, dw, portnames, instnames, source, addr, sub = datum
+                    netname, dw, portnames, instnames, source, addr, sub, generate = datum
+                    postfix = ""
+                    if generate is not None and generate.isFor():
+                        postfix = f"_{generate._loop_index}"
+                    #print(f"  :::: netname={netname}; dw={dw}; instnames={instnames}; portnames={portnames}; generate={generate}")
+                    #print(f"  :::: bus.genblock = {bus.genblock}; generate={generate}")
                     rangestr = getUnparsedWidthRange(source)
                     if len(instnames) == 0 and universal_inst is not None:
                         instnames.append(universal_inst)
-                    if sub is not None and bus.sub is None:
-                        bus.sub = sub
                     for net_instname in instnames:
-                        if net_instname == instname:
+                        if net_instname+postfix == instname:
+                            if sub is not None and bus.sub is None:
+                                bus.sub = sub
+                            if bus.genblock is not None and bus.genblock.__class__ != generate.__class__:
+                                print(f"%%%%%%%%%%%%%%% Wtf? {bus.genblock} != {generate}. {instname} {netname} {instnames} {portnames}")
+                            bus.genblock = generate
                             for portname in portnames:
-                                #print(f"  instname = {instname}, netname = {netname}, portname = {portname}")
+                                print(f"  bus.set_port({portname}, {netname}, portwidth={dw}, rangestr={rangestr})")
                                 bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
                             if addr is not None:
                                 # print(f"addr is not None: datum = {datum}")
@@ -979,16 +1094,91 @@ class GhostBusser(VParser):
                                 except GhostbusException as err:
                                     errst = str(err)
                                 if errst != None:
+                                    # MULTIPLE_ADDRESSES
                                     raise GhostbusException(f"{instnames}: {errst}")
-                busses[instname] = bus
+                busses[instname] = (net_instname, bus) # A funny hack for block-scope extmods
         if inst_err:
-            serr = "No instance referenced for external bus." + ext_advice
+            serr = "No instance referenced for external bus. " + ext_advice
+            # NO_EXTMOD_INSTANCE
             raise GhostbusException(serr)
-        for instname, bus in busses.items():
+        for instname, data in busses.items():
+            basename, bus = data
             valid, msg = bus.validate()
-            busses[instname] = bus
+            busses[instname] = (basename, bus)
             #print_dict(busses[instname])
         return busses
+
+    def _resetGenerates(self):
+        """Get ready to handle a new module with potentitally more generate blocks."""
+        self._generates = {}
+        return
+
+    def _handleGenerates(self, reftype, ref, yosrc, module_name):
+        """Handle an item 'ref' of type 'reftype' instantiated inside a generate block within module 'module_name'.
+        The 'yosrc' string helps us find and parse the source which is unfortunately necessary."""
+        # TODO - I don't think reftype of 'ext' is ever used.  Can it be?  Currently passed to _handleExtmod()
+        block_name, netname, loop_index = block_inst(ref.name)
+        if block_name is None:
+            raise Exception(f"Internal error. The string {ref.name} somehow got passed to _handleGenerates() even though it fails block_inst()")
+        if autogenblk(block_name):
+            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+        if self._generates.get(block_name) is None:
+            self._generates[block_name] = {"module_name": module_name, "source": yosrc, "csrs": {}, "rams": {}, "exts": {}}
+        if self._generates[block_name]["source"] is None:
+            self._generates[block_name]["source"] = yosrc
+        refstrs = {self._REFTYPE_CSR: "csrs", self._REFTYPE_RAM: "rams", self._REFTYPE_EXT: "exts"}
+        refstr = refstrs[reftype]
+        if self._generates[block_name][refstr].get(netname) is not None:
+            self._generates[block_name][refstr][netname]["indices"].append(int(loop_index))
+            self._generates[block_name][refstr][netname]["refs"].append(ref)
+        else:
+            self._generates[block_name][refstr][netname] = {"indices": [int(loop_index)], "refs": [ref]}
+        return
+
+    def _resolveGenerates(self):
+        # TODO: find any other instances and use the greatest `Unrolled_AW` for each instance
+        """
+          0. Ensure all indicies are numeric, sequential, and complete
+          1. Ensure the length of the indicies for each csr in the branch is identical
+          2. Use the yosrc to find the for-loop parameters
+          3. Calculate the size of the resulting objects. `Unrolled_AW = element_AW + clog2(len(indicies))`
+          4. Return items to be added to the memory map
+        """
+        results = []
+        for block_name, block_info in self._generates.items():
+            forloop = parseForLoop(block_name, block_info["source"])
+            if forloop is None:
+                # UNPARSED_FOR_LOOP
+                raise GhostbusException(f"Failed to find for-loop around {block_info['source']}")
+            loop_len = None
+            for reftype in ("csrs", "rams", "exts"): # TODO again, 'exts' is probably unused
+                for netname, netdict in block_info[reftype].items():
+                    indices = netdict["indices"]
+                    refs = netdict["refs"]
+                    ref = refs[0]
+                    if not check_complete_indices(indices):
+                        raise GhostbusInternalException(f"Did not find all indices for {ref.name} in {block_info['module_name']}")
+                    if loop_len is None:
+                        loop_len = len(indices)
+                    elif len(indices) != loop_len:
+                        err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
+                            + f" ({len(indices)} != {loop_len})"
+                        raise GhostbusInternalException()
+                    aw = ref.aw
+                    new_aw = aw + bits(loop_len) - 1 # I'm pretty sure it's -1
+                    ref.block_aw = aw
+                    ref.aw = new_aw
+                    #ref.aw = new_aw
+                    #ref.ref_list = refs
+                    ref.name = netname
+                    forloop.loop_len = loop_len
+                    ref.genblock = forloop
+                    if hasattr(ref, "_readRangeDepth"):
+                        # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
+                        ref._readRangeDepth()
+                    results.append(ref)
+                    print(f"Generate Loop {block_name} of len {loop_len}: {ref.name} now has AW {ref.aw}")
+        return results
 
     def getBusDict(self, busname=None):
         if len(self._ghostbusses) == 1:
@@ -1004,12 +1194,14 @@ class GhostBusser(VParser):
     def build_modtree(self, dd):
         top = self._top
         if top is None:
+            # NO_TOP_SPECIFIED
             raise GhostbusException("I don't know how to do this without top specified")
         modtree = {}
         for module, mod_dict in dd.items():
             if module == top:
                 modtree[module] = {}
         if len(modtree) == 0:
+            # NO_TOP_SPECIFIED
             raise GhostbusException("Could not find top: {}".format(top))
         nested = False
         dd_keys = [key for key in dd.keys()]
@@ -1069,6 +1261,7 @@ class GhostBusser(VParser):
             printd(f"{module_name} declares insts: {[key for key in insts.keys()]}")
             memtree_node.domain_map = {inst_name: insts[inst_name]["busname"] for inst_name in insts.keys()}
             memtree_node.toptag_map = {inst_name: insts[inst_name]["toptag"] for inst_name in insts.keys()}
+            memtree_node.genblock_map = {inst_name: insts[inst_name]["generate"] for inst_name in insts.keys()}
             mrs = instdict.get("memory")
             busses_explicit = instdict.get("explicit_busses", [])
             # NOTE: Redundant 'declared_busses' is currently stored and used in both the node and each of its
@@ -1149,31 +1342,38 @@ class JSONMaker():
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
-                if ref.signed is not None and ref.signed:
-                    signstr = "signed"
+                # FIXME HACK! Make up your damn mind, Keef!  Are you unrolling ExternalModules before, or AFTER adding to the memory map!?!?!
+                if isinstance(ref, ExternalModule):
+                    copies = (ref,)
                 else:
-                    signstr = "unsigned"
-                entry = {
-                    "access": Register.accessToStr(ref.access),
-                    "addr_width": ref.aw,
-                    "sign": signstr,
-                    "base_addr": mem.base + start,
-                    "data_width": ref.dw,
-                }
-                if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
-                    hier_str = str(ref.alias)
-                elif flat:
-                    hierarchy = list(top_hierarchy)
-                    hierarchy.append(ref.name)
-                    printd(f"{mem.name}: {mem.hierarchy}, {ref.name}: hierarchy = {hierarchy}")
-                    if short or not mangle_names:
-                        hier_str = ".".join(strip_empty(hierarchy))
+                    copies = ref.unroll()
+                for ref in copies:
+                    if ref.signed is not None and ref.signed:
+                        signstr = "signed"
                     else:
-                        hier_str = "_".join(strip_empty(hierarchy))
-                else:
-                    hier_str = ref.name
-                if hier_str not in drops:
-                    dd[hier_str] = entry
+                        signstr = "unsigned"
+                    entry = {
+                        "access": Register.accessToStr(ref.access),
+                        "addr_width": ref.aw,
+                        "sign": signstr,
+                        #"base_addr": mem.base + start,
+                        "base_addr": mem.base + ref.base,
+                        "data_width": ref.dw,
+                    }
+                    if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
+                        hier_str = str(ref.alias)
+                    elif flat:
+                        hierarchy = list(top_hierarchy)
+                        hierarchy.append(ref.name)
+                        printd(f"{mem.name}: {mem.hierarchy}, {ref.name}: hierarchy = {hierarchy}")
+                        if short or not mangle_names:
+                            hier_str = ".".join(strip_empty(hierarchy))
+                        else:
+                            hier_str = "_".join(strip_empty(hierarchy))
+                    else:
+                        hier_str = ref.name
+                    if hier_str not in drops:
+                        dd[hier_str] = entry
             else:
                 print(f"What is this? {ref}")
         if flat and short:
@@ -1269,6 +1469,13 @@ def update_without_collision(old_dict, new_dict):
     return
 
 
+def parseForLoop(branch_name, yosrc):
+    loop_index, start, comp_op, comp_val, inc = findForLoop(yosrc)
+    if loop_index is None:
+        return None
+    return GenerateFor(branch_name, loop_index, start, comp_op, comp_val, inc)
+
+
 def handleGhostbus(args):
     try:
         gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
@@ -1283,11 +1490,11 @@ def handleGhostbus(args):
     gbportbus = createPortBus(gbusses)
     try:
         if args.live or (args.map is not None):
-            dec = DecoderLB(memtree, gbusses, gbportbus)
+            dec = DecoderLB(memtree, gbusses, gbportbus, debug=args.debug)
             if args.live:
                 dec.GhostbusMagic(dest_dir=args.dest)
             if args.map is not None:
-                dec.ExtraVerilogMemoryMap(args.map, gbusses)
+                dec.ExtraVerilogTestbench(args.map, gbusses)
         if args.json is not None:
             # JSON
             if trim:
@@ -1323,6 +1530,7 @@ def doGhostbus():
     parser.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
     parser.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
     parser.add_argument("--short",  default=False, action="store_true", help="Names are maximally shortened (remaining unique).")
+    parser.add_argument("--debug",  default=False, action="store_true", help="Append debug trace comments to generated code.")
     parser.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
     parser.add_argument("files",    default=[], action="append", nargs="+", help="Source files.")
     args = parser.parse_args()

@@ -1,6 +1,69 @@
 
+from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, _decomment
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
+from util import check_complete_indices
+
+
+def test_get_modname():
+    td = {
+        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : "axi_lb",
+        r"$paramod\nco_control\NDACS=s32'00000000000000000000000000000011" : "nco_control",
+    }
+    fail = False
+    for ss, name in td.items():
+        modname = get_modname(ss)
+        if modname != name:
+            print(f"get_modname({ss}) = {modname} != {name}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
+
+def test_block_inst():
+    td = {
+        # yostr: (gen_block, inst_name, index)
+        "gen_foo.inst_bar": ("gen_foo", "inst_bar", None),
+        "gen_foo[3].inst_bar": ("gen_foo", "inst_bar", 3),
+        "inst_foo": (None, None, None),
+        r"$paramod$8b3f6b5606276ea5c166ba4745cb6215a6ec04e3\axi_lb" : (None, None, None),
+        r"$0\baz_generator.top_baz": (None, None, None),
+        r"$0\top_reg[7:0]": (None, None, None),
+        r"$0\foo_generator[3].top_foo_n[3:0]": (None, None, None),
+    }
+    fail = False
+    for ss, expret in td.items():
+        ret = block_inst(ss)
+        for n in range(len(ret)):
+            thisfail = False
+            if ret[n] != expret[n]:
+                fail = True
+                thisfail = True
+            if thisfail:
+                print(f"block_inst({ss}) = {ret} != {expret}")
+    if fail:
+        return 1
+    return 0
+
+
+def test_autogenblk():
+    td = {
+        "genblk0": True,
+        "genblk2": True,
+        "genblk4321": True,
+        "genblk": False,
+        "foo": False,
+    }
+    fail = False
+    for ss, expected in td.items():
+        if autogenblk(ss) != expected:
+            print(f"FAIL: autogenblk({ss}) != {expected}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
 
 def test_bits():
     addr_bits = {
@@ -134,13 +197,90 @@ def test_JSONMaker_shortenNames():
     print("PASS")
     return 0
 
+
+def test__matchForLoop():
+    dd = {
+        # loop_string: (loop_index, start, comp_op, comp_val, inc_op+inc_val)
+        # loop_string: (loop_index, start, compval, inc_val)
+        "generate for (N=0;N<4;N=N+1)": ("N", "0", "<", "4", "+1"),
+        "generate\r\n  for (N=0;N<4;N=N+1)": ("N", "0", "<", "4", "+1"),
+        # Missing 'generate'
+        "for (N=0;N<4;N=N+1)": (None, None, None, None, None),
+        "generate for (N = 0; N < 4; N = N + 1)": ("N", "0", "<", "4", "+1"),
+        "generate for (MY_LOOP_VAR=(SOME_THIS_NUMBER>>2); MY_LOOP_VAR>0; MY_LOOP_VAR=MY_LOOP_VAR-1)": ("MY_LOOP_VAR", "(SOME_THIS_NUMBER>>2)", ">", "0", "-1"),
+        "generate for (boop; bop; floop)": (None, None, None, None, None),
+        # Make sure we get the last match
+        "generate for (N=0;N<4;N=N+1) generate for (M=1;M<M_MAX;M=M+M_INC)": ("M", "1", "<", "M_MAX", "+M_INC"),
+    }
+    fail = False
+    for ss, exp in dd.items():
+        res = _matchForLoop(ss)
+        thisfail = False
+        for n in range(len(res)):
+            if res[n] != exp[n]:
+                thisfail = True
+                fail = True
+        if thisfail:
+            print(f"FAIL: _matchForLoop({ss}) = {res} != {exp}")
+    if fail:
+        return 1
+    return 0
+
+
+def test_check_complete_indices():
+    dd = (
+        # Indices, is_complete
+        ([4, 5, 3, 2, 1, 0], True),
+        ([4, 1, 3, 2, 0], True),
+        ([1, 3, 2, 4], False),
+        ([0], True),
+        (["0"], False),
+        ([1], False),
+    )
+    fail = False
+    for ll, exp in dd:
+        res = check_complete_indices(ll)
+        if res != exp:
+            print(f"FAIL: check_complete_indices({ll}) = {res} != {exp}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
+
+def test__decomment():
+    dd = (
+        ("hello", "hello"),
+        ("hello // I'm a comment", "hello "),
+        ("hello // I'm a comment\nwith more lines", "hello \nwith more lines"),
+        ("hello /* I'm a block comment */ there", "hello  there"),
+        (" generate // do this generate thing\n  for (N=0; N<8; N=N+1): branch // this is my branch",
+         " generate \n  for (N=0; N<8; N=N+1): branch "),
+    )
+    fail = False
+    for ss, exp in dd:
+        res = _decomment(ss)
+        if res != exp:
+            print(f"FAIL: _decomment({ss}) = {res} != {exp}")
+            fail = True
+    if fail:
+        return 1
+    return 0
+
+
 def doStaticTests():
     tests = (
+        test_get_modname,
+        test_block_inst,
+        test_autogenblk,
         test_bits,
         test_MemoryTree_orderDependencies,
         test_WalkDict,
         test_JSONMaker_flatten,
         test_JSONMaker_shortenNames,
+        test__matchForLoop,
+        test_check_complete_indices,
+        test__decomment,
     )
     rval = 0
     fails = []

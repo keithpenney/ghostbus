@@ -17,7 +17,17 @@ module submod_baz #(
 ) (
   input clk,
   input demo_sig
+  `ifdef HAND_ROLLED
+  ,input  GBPORT_clk
+  ,input [23:0] GBPORT_addr
+  ,input [31:0] GBPORT_dout
+  ,output [31:0] GBPORT_din
+  ,input  GBPORT_we
+  ,input  GBPORT_wstb
+  ,input  GBPORT_rstb
+  `else
   `GHOSTBUSPORTS
+  `endif
 );
 
 // Interesting demo: Enabling this doubles the size of the memory map!
