@@ -4,10 +4,11 @@ THIS_DIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 GHOSTBUS_DIR=$(THIS_DIR)/../..
 
 GHOSTBUS_SOURCES=$(THIS_DIR)/top.v $(THIS_DIR)/submod_foo.v $(THIS_DIR)/submod_bar.v $(THIS_DIR)/bus_glue.v
+GHOSTBUS_MODULES=$(THIS_DIR)/top.v $(THIS_DIR)/submod_foo.v $(THIS_DIR)/submod_bar.v
 GHOSTBUS_TOP=top
 
 .PHONY: all
-all: test
+all: test rule_check
 
 include $(GHOSTBUS_DIR)/rules.mk
 

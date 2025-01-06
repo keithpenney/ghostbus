@@ -309,7 +309,7 @@ def _findDepthStr(snippet, offset):
 
 
 # HACK ALERT!
-def _decomment(ss):
+def decomment(ss):
     """A hackish attempt to de-comment a block of Verilog code"""
     cbs = "/*"
     cbe = "*/"
@@ -347,7 +347,7 @@ def _matchForLoop(ss):
     NOTE: This hack only catches simple for-loops.  It's pretty easy to break this if you're trying.
     I need a proper lexer to do this generically.
     Return (loop_index, start, stop, inc)"""
-    ss = _decomment(ss)
+    ss = decomment(ss)
     restr = "generate\s+for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
     #_match = re.search(restr, ss)
     #if _match:

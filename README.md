@@ -130,11 +130,13 @@ a configurable parameter for pipeline length.
 
 Consider an example design as a tree of modules with the longest branch being 5 modules deep.  If we choose
 a decoder pipeline length of 2 for this design, the longest branch would behave like this:
-  cycle num     branch level
-  --------------------------
-  0             0           // The top level is not delayed wrt the bus controller
-  1             1           // The first level down is one cycle delayed
-  2             2, 3, 4     // The remainder of the branch is two cycles delayed
+
+  |Cycle num     |Branch level| Notes                                             |
+  |--------------|------------|---------------------------------------------------|
+  |0             |0           |The top level is not delayed wrt the bus controller|
+  |1             |1           |The first level down is one cycle delayed          |
+  |2             |2, 3, 4     |The remainder of the branch is two cycles delayed  |
+  |--------------|------------|---------------------------------------------------|
 
 If it is determined to be important, extra logic could be added to ensure the delay between the bus controller
 asserting a write strobe and module receiving it is consistent across the entire design, regardless of hierarchy.

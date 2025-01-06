@@ -1,5 +1,5 @@
 
-from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, _decomment
+from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
 from util import check_complete_indices
@@ -248,7 +248,7 @@ def test_check_complete_indices():
     return 0
 
 
-def test__decomment():
+def test_decomment():
     dd = (
         ("hello", "hello"),
         ("hello // I'm a comment", "hello "),
@@ -259,9 +259,9 @@ def test__decomment():
     )
     fail = False
     for ss, exp in dd:
-        res = _decomment(ss)
+        res = decomment(ss)
         if res != exp:
-            print(f"FAIL: _decomment({ss}) = {res} != {exp}")
+            print(f"FAIL: decomment({ss}) = {res} != {exp}")
             fail = True
     if fail:
         return 1
@@ -280,7 +280,7 @@ def doStaticTests():
         test_JSONMaker_shortenNames,
         test__matchForLoop,
         test_check_complete_indices,
-        test__decomment,
+        test_decomment,
     )
     rval = 0
     fails = []
