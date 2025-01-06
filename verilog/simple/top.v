@@ -25,6 +25,9 @@ localparam FOO_RD = 8;
 // Host-accessible register (will be auto-decoded)
 // Global alias "holiday_pasta"
 (* ghostbus, ghostbus_alias="holiday_pasta" *) reg [7:0] top_ha_reg=8'h42;
+(* ghostbus_strobe *) reg simple_strobe=4'h0;
+(* ghostbus_strobe *) reg [3:0] vector_strobe=4'h0;
+(* ghostbus_ws="top_ha_reg" *) reg associated_strobe=1'b0;
 
 `GHOSTBUS_top
 

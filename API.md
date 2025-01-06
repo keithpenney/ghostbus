@@ -10,6 +10,8 @@
 
 * [Add a simple strobe to the memory map](#simplestrobe)
 
+* [Add a strobe vector to the memory map](#vectorstrobe)
+
 * [Add an associated strobe to a particular CSR/RAM](#ascstrobe)
 
 * [Conjuring: Add an external module to the Ghostbus](#conjure)
@@ -159,12 +161,25 @@ not conflict if you add them both).
 ---------------------------------------------------------------------------------------------------
 ### Add a simple strobe to the memory map <a name="simplestrobe"></a>
 ```verilog
-(* ghostbus_strobe *)
+(* ghostbus_strobe *) reg my_strobe=0;
 ```
 This adds a single-bit strobe to the memory map.  When you write to the resulting address, the net will strobe
 high triggered by the `wstb` signal of the bus while the written value is ignored/discarded.
 
 If you want both the written value and a strobe when it is written, you want an "associated strobe" (see below).
+
+__NOTE__: The tool currently only supports `reg` type nets, but it could easily support `wire` type in the future.
+
+---------------------------------------------------------------------------------------------------
+### Add a strobe vector to the memory map <a name="vectorstrobe"></a>
+```verilog
+(* ghostbus_strobe *) reg [SW-1:0] my_strobe_vector=0;
+```
+
+Using the same syntax as the simple strobe with a vector (multi-bit `reg` data type), a strobe vector
+is created.  The individual bits in the vector are all strobes and, unlike the simple strobe, they
+each only strobe when the corresponding bit in the written value is asserted.  Note that the written value
+is not stored.
 
 __NOTE__: The tool currently only supports `reg` type nets, but it could easily support `wire` type in the future.
 

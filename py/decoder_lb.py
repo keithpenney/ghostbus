@@ -1916,9 +1916,10 @@ class DecoderDomainLB():
                 continue
             writes += 1
             if len(csr.write_strobes) == 0:
-                if csr.strobe:
+                if csr.strobe and csr.dw == 1:
                     ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {vhex(1, csr.dw)};")
                 else:
+                    # For a multi-bit (vector) strobe, the default assignment will cause this assignment to be single-cycle
                     ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {namemap['dout']}[{csr.range[0]}:0];")
             else:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
