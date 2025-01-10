@@ -5,7 +5,7 @@ import os
 from memory_map import Register, MemoryRegion, bits
 from gbexception import GhostbusException, GhostbusFeatureRequest
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, isForLoop
-from util import strDict, check_complete_indices
+from util import strDict, check_complete_indices, feature_print
 from yoparse import block_inst
 from verilogger import Verilogger
 from policy import Policy
@@ -611,14 +611,14 @@ class DecoderLB():
         if hasattr(submod, "genblock") and submod.genblock is not None:
             branch = submod.genblock.branch
             if isForLoop(submod.genblock):
-                print(f"DecoderDomainLB {submod.inst} is instantiated within generate-FOR block {branch}")
+                feature_print(f"DecoderDomainLB {submod.inst} is instantiated within generate-FOR block {branch}")
                 self.domains[domain].add_block_submod(branch, submod, start_addr)
                 # We'll handle these later
                 if branch not in self.veriloggers_block.keys():
                     self.veriloggers_block[branch] = Verilogger(self._debug)
                 return
             else:
-                print(f"DecoderDomainLB {submod.inst} is instantiated within generate-IF block {submod.genblock.branch}")
+                feature_print(f"DecoderDomainLB {submod.inst} is instantiated within generate-IF block {submod.genblock.branch}")
                 # Generate-if, just strip the branch name from the submod name
                 #gen_branch, instname, gen_index = block_inst(submod.inst)
                 #submod.setInst(instname)
@@ -1133,7 +1133,7 @@ class DecoderDomainLB():
                     self._no_reads = False
             if isinstance(ref, GBRegister):
                 if hasattr(ref, "genblock") and ref.genblock is not None:
-                    print(f"GBRegister {ref.name} is instantiated within generate block {ref.genblock.branch}")
+                    feature_print(f"GBRegister {ref.name} is instantiated within generate block {ref.genblock.branch}")
                     if self.block_csrs.get(ref.genblock.branch) is None:
                         self.block_csrs[ref.genblock.branch] = []
                     self.block_csrs[ref.genblock.branch].append(ref)
@@ -1141,7 +1141,7 @@ class DecoderDomainLB():
                     self.csrs.append(ref)
             elif isinstance(ref, GBMemory):
                 if hasattr(ref, "genblock") and ref.genblock is not None:
-                    print(f"GBMemory {ref.name} is instantiated within generate block {ref.genblock.branch}")
+                    feature_print(f"GBMemory {ref.name} is instantiated within generate block {ref.genblock.branch}")
                     if self.block_rams.get(ref.genblock.branch) is None:
                         self.block_rams[ref.genblock.branch] = []
                     self.block_rams[ref.genblock.branch].append(ref)
@@ -1150,7 +1150,7 @@ class DecoderDomainLB():
             elif isinstance(ref, ExternalModule):
                 ref.ghostbus = self.ghostbus
                 if hasattr(ref, "genblock") and ref.genblock is not None:
-                    print(f"ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
+                    feature_print(f"ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
                     # BUBBLES - The relative address 'start' is available here.  Do I need to store it for future use, or is extmod.base equivalent?
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []

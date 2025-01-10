@@ -1,5 +1,11 @@
 # Some utility functions/classes for use throughout the codebase
 
+DEBUG_BRANCH = False # Set to True for debug branches
+def feature_print(*args, **kwargs):
+    if DEBUG_BRANCH:
+        print(*args, **kwargs)
+    return
+
 def strDict(_dict, depth=-1, dohash=False):
     def _strToDepth(_dict, depth=0, indent=0):
         """RECURSIVE"""

@@ -14,7 +14,7 @@ from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, GenerateFor, GenerateIf
 from decoder_lb import DecoderLB, BusLB, createPortBus
 from gbexception import GhostbusException, GhostbusNameCollision
-from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices
+from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices, feature_print
 
 # TODO: Multi-ghostbus hierarchy parsing
 #   1. If nbusses > 1:
@@ -493,7 +493,7 @@ class MemoryTree(WalkDict):
         if not self._resolved:
             for key, node in self.walk():
                 if node is None:
-                    print(f"WARNING! node is None! key = {key}")
+                    printd(f"WARNING! node is None! key = {key}")
                     continue
                 printv(f" $$$$$$$$ Considering {key}: {node.label}")
                 if node._parent is None:
@@ -624,7 +624,7 @@ class MemoryTree(WalkDict):
         for key, node in self.walk():
             if hasattr(node, "memories"):
                 if len(node.memories) > 1:
-                    print("This node {node.label} has {len(node.memories)} domains.")
+                    # print("This node {node.label} has {len(node.memories)} domains.")
                     for mem in node.memories:
                         if mem.domain is not None:
                             if domain_memories.get(mem.domain, None) is not None:
@@ -674,18 +674,18 @@ class GhostBusser(VParser):
                         attr_dict = inst_dict["attributes"]
                         source = attr_dict.get('src', None)
                         if autogenblk(gen_block):
-                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                            feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                         if gen_index is None:
-                            print(f"Found instance {inst} inside a generate-if block {gen_block}")
+                            feature_print(f"Found instance {inst} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
                             inst_name = inst
                         else:
-                            print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
+                            feature_print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
                             generate = parseForLoop(gen_block, source)
                             if generate is None:
                                 # UNPARSED_FOR_LOOP
                                 raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
-                        print(generate)
+                        feature_print(generate)
                     if ismodule(inst_name):
                         attr_dict = inst_dict["attributes"]
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
@@ -714,13 +714,13 @@ class GhostBusser(VParser):
                     generate = None
                     if gen_block is not None:
                         if gen_index is None:
-                            print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
+                            feature_print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
                             if autogenblk(gen_block):
-                                print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                                feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                             netname = gen_netname
                         else:
-                            print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
+                            feature_print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
                             generate = parseForLoop(gen_block, source)
                             generate._loop_index = gen_index
                             #if generate is None:
@@ -773,7 +773,7 @@ class GhostBusser(VParser):
                                 gen_index_str = ""
                             else:
                                 gen_index_str = f"at index {gen_index} "
-                            print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
+                            feature_print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
                         dw = len(net_dict['bits'])
                         self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
                         if mrs.get(busname, None) is None:
@@ -798,13 +798,13 @@ class GhostBusser(VParser):
                     source = mem_dict['attributes']['src']
                     if gen_block is not None:
                         if autogenblk(gen_block):
-                            print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                            feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                         if gen_index is None:
-                            print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
+                            feature_print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
                             generate = GenerateIf(gen_block)
                             memname = gen_netname
                         else:
-                            print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
+                            feature_print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
                             #generate = parseForLoop(gen_block, source)
                             #if generate is None:
                             #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
@@ -979,7 +979,7 @@ class GhostBusser(VParser):
     def _handleExtmod(self, module, netname, vals, dw, source, addr=None, sub=None, generate=None):
         block_name, extname, loop_index = block_inst(netname)
         if block_name is not None:
-            print(f"Extmod {extname} is instantiated within a Generate Block!")
+            feature_print(f"Extmod {extname} is instantiated within a Generate Block!")
         portnames = []
         instnames = []
         allowed_ports = BusLB._alias_keys
@@ -1023,7 +1023,7 @@ class GhostBusser(VParser):
             # Maybe I'll just sanitize the genblock bus ports names here?
             bus.deblock()
             extmod = ExternalModule(instname, extbus=bus, basename=basename)
-            print(f"  Resolving ExternalModule {instname}; bus.genblock = {bus.genblock}")
+            feature_print(f"  Resolving ExternalModule {instname}; bus.genblock = {bus.genblock}")
             extmods.append(extmod)
         return extmods
 
@@ -1056,13 +1056,13 @@ class GhostBusser(VParser):
         else:
             # print(f"len(module_instnames) = {len(module_instnames)}")
             for instname in module_instnames:
-                print(f"instname = {instname}")
+                feature_print(f"instname = {instname}")
                 base_bus = busses.get(instname, None)
                 if base_bus is None:
                     bus = BusLB()
-                    print(f"    New bus id = {id(bus)}")
+                    feature_print(f"    New bus id = {id(bus)}")
                 else:
-                    print(f"    Got bus id = {id(bus)}")
+                    feature_print(f"    Got bus id = {id(bus)}")
                     bus = base_bus[1]
                 #print(f"len(data) = {len(data)}")
                 for datum in data:
@@ -1081,10 +1081,10 @@ class GhostBusser(VParser):
                             if sub is not None and bus.sub is None:
                                 bus.sub = sub
                             if bus.genblock is not None and bus.genblock.__class__ != generate.__class__:
-                                print(f"%%%%%%%%%%%%%%% Wtf? {bus.genblock} != {generate}. {instname} {netname} {instnames} {portnames}")
+                                feature_print(f"%%%%%%%%%%%%%%% Wtf? {bus.genblock} != {generate}. {instname} {netname} {instnames} {portnames}")
                             bus.genblock = generate
                             for portname in portnames:
-                                print(f"  bus.set_port({portname}, {netname}, portwidth={dw}, rangestr={rangestr})")
+                                feature_print(f"  bus.set_port({portname}, {netname}, portwidth={dw}, rangestr={rangestr})")
                                 bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
                             if addr is not None:
                                 # print(f"addr is not None: datum = {datum}")
@@ -1177,7 +1177,7 @@ class GhostBusser(VParser):
                         # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
                         ref._readRangeDepth()
                     results.append(ref)
-                    print(f"Generate Loop {block_name} of len {loop_len}: {ref.name} now has AW {ref.aw}")
+                    feature_print(f"Generate Loop {block_name} of len {loop_len}: {ref.name} now has AW {ref.aw}")
         return results
 
     def getBusDict(self, busname=None):
@@ -1375,7 +1375,7 @@ class JSONMaker():
                     if hier_str not in drops:
                         dd[hier_str] = entry
             else:
-                print(f"What is this? {ref}")
+                printd(f"What is this? {ref}")
         if flat and short:
             dd = cls._shortenNames(dd)
         return dd

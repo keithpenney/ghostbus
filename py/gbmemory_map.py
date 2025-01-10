@@ -117,7 +117,6 @@ class GBRegister(Register):
             return (self,)
         copies = []
         base_list = self.base_list
-        print(f"++++++++++++++++++++++++++++++++++++ {self.name}: {base_list}")
         for n in range(len(base_list)):
             base = base_list[n]
             copy = self.copy()
@@ -217,7 +216,6 @@ class GBMemory(Memory):
             return (self,)
         copies = []
         base_list = self.base_list
-        print(f"++++++++++++++++++++++++++++++++++++ {self.name}: {base_list}")
         for n in range(len(base_list)):
             base = base_list[n]
             copy = self.copy()
@@ -390,7 +388,6 @@ class ExternalModule():
             return (self,)
         copies = []
         base_list = self.base_list
-        print(f"++++++++++++++++++++++++++++++++++++ {self.name}: {base_list}")
         for n in range(len(base_list)):
             base = base_list[n]
             copy = self.copy()
@@ -530,7 +527,7 @@ class GenerateFor(GenerateBranch):
         return f"for ({self.index}={self.initial}; {self.index}{_op_str}{self.comp}; {self.index}={self.index}{_inc_op_str}{_inc_val}): {self.branch}"
 
     def unrollRangeString(self, rangestr):
-        print(f"unrollRangeString: rangestr = {rangestr}")
+        #print(f"unrollRangeString: rangestr = {rangestr}")
         restr = "\[([^:]+):([^\]]+)\]"
         _match = re.match(restr, rangestr)
         loopsize = self.unrolled_size
@@ -540,13 +537,13 @@ class GenerateFor(GenerateBranch):
             rsize = f"({groups[0]}-{groups[1]}+1)"
             # [(FOO_COPIES*32)-1:0]
             unrolled = f"[({loopsize}*{rsize})-1:0]"
-            print(f"  returning: {unrolled}")
+            #print(f"  returning: {unrolled}")
             return unrolled
         return rangestr
 
     def unrollRange(self, range):
         # TODO
-        print(f"unrollRange: range = {range}")
+        #print(f"unrollRange: range = {range}")
         return f"[range[0]:range[1]]"
 
 def isForLoop(genblock):
