@@ -1478,7 +1478,7 @@ def parseForLoop(branch_name, yosrc):
 
 def handleGhostbus(args):
     try:
-        gb = GhostBusser(args.files[0], top=args.top) # Why does this end up as a double-wrapped list?
+        gb = GhostBusser(args.files[0], top=args.top, include_dirs=args.include) # Why does this end up as a double-wrapped list?
     except YosysParsingError as err:
         print("ERROR: (Yosys Parsing Error; message follows)")
         print(err)
@@ -1523,6 +1523,7 @@ def doGhostbus():
     #parser.set_defaults(handler=lambda args: 1)
     parser.add_argument("--live",   default=False, action="store_true", help="Generate the Ghostbus decoder logic (.vh) files.")
     parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parser.add_argument("-I", "--include", default=[], action="append", help="Directories to search for `include files.")
     parser.add_argument("--dest",   default="_autogen", help="Directory name for auto-generated files.")
     parser.add_argument("--map",    default=None, help="[experimental] Filename for a generated memory map in Verilog form for testing.")
     parser.add_argument("--json",   default=None, help="Filename for a generated memory map as a JSON file.")

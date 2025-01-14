@@ -3,7 +3,7 @@
 import os
 
 from memory_map import Register, MemoryRegion, bits
-from gbexception import GhostbusException, GhostbusFeatureRequest
+from gbexception import GhostbusException, GhostbusFeatureRequest, GhostbusInternalException
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, isForLoop
 from util import strDict, check_complete_indices, feature_print
 from yoparse import block_inst

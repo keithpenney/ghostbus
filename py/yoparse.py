@@ -391,9 +391,10 @@ class VParser():
     LINETYPE_PORT  = 0
     LINETYPE_MACRO = 1
 
-    def __init__(self, filelist, top=None):
+    def __init__(self, filelist, top=None, include_dirs=None):
         self._filelist = filelist
         self._top = top
+        self._include_dirs = include_dirs
         self.valid = self.parse()
 
     def parse(self):
@@ -409,7 +410,11 @@ class VParser():
             topstr = f"\nhierarchy -top {self._top}"
         else:
             topstr = ""
-        ycmd = f'yosys -q -p "verilog_defines -DYOSYS\nread_verilog {filestr}{topstr}\nproc" -p write_json'
+        if self._include_dirs is not None and len(self._include_dirs) > 0:
+            incstr = " ".join([f"-I {inc}" for inc in self._include_dirs])
+        else:
+            incstr = ""
+        ycmd = f'yosys -q -p "verilog_defines -DYOSYS\nread_verilog {incstr}{filestr}{topstr}\nproc" -p write_json'
         err = None
         try:
             jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
