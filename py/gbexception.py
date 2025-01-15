@@ -16,7 +16,7 @@ class GhostbusFeatureRequest(GhostbusException):
 
 class GhostbusInternalException(Exception):
     def __init__(self, s):
-        super().__init__("**** Internal Ghostbus Error (broken tool)****: " + s)
+        super().__init__("**** Internal Ghostbus Error (broken tool) ****: " + s)
 
 # Here I'm starting a proper user-facing error system.  Internal errors can still be sloppy.
 _errs = {

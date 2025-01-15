@@ -406,7 +406,13 @@ class BusLB():
         #    self._bus["addr_range"] = f"[{self._bus['aw']}:0]"
         return _valid, err
 
+    def keys(self):
+        return self._bus.keys()
+
     def get(self):
+        return self.getDict()
+
+    def getDict(self):
         """Get a copy of the bus dict without the 'source' references"""
         _valid, err = self.validate()
         if not _valid:
@@ -490,7 +496,7 @@ def createPortBus(busses):
     ignores.append("dw_str")
     ignores.append("dw_range")
     for bus in busses:
-        for key, portname in bus.get().items():
+        for key, portname in bus.getDict().items():
             if key in ignores:
                 continue
             if portname is not None and key not in portkeys:
@@ -559,6 +565,7 @@ class DecoderLB():
         self.genblock = memorytree.genblock
         self.gen_addrs = {}
         self.autogen_loop_index = "GHOSTBUS_AUTOGEN_INDEX" # TODO - Harmonize this with a singleton netname generator class
+        self.init_veriloggers()
         for memregion in memorytree.memories:
             domain = memregion.domain
             self.domains[domain] = DecoderDomainLB(self, memregion, ghostbusses, gbportbus)
@@ -569,7 +576,6 @@ class DecoderLB():
         self.inst = self.parent_domain_decoder.inst
         # As well as the module name it represents
         self.name = self.parent_domain_decoder.name
-        self.init_veriloggers()
         for key, node in memorytree.items():
             # Get the domain that the node is instantiated in
             domain = node.parent_domain
@@ -607,6 +613,11 @@ class DecoderLB():
         self.veriloggers_inst = {}
         return
 
+    def register_block_verilogger(self, branch):
+        if branch not in self.veriloggers_block.keys():
+            self.veriloggers_block[branch] = Verilogger(self._debug)
+        return
+
     def _handleSubmod(self, submod, domain, start_addr):
         if hasattr(submod, "genblock") and submod.genblock is not None:
             branch = submod.genblock.branch
@@ -614,16 +625,14 @@ class DecoderLB():
                 feature_print(f"DecoderDomainLB {submod.inst} is instantiated within generate-FOR block {branch}")
                 self.domains[domain].add_block_submod(branch, submod, start_addr)
                 # We'll handle these later
-                if branch not in self.veriloggers_block.keys():
-                    self.veriloggers_block[branch] = Verilogger(self._debug)
+                self.register_block_verilogger(branch)
                 return
             else:
                 feature_print(f"DecoderDomainLB {submod.inst} is instantiated within generate-IF block {submod.genblock.branch}")
                 # Generate-if, just strip the branch name from the submod name
                 #gen_branch, instname, gen_index = block_inst(submod.inst)
                 #submod.setInst(instname)
-                if branch not in self.veriloggers_block.keys():
-                    self.veriloggers_block[branch] = Verilogger(self._debug)
+                self.register_block_verilogger(branch)
         self.veriloggers_inst[submod.inst] = Verilogger(self._debug)
         self.domains[domain].add_submod(submod, start_addr)
         return
@@ -1155,6 +1164,7 @@ class DecoderDomainLB():
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
+                    self.parent.register_block_verilogger(ref.genblock.branch)
                 else:
                     #print(f"ExternalModule {ref.name} is at the top level")
                     self.exts.append((start, ref))
@@ -1177,19 +1187,22 @@ class DecoderDomainLB():
                 to_resolve[extmod.basename] = ll
             # Roll up the extmods so we have one of each
             resolved_list = []
-            for basename, extmods in to_resolve.items():
-                if len(extmods) == 1:
-                    resolved_list.append(extmods[0])
+            for basename, _extmods in to_resolve.items():
+                if len(_extmods) == 1:
+                    resolved_list.append(_extmods[0])
                 else:
                     # List 'extmods' may not be in address order. Make a list that is.
-                    ext_list = [None]*len(extmods)
+                    ext_list = [None]*len(_extmods)
                     # Find the instance with the lowest base address
                     ext = None
-                    for _ext in extmods:
+                    for _ext in _extmods:
                         if ext is None or _ext.base < ext.base:
                             ext = _ext
                         ext_list[_ext.genblock._loop_index] = _ext
                     if None in ext_list:
+                        print(ext_list)
+                        print([ext.name for ext in _extmods])
+                        print(basename)
                         raise GhostbusInternalException(f"Did not find all indices for {basename}")
                     if len(ext_list) > 2:
                         # Ensure consistent offset from lowest base
@@ -1199,7 +1212,7 @@ class DecoderDomainLB():
                             if offset != _offset:
                                 raise GhostbusInternalException(f"Inconsistent offsets between unrolled instances of {basename} in for loop {ext.genblock.branch}")
                     # Check alignment of block
-                    new_aw = bits(len(extmods)) + ext.aw
+                    new_aw = bits(len(_extmods)) + ext.aw
                     if Policy.aligned_for_loops:
                         if not is_aligned(ext.base, new_aw):
                             raise GhostbusInternalException(f"Rolled-up block of instances of extmod {basename} is not aligned. Base = 0x{ext.base}, aw = {new_aw}.")
@@ -1719,7 +1732,8 @@ class DecoderDomainLB():
                 vl.add(addrMask)
                 continue
             # If net is unused in parentbus
-            if parentbus[netkey] is None:
+            # TODO - replace the following line with parentbus.get() when 'BusLB.get' is replaced with 'BusLB.getDict'
+            if netkey not in parentbus.keys() or parentbus[netkey] is None:
                 # If it's an input to the submod (host-centric output)
                 if _dir == BusLB._output:
                     # Wire to 0
@@ -2312,7 +2326,7 @@ def test_createPortBus():
     expected_ports = ("clk", "addr", "dout", "din", "we", "re", "extra_in0")
 
     missing = []
-    busdict = portbus.get()
+    busdict = portbus.getDict()
     for portkey in expected_ports:
         busport = busdict.get(portkey)
         if busport is None:

@@ -1064,7 +1064,7 @@ class GhostBusser(VParser):
                 else:
                     feature_print(f"    Got bus id = {id(bus)}")
                     bus = base_bus[1]
-                #print(f"len(data) = {len(data)}")
+                this_instname = None
                 for datum in data:
                     #print(f"  datum = {datum}")
                     netname, dw, portnames, instnames, source, addr, sub, generate = datum
@@ -1077,7 +1077,9 @@ class GhostBusser(VParser):
                     if len(instnames) == 0 and universal_inst is not None:
                         instnames.append(universal_inst)
                     for net_instname in instnames:
+                        #print(f"  net_instname = {net_instname}, net_instname+postfix = {net_instname+postfix}")
                         if net_instname+postfix == instname:
+                            this_instname = net_instname
                             if sub is not None and bus.sub is None:
                                 bus.sub = sub
                             if bus.genblock is not None and bus.genblock.__class__ != generate.__class__:
@@ -1096,7 +1098,7 @@ class GhostBusser(VParser):
                                 if errst != None:
                                     # MULTIPLE_ADDRESSES
                                     raise GhostbusException(f"{instnames}: {errst}")
-                busses[instname] = (net_instname, bus) # A funny hack for block-scope extmods
+                busses[instname] = (this_instname, bus) # A funny hack for block-scope extmods
         if inst_err:
             serr = "No instance referenced for external bus. " + ext_advice
             # NO_EXTMOD_INSTANCE
