@@ -568,6 +568,7 @@ class DecoderLB():
         self.init_veriloggers()
         for memregion in memorytree.memories:
             domain = memregion.domain
+            print(f"Creating DecoderDomainLB for {memregion.name} in {domain}")
             self.domains[domain] = DecoderDomainLB(self, memregion, ghostbusses, gbportbus)
         # Recall that from every module's perspective, the domain in which it is
         # instantiated (in its parent module) is default ("None")
@@ -1476,7 +1477,7 @@ class DecoderDomainLB():
         vl.comment(f"Local Initialization")
         if self.has_local_csrs:
             vl.add(f"wire {en_local} = {self.ghostbus['addr']}[{busaw-1}:{self.local_aw}] == {vhex(0, divwidth)}; // 0x0-0x{(1<<self.local_aw)-1:x}")
-            vl.add(f"reg  [{self.ghostbus['dw']-1}:0] {local_din}=0;")
+            vl.add(f"reg [{self.ghostbus['dw']-1}:0] {local_din}=0;")
         if len(self.rams) > 0:
             vl.comment("Local RAMs")
             for n in range(len(self.rams)):

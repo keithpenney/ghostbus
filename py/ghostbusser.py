@@ -332,7 +332,7 @@ class MemoryTree(WalkDict):
 
     def get_memory_by_domain(self, domain):
         for memory in self.memories:
-            if memory.domain == domain:
+            if memory is not None and memory.domain == domain:
                 return memory
         return None
 
@@ -484,7 +484,7 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
-        verbose = False
+        verbose = True
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
@@ -533,10 +533,10 @@ class MemoryTree(WalkDict):
                         if len(extmod_map) > 0:
                             # Look for extmods
                             for start, stop, ref in node.memories[n].get_entries():
-                                printv(f" -- {start}, {stop}, {ref}")
+                                printv(f" -- {start}, {stop}, {ref.name}")
                                 if isinstance(ref, ExternalModule):
-                                    printv(f"    # Found ExternalModule {ref.name}")
                                     mem_index = extmod_map.get(ref.name, None)
+                                    printv(f"    # Found ExternalModule {ref.name}... {mem_index}")
                                     if mem_index is not None:
                                         printv(f"mem_index = {mem_index} Found an associated memory {node.memories[mem_index].label} for extmod {ref.name}")
                                         aw = node.memories[mem_index].aw
@@ -550,24 +550,40 @@ class MemoryTree(WalkDict):
                                         # in case I need it later
                                         ref.sub_mr = node.memories[mem_index]
                                         del extmod_map[ref.name]
-                                    else:
-                                        printv(f" *** Can't find mem_index in extmod_map {extmod_map}")
                         if hasattr(node.memories[n], "resolve"):
                             node.memories[n].resolve()
                         node.memories[n].shrink()
                         printv(f"Shrunk {node.memories[n].label}.{node.memories[n].domain} to {node.memories[n].aw} bits")
                         if node.memories[n].empty:
                             continue
+                    for n in nmems:
+                        if node.memories[n] is None:
+                            continue
                         if not toptag and node._parent is not None:
                             added = False
                             # Here I need to get the inst->domain mapping from the parent, find the correct 'inst'
                             # that matches 'node', then add 'node' to the memory corresponding to the correct 'domain'
                             # Deliberately fail if this is not found in the map; something went wrong earlier
+                            popped = False
+                            for _ref, _mem in stepchildren:
+                                if node.memories[n] == _mem:
+                                    print(f"Skipping stepchild {_mem.name}({_mem.domain})")
+                                    #node.memories.pop(n)
+                                    node.memories[n] = None
+                                    popped = True
+                                    break
+                            if popped:
+                                continue
                             parent_domain = node._parent.domain_map[node.label]
+                            printv(f"1234 {node.label} is supposedly in domain {parent_domain}")
                             for m in range(len(node._parent.memories)):
                                 if node._parent.memories[m].domain == parent_domain:
-                                    printv("                           Adding {} to {}".format(node.label, node._parent.label))
+                                    printv("    Adding {}({}) to {} memory {}".format(node.memories[n].name, node.memories[n].domain, node._parent.label, m))
+                                    if node.memories[n]._debug_added_already:
+                                        print("404 This memory has already been added to something!")
+                                    node.memories[n]._debug_added_already = True
                                     node._parent.memories[m].add_item(node.memories[n])
+                                    #node.memories[n] = None
                                     added = True
                             if not added:
                                 # Probably an item was found referencing a new domain
@@ -582,7 +598,8 @@ class MemoryTree(WalkDict):
                             printd(f"                    {node.label} has no _parent")
                         # Add 'toptag' to each module instance listed in toptag_map
                         # For lack of a better structure, I guess we'll add the "toptag" to every domain (every MemoryRegion)
-                        node.memories[n].toptag = toptag
+                        if node.memories[n] is not None:
+                            node.memories[n].toptag = toptag
                         if toptag:
                             top_memories.append(node.memories[n])
                 else:
@@ -600,9 +617,12 @@ class MemoryTree(WalkDict):
         for key, node in self.walk():
             todelete = []
             for n in range(len(node.memories)):
-                node.memories[n].shrink()
-                if node.memories[n].size == 0:
+                if node.memories[n] is None:
                     todelete.append(n)
+                else:
+                    node.memories[n].shrink()
+                    if node.memories[n].size == 0:
+                        todelete.append(n)
             for n in todelete:
                 del node.memories[n]
         return top_memories
@@ -624,7 +644,7 @@ class MemoryTree(WalkDict):
         for key, node in self.walk():
             if hasattr(node, "memories"):
                 if len(node.memories) > 1:
-                    # print("This node {node.label} has {len(node.memories)} domains.")
+                    print(f"This node {node.label} has {len(node.memories)} domains.")
                     for mem in node.memories:
                         if mem.domain is not None:
                             if domain_memories.get(mem.domain, None) is not None:
@@ -1306,7 +1326,7 @@ class JSONMaker():
         self._drops = drops
 
     @classmethod
-    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=(), short=True):
+    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=(), short=True, indent=0):
         """ Returns a dict ready for JSON-ification using our preferred memory map style:
         // Example
         {
@@ -1329,21 +1349,29 @@ class JSONMaker():
         else:
             top_hierarchy = mem.hierarchy[1:]
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
+        print_entries = [f"{ref[-1].name}" for ref in entries]
+        sindent = " "*indent
+        print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
-                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False)
+                print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")
+                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
+                print(f"{sindent}6671 Done with {ref.name}.{ref.domain}")
                 if flat:
+                    print(f"{sindent}Updating from subdd {ref.name} {ref.domain} id(ref) = {id(ref)}")
                     update_without_collision(dd, subdd)
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, ExternalModule) and ref.sub_mr is not None:
                 # If this extmod is a gluemod, I need to collect its branch like a submodule
-                subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False)
+                print(f"{sindent}6672 {ref.name} {id(ref)}")
+                subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
                 if flat:
                     update_without_collision(dd, subdd)
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
+                #print(f"+ [{mem.domain}] {'.'.join(top_hierarchy)}.{ref.name}")
                 # FIXME HACK! Make up your damn mind, Keef!  Are you unrolling ExternalModules before, or AFTER adding to the memory map!?!?!
                 if isinstance(ref, ExternalModule):
                     copies = (ref,)
@@ -1431,6 +1459,7 @@ class JSONMaker():
         newdd = {}
         for short, longs in namedict.items():
             newdd[short] = dd[longs[0]]
+            print(f"    {longs[0]} -> {short}")
         return newdd
 
     @staticmethod
@@ -1459,14 +1488,20 @@ class JSONMaker():
 
 def update_without_collision(old_dict, new_dict):
     """Calls old_dict.update(new_dict) after ensuring there are no identical keys in both dicts."""
+    all_errs = []
     for key in new_dict.keys():
         if key in old_dict:
-            err = f"Memory map key {key} defined more than once." + \
-                  f" If {key} is an alias, remember that they are global," + \
-                  " so you can't use an alias in a module that gets instantiated more than once." + \
-                  f" If {key} is not an alias, ensure it is indeed only declared once per module." + \
-                  " If it's only declared once (and thus passes Verilog linting), submit a bug report."
-            raise GhostbusNameCollision(err)
+            #err = f"Memory map key {key} defined more than once." + \
+            #      f" If {key} is an alias, remember that they are global," + \
+            #      " so you can't use an alias in a module that gets instantiated more than once." + \
+            #      f" If {key} is not an alias, ensure it is indeed only declared once per module." + \
+            #      " If it's only declared once (and thus passes Verilog linting), submit a bug report."
+            all_errs.append(key)
+            #raise GhostbusNameCollision(err)
+    if len(all_errs) > 0:
+        err = f"Found duplicate entry names in the memory map:" + \
+              "\n  ".join(all_errs)
+        raise GhostbusNameCollision(err)
     old_dict.update(new_dict)
     return
 
@@ -1504,8 +1539,13 @@ def handleGhostbus(args):
             single_bus = True
             if len(gb.memory_maps) > 1:
                 single_bus = False
-            for mem_map in gb.memory_maps:
-                busname = mem_map.domain
+            print(f"=============== len(memtree.memories) = {len(memtree.memories)}")
+            domains = memtree.get_domains()
+            for domain, mem_map in domains.items():
+                if mem_map is None:
+                    continue
+                busname = domain
+                print(f"667 Making JSON for {busname}")
                 jm = JSONMaker(mem_map, drops=args.ignore)
                 if busname is None or single_bus:
                     filename = str(args.json)

@@ -18,7 +18,7 @@ PY_DIR=$(GHOSTBUS_DIR)/py
 PYTHON?=python3
 
 GHOSTBUS_IGNORES?=rom
-GHOSTBUS_FLAGS=--live --flat --mangle --debug
+GHOSTBUS_FLAGS=--live --flat --mangle --debug --short
 ignore_args=$(addprefix --ignore ,$(GHOSTBUS_IGNORES))
 gb_includes=$(addprefix -I ,$(GHOSTBUS_INCLUDES))
 

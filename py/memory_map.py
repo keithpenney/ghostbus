@@ -543,6 +543,8 @@ class MemoryRegion():
         return self.add(width=width, ref=item, addr=addr)
 
     def add(self, width=0, ref=None, addr=None):
+        if isinstance(ref, MemoryRegion):
+            print(f"0000 {self.name} is adding {ref.name}.{ref.domain} to {self.domain}")
         base = self._add(width, ref=ref, addr=addr, type=self.TYPE_MEM)
         # If the item referenced by 'ref' has a 'base' attribute, update it
         if ref is not None and hasattr(ref, "base"):
