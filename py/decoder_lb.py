@@ -568,7 +568,7 @@ class DecoderLB():
         self.init_veriloggers()
         for memregion in memorytree.memories:
             domain = memregion.domain
-            print(f"Creating DecoderDomainLB for {memregion.name} in {domain}")
+            # print(f"Creating DecoderDomainLB for {memregion.name} in {domain}")
             self.domains[domain] = DecoderDomainLB(self, memregion, ghostbusses, gbportbus)
         # Recall that from every module's perspective, the domain in which it is
         # instantiated (in its parent module) is default ("None")
@@ -2009,6 +2009,12 @@ class DecoderDomainLB():
             if (csr.access & Register.READ) == 0:
                 # Skip write-only registers
                 continue
+            if csr.signed:
+                # Signed, sign-bit-extended
+                expanded = "{{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{{csr.name}[{csr.range[0]}]}}}}, {csr.name}}}"
+            else:
+                # Unsigned, 0-padded
+                expanded = f"{{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}}"
             if len(csr.read_strobes) == 0:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
             else:

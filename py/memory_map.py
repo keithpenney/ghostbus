@@ -543,8 +543,6 @@ class MemoryRegion():
         return self.add(width=width, ref=item, addr=addr)
 
     def add(self, width=0, ref=None, addr=None):
-        if isinstance(ref, MemoryRegion):
-            print(f"0000 {self.name} is adding {ref.name}.{ref.domain} to {self.domain}")
         base = self._add(width, ref=ref, addr=addr, type=self.TYPE_MEM)
         # If the item referenced by 'ref' has a 'base' attribute, update it
         if ref is not None and hasattr(ref, "base"):
@@ -573,7 +571,6 @@ class MemoryRegion():
             refname = ref.name
         if self.hierarchy is not None:
             if hasattr(ref, 'hierarchy'):
-                #print(f"    setting ref.hierarchy: {ref.hierarchy} -> {(*self.hierarchy, *ref.hierarchy)}")
                 ref.hierarchy = (*self.hierarchy, *ref.hierarchy)
             else:
                 #print(f"    !!!! {ref.name} has no hierarchy?!?!?")
@@ -821,7 +818,11 @@ class MemoryRegion():
 
     def _nullHierarchy(self, nempty):
         """Set the first 'nempty' entries of the hierarchy to the emptry string ''."""
-        # print(f"  Nulling {nempty} entries. {self.hierarchy}")
+        #if hasattr(self, 'domain'):
+        #    name = f"{self.name}({self.domain})"
+        #else:
+        #    name = self.name
+        #print(f"  567 {name} Nulling {nempty} entries. {self.hierarchy}")
         if self.hierarchy is None:
             return
         hier = list(self.hierarchy)

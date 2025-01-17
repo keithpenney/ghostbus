@@ -247,7 +247,6 @@ class GBMemoryRegionStager(MemoryRegionStager):
                 default = default.copy()
             setattr(self, name, default)
         self.domain = domain
-        self._debug_added_already = False
 
     def copy(self):
         ref = super().copy()

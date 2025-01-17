@@ -484,7 +484,7 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
-        verbose = True
+        verbose = False
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
@@ -567,9 +567,6 @@ class MemoryTree(WalkDict):
                             popped = False
                             for _ref, _mem in stepchildren:
                                 if node.memories[n] == _mem:
-                                    print(f"Skipping stepchild {_mem.name}({_mem.domain})")
-                                    #node.memories.pop(n)
-                                    node.memories[n] = None
                                     popped = True
                                     break
                             if popped:
@@ -579,11 +576,7 @@ class MemoryTree(WalkDict):
                             for m in range(len(node._parent.memories)):
                                 if node._parent.memories[m].domain == parent_domain:
                                     printv("    Adding {}({}) to {} memory {}".format(node.memories[n].name, node.memories[n].domain, node._parent.label, m))
-                                    if node.memories[n]._debug_added_already:
-                                        print("404 This memory has already been added to something!")
-                                    node.memories[n]._debug_added_already = True
                                     node._parent.memories[m].add_item(node.memories[n])
-                                    #node.memories[n] = None
                                     added = True
                             if not added:
                                 # Probably an item was found referencing a new domain
@@ -613,6 +606,8 @@ class MemoryTree(WalkDict):
                 child_bus.base = parent_extmod._base
             else:
                 raise GhostbusException("Failed to give an explicit base address to the child bus.")
+        # Delete any memories marked as None
+        #self.purge_memories() # Maybe not...
         # Delete any zero-sized memories (they weren't added anyhow)
         for key, node in self.walk():
             todelete = []
@@ -626,6 +621,19 @@ class MemoryTree(WalkDict):
             for n in todelete:
                 del node.memories[n]
         return top_memories
+
+    # TODO DELETEME
+    def purge_memories(self):
+        n = 0
+        while n < len(self.memories):
+            if self.memories[n] is None:
+                del self.memories[n]
+            else:
+                n += 1
+        # Purge memories from trunk to leaves
+        for key, node in self._dd.items():
+            node.purge_memories()
+        return
 
     def print(self):
         print("Walking:")
@@ -644,9 +652,9 @@ class MemoryTree(WalkDict):
         for key, node in self.walk():
             if hasattr(node, "memories"):
                 if len(node.memories) > 1:
-                    print(f"This node {node.label} has {len(node.memories)} domains.")
+                    #print(f"This node {node.label} has {len(node.memories)} domains.")
                     for mem in node.memories:
-                        if mem.domain is not None:
+                        if mem.domain is not None and mem.pseudo_domain is None:
                             if domain_memories.get(mem.domain, None) is not None:
                                 err = f"Domain name {mem.domain} is declared in multiple modules " + \
                                        "or multiple instances of a single module.  Separate bus " + \
@@ -1287,26 +1295,25 @@ class GhostBusser(VParser):
             mrs = instdict.get("memory")
             busses_explicit = instdict.get("explicit_busses", [])
             # NOTE: Redundant 'declared_busses' is currently stored and used in both the node and each of its
-            #       memory instances.  I'd like to make store it only at the node.
+            #       memory instances.  I'd like to store it only at the node.
             memtree_node.declared_busses = busses_explicit
             if len(mrs) > 0:
                 #if mr is not None and hasattr(memtree_node, "memory"):
                 for busname, mr in mrs.items():
-                    #if hasattr(mr, "resolve"):
-                    #    if not mr.resolve():
-                    #        raise Exception(f"    {mr.name} resists resolving. Care to explain?")
+                    # The MemoryRegion objects have up to this point represented modules.  Now we build a
+                    # tree so they represent _instances_ of modules!  Thus, we create copies so they can
+                    # be independently modified, and then place them where we need them in the tree.
                     mrcopy = mr.copy()
+                    # Keep a reference to the module name
                     mrcopy.label = module_name
+                    # This step modifies the MemoryRegion's "hierarchy" from (module_name,) to (inst_name,)
+                    # so it can be properly identified via hierarchical dereference
                     mrcopy.hierarchy = hier
-                    #memtree_node.memory = mrcopy
                     printd(f"                                   {memtree_node.label}.memories.append({mrcopy.label})")
                     memtree_node.memories.append(mrcopy)
                 for n in range(len(memtree_node.memories)):
                     # TODO - Should I instead of telling all domains about all busses, distribute each bus only to its domain?
                     memtree_node.memories[n].declared_busses = busses_explicit
-                    # I shouldn't need this step below, it should be handled in Ghostbusser.digest()
-                    #if len(busses_explicit) > 0:
-                    #    memtree_node.memories[n].bustop = True
             else:
                 #print(f"no {key} in ghostmods")
                 #memtree_node.memory = GBMemoryRegionStager(label=module_name, hierarchy=hier)
@@ -1324,6 +1331,14 @@ class JSONMaker():
     def __init__(self, memtree, drops=()):
         self.memtree = memtree
         self._drops = drops
+
+    @classmethod
+    def finalizeJSONDict(cls, dd, flat=True, mangle_names=False, short=True):
+        if flat and short:
+            dd = cls._shortenNames(dd)
+        if mangle_names:
+            dd = cls._mangleNames(dd)
+        return dd
 
     @classmethod
     def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=(), short=True, indent=0):
@@ -1349,22 +1364,22 @@ class JSONMaker():
         else:
             top_hierarchy = mem.hierarchy[1:]
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
-        print_entries = [f"{ref[-1].name}" for ref in entries]
-        sindent = " "*indent
-        print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
+        #print_entries = [f"{ref[-1].name}" for ref in entries]
+        #sindent = " "*indent
+        #print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
-                print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")
+                #print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")
                 subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
-                print(f"{sindent}6671 Done with {ref.name}.{ref.domain}")
+                #print(f"{sindent}6671 Done with {ref.name}.{ref.domain}")
                 if flat:
-                    print(f"{sindent}Updating from subdd {ref.name} {ref.domain} id(ref) = {id(ref)}")
+                    #print(f"{sindent}Updating from subdd {ref.name} {ref.domain} id(ref) = {id(ref)}")
                     update_without_collision(dd, subdd)
                 else:
                     dd[ref.name] = subdd
             elif isinstance(ref, ExternalModule) and ref.sub_mr is not None:
                 # If this extmod is a gluemod, I need to collect its branch like a submodule
-                print(f"{sindent}6672 {ref.name} {id(ref)}")
+                #print(f"{sindent}6672 {ref.name} {id(ref)}")
                 subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
                 if flat:
                     update_without_collision(dd, subdd)
@@ -1395,19 +1410,13 @@ class JSONMaker():
                     elif flat:
                         hierarchy = list(top_hierarchy)
                         hierarchy.append(ref.name)
-                        printd(f"{mem.name}: {mem.hierarchy}, {ref.name}: hierarchy = {hierarchy}")
-                        if short or not mangle_names:
-                            hier_str = ".".join(strip_empty(hierarchy))
-                        else:
-                            hier_str = "_".join(strip_empty(hierarchy))
+                        hier_str = ".".join(strip_empty(hierarchy))
                     else:
                         hier_str = ref.name
                     if hier_str not in drops:
                         dd[hier_str] = entry
             else:
                 printd(f"What is this? {ref}")
-        if flat and short:
-            dd = cls._shortenNames(dd)
         return dd
 
 
@@ -1459,7 +1468,17 @@ class JSONMaker():
         newdd = {}
         for short, longs in namedict.items():
             newdd[short] = dd[longs[0]]
-            print(f"    {longs[0]} -> {short}")
+        return newdd
+
+    @classmethod
+    def _mangleNames(cls, dd):
+        """Replace '.' in string keys with '_'"""
+        newdd = {}
+        for key, val in dd.items():
+            key = key.replace('.', '_')
+            if hasattr(val, "items"):
+                val = cls._mangleNames(val)
+            newdd[key] = val
         return newdd
 
     @staticmethod
@@ -1480,7 +1499,9 @@ class JSONMaker():
             filepath = os.path.join(path, filename)
         else:
             filepath = filename
-        ss = json.dumps(self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle, drops=self._drops, short=short), indent=2)
+        dd = self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle, drops=self._drops, short=short)
+        dd = self.finalizeJSONDict(dd, flat=flat, mangle_names=mangle, short=short)
+        ss = json.dumps(dd, indent=2)
         with open(filepath, 'w') as fd:
             fd.write(ss)
         return
@@ -1539,13 +1560,11 @@ def handleGhostbus(args):
             single_bus = True
             if len(gb.memory_maps) > 1:
                 single_bus = False
-            print(f"=============== len(memtree.memories) = {len(memtree.memories)}")
             domains = memtree.get_domains()
             for domain, mem_map in domains.items():
                 if mem_map is None:
                     continue
                 busname = domain
-                print(f"667 Making JSON for {busname}")
                 jm = JSONMaker(mem_map, drops=args.ignore)
                 if busname is None or single_bus:
                     filename = str(args.json)

@@ -30,7 +30,7 @@ class Verilogger():
 
     def comment(self, s):
         """Add a comment within /* */ block comment delimiters.  Never adds debug trace."""
-        s = "/* " + s + "*/"
+        s = "/* " + s + " */"
         lines = s.split('\n')
         sindent = " "*self._indent
         for line in lines:
