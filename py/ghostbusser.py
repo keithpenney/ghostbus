@@ -16,43 +16,6 @@ from decoder_lb import DecoderLB, BusLB, createPortBus
 from gbexception import GhostbusException, GhostbusNameCollision
 from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices, feature_print
 
-# TODO: Multi-ghostbus hierarchy parsing
-#   1. If nbusses > 1:
-#       All instantiated modules must be tagged with the "ghostbus_name" attribute.
-#       Raise Exception if any are not tagged or if the attribute value does not match
-#       any names in 'busnames'
-#   2. If nbusses > 1:
-#       Tag all instantiated modules with the particular ghostbus that is to be routed
-#       into them.
-#       This attribute must be inherited throughout the hiearchy
-#       2a. The auto-generated hookup code for these modules should reflect the net names
-#           of the named bus
-#   3. Break off branches of the MemoryTree including the "bustop" level and isolate the
-#       bus domains.
-#       3a. Also delete any CSRs that don't have the same bus domain.
-#   4. Each of these MemoryTree branches should make its own JSON relative to base 0.
-#   5. An external tool can combine the JSONs and ensure the resulting memory map reflects
-#       the hand-wired combination of the ghostbusses.
-
-# DONE: Permissive CSR access defaults
-#   If a detected CSR is of net "wire", assume it's read-only.
-#   If a detected CSR is of net "reg", assume it's read/write.
-
-# When Yosys generates a JSON, it follows this structure:
-#   modules: {
-#     mod_inst : {},
-#   }
-# where 'mod_inst' is a special identifier for not just every module present in the
-# design, but every unique instance (uniqueness determined by module type and
-# parameter values).
-# For any instantiated parameterized modules (when hierarchy set), their names are
-# listed as "$paramod$HASH\mod_name" where 'HASH' is a 40-character hex string
-# which is probably just randomly generated as a hashmap key.
-
-# I'll need to keep these unique identifiers internally, but replace the hash stuff
-# with the hierarchy of the particular instance (which is also unique) before
-# generating the memory map.
-
 import random
 # I need a unique value that's not None that's basically impossible to collide
 # with anything the user might pass to an attribute. This scheme makes it dang
@@ -81,35 +44,53 @@ class GhostbusInterface():
     _tokens = [
         "HA",
         "ADDR",
-        "PORT",
+        "DRIVER",
         "STROBE",
         "STROBE_W",
         "STROBE_R",
-        "EXTERNAL",
+        "PASSENGER",
         "ALIAS",
-        "BUSNAME",
-        "SUB",
+        "DOMAIN",
+        "BRANCH",
         "TOP",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
+        # Host-Accessible CSR/RAM
         "ghostbus":             tokens.HA,
         "ghostbus_ha":          tokens.HA,
         "ghostbus_csr":         tokens.HA,
         "ghostbus_ram":         tokens.HA,
-        "ghostbus_port":        tokens.PORT,
+        # Ghostbus Driver (bus controller)
+        "ghostbus_driver":      tokens.DRIVER,
+        "ghostbus_controller":  tokens.DRIVER,
+        "ghostbus_pub":         tokens.DRIVER,
+        "ghostbus_dom":         tokens.DRIVER,
+        "ghostbus_port":        tokens.DRIVER, # DEPRECATED
+        # Ghostbus Passenger (bus peripheral)
+        "ghostbus_passenger":   tokens.PASSENGER,
+        "ghostbus_peripheral":  tokens.PASSENGER,
+        "ghostbus_sub":         tokens.PASSENGER,
+        "ghostbus_ext":         tokens.PASSENGER, # DEPRECATED
+        # Assign an explicit address
         "ghostbus_addr":        tokens.ADDR,
+        # Declare a strobe vector
         "ghostbus_strobe":      tokens.STROBE,
+        # Declare an associated write strobe vector
         "ghostbus_write_strobe": tokens.STROBE_W,
         "ghostbus_ws":          tokens.STROBE_W,
+        # Declare an associated read strobe vector
         "ghostbus_read_strobe": tokens.STROBE_R,
         "ghostbus_rs":          tokens.STROBE_R,
-        "ghostbus_ext":         tokens.EXTERNAL,
+        # Assign an alias to a CSR/RAM
         "ghostbus_alias":       tokens.ALIAS,
-        "ghostbus_name":        tokens.BUSNAME,
-        "ghostbus_domain":      tokens.BUSNAME,
-        "ghostbus_sub":         tokens.SUB,
-        "ghostbus_branch":      tokens.SUB,
+        # When used with DRIVER, specify the domain that the bus drives
+        # When used with PASSENGER, HA, or on a submod, specify the bus (by domain) to which the item attaches
+        "ghostbus_domain":      tokens.DOMAIN,
+        "ghostbus_name":        tokens.DOMAIN, # DEPRECATED
+        # Associate a driver with a passenger (or vice-versa)
+        "ghostbus_branch":      tokens.BRANCH,
+        "ghostbus_sub":         tokens.BRANCH, # DEPRECATED
         # This one will hopefully be rarely needed.
         # It is to be added to a module instantiation and means "No ghostbusses pass through the top-level ports of this module"
         "ghostbus_top":         tokens.TOP,
@@ -154,14 +135,14 @@ class GhostbusInterface():
     _val_decoders = {
         tokens.HA:       handle_token_ha,
         tokens.ADDR:     lambda x: int(x, 2),
-        tokens.PORT:     split_strs,
+        tokens.DRIVER:     split_strs,
         tokens.STROBE:   lambda x: True,
         tokens.STROBE_W: lambda x: str(x),
         tokens.STROBE_R: lambda x: str(x),
-        tokens.EXTERNAL: split_strs,
+        tokens.PASSENGER: split_strs,
         tokens.ALIAS:    lambda x: str(x),
-        tokens.BUSNAME:  lambda x: x,
-        tokens.SUB:      lambda x: x,
+        tokens.DOMAIN:  lambda x: x,
+        tokens.BRANCH:      lambda x: x,
         tokens.TOP:      lambda x: True,
     }
 
@@ -179,7 +160,7 @@ class GhostbusInterface():
         # Some attributes are implied
         if rvals.get(cls.tokens.ADDR) is not None:
             # Only imply HA if not an ExternalModule
-            if rvals.get(cls.tokens.EXTERNAL) is None:
+            if rvals.get(cls.tokens.PASSENGER) is None:
                 rvals[cls.tokens.HA] = Register.UNSPECIFIED
         elif rvals.get(cls.tokens.STROBE) is not None:
             # Strobes are write-only
@@ -717,7 +698,7 @@ class GhostBusser(VParser):
                     if ismodule(inst_name):
                         attr_dict = inst_dict["attributes"]
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                        busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
+                        busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
                         toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
                         module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
@@ -759,10 +740,10 @@ class GhostBusser(VParser):
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
                     write_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
                     read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
-                    exts = token_dict.get(GhostbusInterface.tokens.EXTERNAL, None)
+                    exts = token_dict.get(GhostbusInterface.tokens.PASSENGER, None)
                     alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
-                    busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
-                    subname = token_dict.get(GhostbusInterface.tokens.SUB, None)
+                    busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+                    subname = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
                     if write_strobe is not None:
                         # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
@@ -807,7 +788,7 @@ class GhostBusser(VParser):
                         if mrs.get(busname, None) is None:
                             mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
                             printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
-                    ports = token_dict.get(GhostbusInterface.tokens.PORT, None)
+                    ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
                     if ports is not None:
@@ -843,7 +824,7 @@ class GhostBusser(VParser):
                     #     printd("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
-                    busname = token_dict.get(GhostbusInterface.tokens.BUSNAME, None)
+                    busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
                     if access is not None:
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
@@ -929,7 +910,6 @@ class GhostBusser(VParser):
         #    mmap.shrink()
         #memtree.distribute_busses()
         #self.memory_map.print(4)
-        #self.memory_maps = {None: self.memory_map} # DELETEME
         ghostmods = {}
         for key, _info in module_info.items():
             mr = _info.get("memory", None)
@@ -964,7 +944,7 @@ class GhostBusser(VParser):
                         if bus.extmod_name is not None:
                             if extmod_name != bus.extmod_name:
                                 # MULTIPLE_ASSOCIATION
-                                raise GhostbusException(f"Cannot give multiple extmod_names to the same bus ({extmod_name} and {bus.extmod_name}).")
+                                raise GhostbusException(f"Cannot make multiple branch assignments to the same bus ({extmod_name} and {bus.extmod_name}).")
                         else:
                             bus.extmod_name = extmod_name
             if not hit:
