@@ -14,12 +14,12 @@ module top #(
   parameter FOO_COPIES = 4,
   parameter TOP_BAZ = 1
 ) (
-  (* ghostbus_port="clk"  *) input  gb_clk,
-  (* ghostbus_port="addr" *) input  [23:0] gb_addr,
-  (* ghostbus_port="wdata"*) input  [31:0] gb_wdata,
-  (* ghostbus_port="rdata"*) output [31:0] gb_rdata,
-  (* ghostbus_port="wen, wstb"*) input gb_wen,
-  (* ghostbus_port="rstb"*)  input gb_rstb
+  (* ghostbus_driver="clk"  *) input  gb_clk,
+  (* ghostbus_driver="addr" *) input  [23:0] gb_addr,
+  (* ghostbus_driver="wdata"*) input  [31:0] gb_wdata,
+  (* ghostbus_driver="rdata"*) output [31:0] gb_rdata,
+  (* ghostbus_driver="wen, wstb"*) input gb_wen,
+  (* ghostbus_driver="rstb"*)  input gb_rstb
 );
 
 localparam FOO_AW = 24;
@@ -212,11 +212,11 @@ generate
       end
     end
 
-    (* ghostbus_ext="extmod_foo, clk" *)   wire fooext_clk;
-    (* ghostbus_ext="extmod_foo, addr" *)  wire [EXT_AW-1:0] fooext_addr;
-    (* ghostbus_ext="extmod_foo, wdata" *) wire [EXT_DW-1:0] fooext_wdata;
-    (* ghostbus_ext="extmod_foo, rdata" *) wire [EXT_DW-1:0] fooext_rdata;
-    (* ghostbus_ext="extmod_foo, we" *)    wire fooext_we;
+    (* ghostbus_passenger="extmod_foo, clk" *)   wire fooext_clk;
+    (* ghostbus_passenger="extmod_foo, addr" *)  wire [EXT_AW-1:0] fooext_addr;
+    (* ghostbus_passenger="extmod_foo, wdata" *) wire [EXT_DW-1:0] fooext_wdata;
+    (* ghostbus_passenger="extmod_foo, rdata" *) wire [EXT_DW-1:0] fooext_rdata;
+    (* ghostbus_passenger="extmod_foo, we" *)    wire fooext_we;
 
     extmod #(
       .aw(EXT_AW),
@@ -319,11 +319,11 @@ generate
       end
     end
 
-    (* ghostbus_ext="extmod_bar, clk" *)   wire ext_clk;
-    (* ghostbus_ext="extmod_bar, addr" *)  wire [EXT_AW-1:0] ext_addr;
-    (* ghostbus_ext="extmod_bar, wdata" *) wire [EXT_DW-1:0] ext_wdata;
-    (* ghostbus_ext="extmod_bar, rdata" *) wire [EXT_DW-1:0] ext_rdata;
-    (* ghostbus_ext="extmod_bar, we" *)    wire ext_we;
+    (* ghostbus_passenger="extmod_bar, clk" *)   wire ext_clk;
+    (* ghostbus_passenger="extmod_bar, addr" *)  wire [EXT_AW-1:0] ext_addr;
+    (* ghostbus_passenger="extmod_bar, wdata" *) wire [EXT_DW-1:0] ext_wdata;
+    (* ghostbus_passenger="extmod_bar, rdata" *) wire [EXT_DW-1:0] ext_rdata;
+    (* ghostbus_passenger="extmod_bar, we" *)    wire ext_we;
 
     extmod #(
       .aw(EXT_AW),

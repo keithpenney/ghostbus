@@ -12,26 +12,26 @@ module top #(
   parameter GB_AW = 24,
   parameter GB_DW = 32
 ) (
-  (* ghostbus_port="clk"  *)      input  gb_clk,
-  (* ghostbus_port="addr" *)      input  [GB_AW-1:0] gb_addr,
-  (* ghostbus_port="wdata"*)      input  [GB_DW-1:0] gb_wdata,
-  (* ghostbus_port="rdata"*)      output [GB_DW-1:0] gb_rdata,
-  (* ghostbus_port="wen, wstb"*)  input  gb_wen,
-  (* ghostbus_port="rstb"*)       input  gb_rstb
+  (* ghostbus_driver="clk"  *)      input  gb_clk,
+  (* ghostbus_driver="addr" *)      input  [GB_AW-1:0] gb_addr,
+  (* ghostbus_driver="wdata"*)      input  [GB_DW-1:0] gb_wdata,
+  (* ghostbus_driver="rdata"*)      output [GB_DW-1:0] gb_rdata,
+  (* ghostbus_driver="wen, wstb"*)  input  gb_wen,
+  (* ghostbus_driver="rstb"*)       input  gb_rstb
 );
 
-(* ghostbus_ext="glue_top, clk"   *) wire gluetop_clk;
+(* ghostbus_passenger="glue_top, clk"   *) wire gluetop_clk;
 // This address width is fake! It will get its aw from "glue_bottom"
-(* ghostbus_ext="glue_top, addr"  *) wire [GB_AW-1:0] gluetop_addr;
-(* ghostbus_ext="glue_top, wdata" *) wire [GB_DW-1:0] gluetop_wdata;
-(* ghostbus_ext="glue_top, rdata" *) wire [GB_DW-1:0] gluetop_rdata;
-(* ghostbus_ext="glue_top, wstb"  *) wire gluetop_wstb;
+(* ghostbus_passenger="glue_top, addr"  *) wire [GB_AW-1:0] gluetop_addr;
+(* ghostbus_passenger="glue_top, wdata" *) wire [GB_DW-1:0] gluetop_wdata;
+(* ghostbus_passenger="glue_top, rdata" *) wire [GB_DW-1:0] gluetop_rdata;
+(* ghostbus_passenger="glue_top, wstb"  *) wire gluetop_wstb;
 
-(* ghostbus_port="clk",       ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_clk;
-(* ghostbus_port="addr",      ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_AW-1:0] gluebottom_addr;
-(* ghostbus_port="wdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_wdata;
-(* ghostbus_port="rdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_rdata;
-(* ghostbus_port="wstb, wen", ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_wstb;
+(* ghostbus_driver="clk",       ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_clk;
+(* ghostbus_driver="addr",      ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_AW-1:0] gluebottom_addr;
+(* ghostbus_driver="wdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_wdata;
+(* ghostbus_driver="rdata",     ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire [GB_DW-1:0] gluebottom_rdata;
+(* ghostbus_driver="wstb, wen", ghostbus_domain="glue_bottom", ghostbus_branch="glue_top" *) wire gluebottom_wstb;
 
 bus_glue #(
   .AW(GB_AW),

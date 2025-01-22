@@ -1,8 +1,12 @@
 # Quick Links
 
+[The API](#api)
+
+[Metaphors](#metaphors)
+
 [Attributes](#attributes)
 
-* [Define the Ghostbus](#busdefine)
+* [Define a Ghostbus](#busdefine)
 
 * [Define a CSR/RAM](#csr)
 
@@ -18,6 +22,8 @@
 
 * [Assign a CSR/RAM a global alias for the JSON memory map](#alias)
 
+* [Create multiple independent ghostbusses](#ghostbus_top)
+
 [Routing Macros](#macros)
 
 * [Adding the "magic" ports to your module declaration (i.e. "let the ghostbus in")](#ghost_in)
@@ -28,7 +34,7 @@
 
 * [Including the macro definitions](#defs)
 
-# API
+# API <a name="api"></a>
 All communication with the ghostbus Python tool is via Verilog attributes.
 The attributes are documented below.  All attributes listed in the same code block are functional aliases
 (no difference in functionality).  The different aliases are provided for personal choice or "grepability".
@@ -38,21 +44,79 @@ There are no "expanded" versions of the Verilog files, but instead we include au
 a conditional block ("guarded" includes) that ensures we only include them when they exist.
 
 The auto-generated decoding and routing is placed into a series of files which are included by calling
-specially-named macros.  While this is a bit painful, please blaim the limitations of the Verilog language,
+specially-named macros.  While this is a bit painful, please blame the limitations of the Verilog language,
 not the author of this tool.  Complexity has been minimized as much as possible.
+
+## Metaphors <a name="metaphors"></a>
+
+In naming any abstract concept, invoking an appropriate metaphor is often used as a powerful mental shortcut.
+Designing a codebase with __ghostbus__ involves three types of object, each of which deserves its own name
+which should hopefully immediately bring to mind its function and usage.
+
+### A bus _driver_
+A given bus has a single _driver_ which initiates transactions on the bus (drives the `address`, `write_data`,
+and control nets, and takes input data on the `read_data` nets).
+Even if multiple hosts can control the bus, we declare the nets _after_ the mux to be the _driver_ in this context.
+I like the term _driver_ because it's applicable to both busses in the EE sense, and those in the transportation
+sense. Alternate terms could be _controller_, _publisher_, _broadcaster_, _central_, or _master_, though I
+personally avoid the latter.
+
+An example bus _driver_ implementing a `localBus` protocol in Verilog could look like this.
+```verilog
+wire          driver_clk = my_clk;
+wire [aw-1:0] driver_addr = my_addr;
+wire [dw-1:0] driver_wdata = my_write_data;
+wire [dw-1:0] driver_rdata; // The driver doesn't control this net, the passengers do!
+wire          driver_wen = my_write_enable;
+wire          driver_ren = my_read_enable;
+```
+
+### A bus _passenger_
+Ok, this might be hitting the _bus_ metaphor a bit too hard, but I like the symmetry with _driver_.  This
+describes a set of nets which should be attached to a bus and respond to transactions (perform writes when
+requested, and respond to reads in its address space with data).  Alternate terms could be _peripheral_,
+_responder_, _subscriber_, _remote_, or _slave_, though I really don't like that last one.
+
+```verilog
+wire          passenger_clk;
+wire [aw-1:0] passenger_addr;
+wire [dw-1:0] passenger_wdata;
+wire [dw-1:0] passenger_rdata = my_read_data; // The one net the passenger controls
+wire          passenger_wen;
+wire          passenger_ren;
+```
+
+### A bus _entry_ (CSR)
+This one doesn't quite fit the metaphor, but it is simply a `reg` or `wire` to store write data or from which
+read data is sourced.  The auto-generated local _passenger_ parses writes from the _driver_ and divvies them
+out to their addressed _entry_.  Symmetrically, it responds to reads from the _driver_ by latching the current
+value of the addressed _entry_ into the `read_data` register.  A 1-dimensional _entry_ is commonly called a
+_Control/Status Register_ (CSR) and can be read-only, write-only, or read/write.  A 2-dimensional _entry_ is
+a RAM which is most often just a convenient structure and is actually unrolled into an array of CSRs, though
+it can be used in both contexts automatically by __ghostbus__.
+
+### Summary
+Using the above metaphors, designing with __ghostbus__ involves creating one or more bus _drivers_ and allowing
+the resulting auto-routed bus nets into every module where they're needed.  Then in each of these modules,
+_entries_ (CSRs/RAMs) can be declared as usual right where they are used.  For those times where you need the
+explicit nets of a bus (i.e. to interface with an existing module with bus ports), a bus _passenger_ is created
+which gets address space allocated according to the width of its `address` net.
+
+Additional magic comes from associating a _driver_ with a _passenger_ such that busses can be transformed,
+(e.g. for crossing clock domains) and auto-routing can continue across the boundary of custom code.
 
 ## Attributes <a name="attributes"></a>
 
-### Define the Ghostbus <a name="busdefine"></a>
+### Define a Ghostbus <a name="busdefine"></a>
 ```verilog
-(* ghostbus_port="port_name" *)
+(* ghostbus_driver="port_name" *)
 ```
-The nets that make up the Ghostbus must be identified individually.  For a simple localbus-style bus,
-we need at least a clock net, and address vector, and a write-data and/or read-data vector.  The tool
-currently complains if it's not a R/W bus (both `rdata` and `wdata`) and if the `wen` signal is missing.
-It's a __TODO__ to allow a read-only ghostbus.
+The nets that make up the Ghostbus must be identified individually because Verilog (not SystemVerilog)
+has no way of associating the individual nets of a bus.  For a simple `localBus`-style bus, we need
+at least a _clock_ net, and _address_ vector, and a _write-data_ and/or _read-data_ vector.
 
-For localbus-protocol, the following are valid values for the `ghostbus_port` attribute:
+For `localBus`-protocol (currently the only bus protocol supported), the following are valid values for the
+`ghostbus_driver` attribute:
 * `clk`: the clock signal
 * `addr`: the address vector
 * `rdata`, `din`: the vector carrying data from the bus into the host
@@ -64,13 +128,21 @@ For localbus-protocol, the following are valid values for the `ghostbus_port` at
 
 _Example_:
 ```verilog
-(* ghostbus_port="clk" *)   wire lb_clk;
-(* ghostbus_port="addr" *)  wire [LB_AW-1:0] lb_addr;
-(* ghostbus_port="rdata" *) wire [LB_AW-1:0] lb_rdata;
-(* ghostbus_port="wdata" *) wire [LB_AW-1:0] lb_wdata;
-(* ghostbus_port="wen" *)   wire [LB_AW-1:0] lb_wnr;
+(* ghostbus_driver="clk" *)   wire             lb_clk;
+(* ghostbus_driver="addr" *)  wire [LB_AW-1:0] lb_addr;
+(* ghostbus_driver="rdata" *) wire [LB_DW-1:0] lb_rdata;
+(* ghostbus_driver="wdata" *) wire [LB_DW-1:0] lb_wdata;
+(* ghostbus_driver="wen" *)   wire             lb_wnr;
 
 // Then just connect these nets to whatever is driving the bus (the bus controller) as usual
+```
+
+Alternate attribute names (pick your metaphor; they all work identically):
+```verilog
+(* ghostbus_driver="portname" *)
+(* ghostbus_controller="portname" *)
+(* ghostbus_pub="portname" *)
+(* ghostbus_dom="portname" *)
 ```
 
 __NOTE__: The way the ghostbus declaration is done should bring to mind how the ghostbus can play nicely on a sub-region
@@ -81,55 +153,56 @@ __NOTE__: I'd love some help supporting other bus protocols (e.g. AXI4(lite), wi
 In addition to the above, a method is provided to tack on one or more weird signals to your bus which will become part
 of the bus definition and will "ride along" with the bus and get routed into all the same places the bus goes.  Some
 oddball use cases could include a "pre-read" signal that gives forewarning that a read is coming, or some additional
-context lines like a status/response code.  The only way to use such signals is by _conjuring_ a "real bus" (see below)
-and specifying the special net in question.
+context lines like a status/response code.  Only bus _passengers_ can make use of such a signal (as they are ignored
+by the auto-generated local _passenger_).
 
 For the below attributes, the `N` is any positive integer.  There is no upper bound to the number of wacky signals that
 can ride along with your very strange bus.
-* `extra_inN`, `extra_inputN`: some special net that is an input into the host
-* `extra_outN`, `extra_outputN`: some special net that is an output from the host
+* `extra_inN`, `extra_inputN`: some special net that is an input into the host/driver
+* `extra_outN`, `extra_outputN`: some special net that is an output from the host/driver
 
 _Example_:
 ```verilog
 // Declare the ghostbus as in the example above
-(* ghostbus_port="clk" *)         wire lb_clk;
+(* ghostbus_driver="clk" *)         wire lb_clk;
 //... assume the rest of the ghostbus is declared
 
 // Tack on an extra output (host-centric nomenclature) from the host
-(* ghostbus_port="extra_out0" *)  wire odd_duck; // who knows what this does? Ghostbus doesn't care.
+(* ghostbus_driver="extra_out0" *)  wire odd_duck; // who knows what this does? Ghostbus doesn't care.
 
-// Conjure a real bus sometime later.  Could be anywhere the ghostbus goes.
-// See "Conjuring" discussion below
-(* ghostbus_ext="foo_bus, clk" *)        wire foo_clk;
+// Declare a bus passenger sometime later.  Could be anywhere the ghostbus goes.
+(* ghostbus_passenger="foo_bus, clk" *)        wire foo_clk;
 //... again assume we conjure as much of the bus as needed
 
 // We'll also grab this special signal we defined earlier
-(* ghostbus_ext="foo_bus, extra_out0" *) wire foo_odd_duck;
+(* ghostbus_passenger="foo_bus, extra_out0" *) wire foo_odd_duck;
 
-// Note that "foo_odd_duck" will assert whenever "odd_duck" asserts and the address specified is
-// within the block allocated to the "foo_bus" external module (and "address hit")
+// Note that "foo_odd_duck" will be directly driven by "odd_duck"
 ```
 ---------------------------------------------------------------------------------------------------
 ### Define a CSR/RAM <a name="csr"></a>
 ```verilog
 // Add a CSR/RAM with R/W access (default)
-(* ghostbus *) reg foo;
-(* ghostbus_ha *) reg foo;
-(* ghostbus_csr *) reg foo;
-(* ghostbus_ram *) reg foo;
-(* ghostbus="rw" *) // Optional explicit access specifier
+(* ghostbus *)      reg foo;
+(* ghostbus_ha *)   reg foo;
+(* ghostbus_csr *)  reg foo;
+(* ghostbus_ram *)  reg foo;
+(* ghostbus="rw" *) reg foo; // Optional explicit access specifier
 
 // Add a CSR/RAM with read-only access
-(* ghostbus *) wire foo;
-(* ghostbus="r" *)
-(* ghostbus="ro" *)
+(* ghostbus *)      wire foo;
+(* ghostbus="r" *)  wire foo;
+(* ghostbus="ro" *) wire foo;
 
 // Add a CSR/RAM with write-only access
-(* ghostbus="w" *)
-(* ghostbus="wo" *)
+(* ghostbus="w" *)  reg foo;
+(* ghostbus="wo" *) reg foo;
 
-// Invalid r/w access of 'wire' type
+// INVALID r/w access of 'wire' type
 (* ghostbus="rw" *) wire foo;
+
+// INVALID w/o access of 'wire' type
+(* ghostbus="w" *)  wire foo;
 ```
 All the above attributes are aliases (function identically).
 The various choices are provided for cases where you e.g. want to easily find your CSRs or your RAMs, or
@@ -148,15 +221,29 @@ read-only (ro).  These assumptions only apply when no explicit specifier is give
 ---------------------------------------------------------------------------------------------------
 ### Place a CSR/RAM at an explicit global address <a name="address"></a>
 ```verilog
-(* ghostbus_addr='h2000 *)
-```
-Forces the tool to place the marked CSR/RAM at an explicit address.
-Explicit addresses get priority when assigning the memory map.
-The tool will raise a Python exception if the address conflicts with any other explicit address or if
-it requires more address bits than were allocated to the bus itself.
+// A simple CSR at 0x2000
+(* ghostbus_addr='h2000 *) reg foo;
 
-__NOTE__: The `ghostbus_addr` attribute implies `ghostbus_ha` so you don't need them both (though they will
-not conflict if you add them both).
+// A submodule starting from base 0x800
+(* ghostbus_addr='h800 *) my_module my_inst (
+  .clk(clk), 
+  .some_nets(my_nets)
+  `GHOSTBUSPORTS
+);
+
+// A portion of an 8-bit passenger bus at base 0x100
+(* ghostbus_addr='h100, ghostbus_passenger="foo, addr" *) wire [7:0] foo_addr;
+```
+Forces the tool to place the marked CSR/RAM/submodule/passenger at an explicit base address.
+Explicit addresses get priority when assigning the memory map.
+The tool will raise a Python exception if:
+* the address conflicts with any other explicit address
+* it requires more address bits than were allocated to the bus itself.
+* the specified address is not aligned with the address width of the CSR/RAM/submodule (i.e. for address
+  width `aw`, the least-significant `aw` bits of the base address must be zero).
+
+__NOTE__: When used on a CSR/RAM, the `ghostbus_addr` attribute implies `ghostbus_ha` so you don't need
+them both (though they will not conflict if you add them both).
 
 ---------------------------------------------------------------------------------------------------
 ### Add a simple strobe to the memory map <a name="simplestrobe"></a>
@@ -165,7 +252,6 @@ not conflict if you add them both).
 ```
 This adds a single-bit strobe to the memory map.  When you write to the resulting address, the net will strobe
 high triggered by the `wstb` signal of the bus while the written value is ignored/discarded.
-
 If you want both the written value and a strobe when it is written, you want an "associated strobe" (see below).
 
 __NOTE__: The tool currently only supports `reg` type nets, but it could easily support `wire` type in the future.
@@ -213,29 +299,37 @@ _Example_:
 ```
 
 ---------------------------------------------------------------------------------------------------
-### Conjuring: Add an external module to the Ghostbus <a name="conjure"></a>
+### Declaring a bus passenger <a name="conjure"></a>
 ```verilog
-(* ghostbus_ext="bus_name, port_name" *)
+(* ghostbus_passenger="bus_name, port_name" *)
 ```
-As nice as it would be to build an entire codebase using just ghostbus CSRs/RAMs, it's often necessary to attach an
-existing module with a compatible bus interface to the ghostbus itself.  Since the ghostbus is auto-routed, you
-can't just attach to it manually, you have to declare and tag nets with attributes much in the same way that we define
-the ghostbus itself (see above).  The big difference is that the bus gets a name as well (since we can attach as many
-modules to the bus as we want).  __NOTE__: we'll call this process _conjuring_ (going with the ghost metaphor).
 
-The address width of the _conjured_ bus determines the size of the chunk of memory map is allocated to this external
+Alternate attribute names (pick your metaphor; they all work identically):
+```verilog
+(* ghostbus_passenger="bus_name, port_name" *)
+(* ghostbus_peripheral="bus_name, port_name" *)
+(* ghostbus_sub="bus_name, port_name" *)
+```
+
+As nice as it would be to build an entire codebase using just __ghostbus__ CSRs/RAMs, it's often necessary to attach
+an existing module with a compatible bus interface to an auto-routed ghostbus.  Since the ghostbus routed via magic
+macros, you can't just attach to it manually, you have to declare and tag nets with attributes much in the same way
+that we define the ghostbus itself (see above).  The major asymmetry is that the bus needs a name as well (since we
+can attach as many modules to the bus as we want) and this is the name that is used in the resulting memory map.
+
+The address width of the _passenger_ bus determines the size of the chunk of memory map is allocated to this external
 module (so use the minimum address width possible and zero-extend as needed).  Similarly, the data width is determined
-by the width of the `wdata` and/or `rdata` vectors.  Both the address width (aw) and data width (dw) of the external
-module (i.e. the _conjured_ bus) must be less than or equal to the associated aw/dw of the ghostbus.
+by the width of the `wdata` and/or `rdata` vectors.  Both the address width (aw) and data width (dw) of the _passenger_
+bus must be less than or equal to the associated aw/dw of the _driver_ ghostbus.
 
-__NOTE__: Don't declare the `clk` net on a conjured bus.  So far the tool only supports a single clock domain.
+__NOTE__: If you already have access to the clock signal, the `clk` net on a _passenger_ bus is entirely optional.
 
-_Example_: Instantiating the config romx and attaching it to the ghostbus at one of the LEEP-standard addresses
+_Example_: Instantiating a config romx and attaching it to a ghostbus at one of the LEEP-standard addresses
 ```verilog
 // Conjure a bus to connect the romx
-(* ghostbus_ext="rom, rdata" *) wire [15:0] romx_rdata;
+(* ghostbus_passenger="rom, rdata" *) wire [15:0] romx_rdata;
 // Note that I'm giving it an explicit address here
-(* ghostbus_ext="rom, addr", ghostbus_addr='h4000 *) wire [10:0] romx_addr;
+(* ghostbus_passenger="rom, addr", ghostbus_addr='h4000 *) wire [10:0] romx_addr;
 
 // Prevent recursive dependency
 `ifdef YOSYS
@@ -262,6 +356,48 @@ _Example_:
 ```verilog
 (* ghostbus, ghostbus_alias="mark_twain" *) reg [7:0] sam_clemens=0;
 ```
+
+---------------------------------------------------------------------------------------------------
+### Handling multiple bus domains <a name="domains"></a>
+```verilog
+// Attach CSR 'foo_dsp' to the ghostbus controlling domain 'dsp'
+(* ghostbus, ghostbus_domain="dsp" *)   reg foo_dsp;
+
+// Attach CSR 'foo_comms' to the ghostbus controlling domain 'comms'
+(* ghostbus, ghostbus_domain="comms" *) reg foo_comms;
+
+// Attach bus passenger 'bar' to the ghostbus controlling domain 'dsp'
+(* ghostbus_passenger="bar, addr", ghostbus_domain="dsp" *) wire [7:0] bar_addr;
+
+// Auto-route the ghostbus controlling domain 'comms' into submodule 'wiz_inst'
+(* ghostbus_domain="comms" *) module_wiz #(...) wiz_inst (...);
+```
+
+Multiple ghostbusses can be declared at the same level, in which case we need to have a way to
+specify which one we want to attach to.  When used with `ghostbus_driver` on the nets of a ghostbus,
+this attribute specifies the name of the domain that this ghostbus is driving.  When used with
+`ghostbus` on a CSR/RAM or `ghostbus_passenger` on a _passenger_ bus, this attribute specifies the
+domain of the ghostbus to which the marked item should attach.
+
+When used on a _ghostmod_ (a module which lets in a ghostbus with the `` `GHOSTBUSPORTS`` macro),
+this attribute specifies the particular ghostbus which should be auto-routed into the _ghostmod_.
+__NOTE__: Only one ghostbus can be auto-routed into a module... sorry!
+
+---------------------------------------------------------------------------------------------------
+### Create multiple independent ghostbusses <a name="ghostbus_top"></a>
+```verilog
+(* ghostbus_top *) my_module my_module_inst (...);
+```
+
+We can already create independent ghostbusses using the `ghostbus_domain` attribute (as described above),
+so why do we need yet another?  Consider the oddball case in which we have a submodule which is instantiated
+within a module containing ghostbus stuff (busses, CSRs, etc).  And suppose this submodule declares a new
+ghostbus and does some auto-routing magic with that new (possibly totally unrelated) ghostbus.  Without
+some special way of letting the tool know these are unrelated ghostbusses, the tool will assume that the
+submodule is supposed to be on the memory map of the default ghostbus in the parent module and will allocate
+space in the memory map and auto-generate hookup logic.  We can suppress this behavior by tacking the
+`ghostbus_top` attribute to the submodule instantiation within the parent module. This should be quite rare
+in practice as it's easy to structure your codebase to avoid such wackiness.
 
 ## Routing Macros  <a name="macros"></a>
 
@@ -311,10 +447,10 @@ module gerald (
 );
 
 // Two instances of the same module necessarily have different instance names
-vince vaughn (
+vince guaraldi (
   .clk(clk)
 `ifdef GHOSTBUS_LIVE
-`GHOSTBUS_gerald_vaughn
+`GHOSTBUS_gerald_guaraldi
 `endif
 );
 

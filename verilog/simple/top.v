@@ -9,12 +9,12 @@
 `endif
 
 module top (
-  (* ghostbus_port="clk"  *) input  gb_clk,
-  (* ghostbus_port="addr" *) input  [23:0] gb_addr,
-  (* ghostbus_port="wdata"*) input  [31:0] gb_wdata,
-  (* ghostbus_port="rdata"*) output [31:0] gb_rdata,
-  (* ghostbus_port="wen, wstb"*) input gb_wen,
-  (* ghostbus_port="rstb"*)  input gb_rstb
+  (* ghostbus_driver="clk"  *) input  gb_clk,
+  (* ghostbus_driver="addr" *) input  [23:0] gb_addr,
+  (* ghostbus_driver="wdata"*) input  [31:0] gb_wdata,
+  (* ghostbus_driver="rdata"*) output [31:0] gb_rdata,
+  (* ghostbus_driver="wen, wstb"*) input gb_wen,
+  (* ghostbus_driver="rstb"*)  input gb_rstb
 );
 
 localparam FOO_AW = 24;

@@ -33,9 +33,7 @@ __TODO:__
   * Mangle ghostbus port names to reduce potential for port/net name collisions
   * Configurable pipelining
   * Auto-pipelining for module-specific read delays
-  * Support for multiple ghostbusses
   * Alternate bus architectures (AXI4/AXI4LITE, wishbone, etc)
-  * Allow ports to be CSRs - all should be allowed to be read-only and `output reg` type should be allowed to be r/w
 
 ## Usage
 See the [API documentation]("API.md") for usage.
@@ -55,91 +53,6 @@ See the [API documentation]("API.md") for usage.
 
 3. If a module is not 'top', the default domain is the implied bus.  If any additional busses are declared in this module,
    each needs to be assigned a distinct explicit domain via the `(* ghostbus_domain="foo" *)` attribute.
-
-
-I'm a bit conflicted on how to support multiple ghostbusses.  Theoretically, it should not be difficult but it requires
-a bit more complexity in the API/macro naming convention.
-
-Wait! If a module has only a single ghostbus coming in (a normal ghostmod), we should _NOT_ be requiring the macro
-specify the name of this single bus!  That kills code reuse!  So any module that contains only a single ghostbus should
-be able to use the simple macros/attributes.  This actually seems like it could be fairly easy to handle for a multi-bus
-project by simply requiring that all busses have the same protocol/AW/DW.  Then the port names can be generic/universal
-and we only distinguish between the busses (with the specific macros/attributes detailed below) in the particular layer
-where multiple busses exist.
-
-Specifically, these need to change somehow:
-  `(* ghostbus_port="port_name", ghostbus_domain="bus_name" *)`
-
-    Suppose in the top module we have two ghostbusses declared and named, and we also have a ghostmod instantiated
-    at that same level.  How do we specify which ghostbus is to wire to the ghostmod?
-    Let's use an attribute on the module instance!
-      `(* ghostbus_name="ghostbus_name" *) foo foo_i (...);`
-    Again, this will only be needed in the scenario considered above.
-
-  * `(* ghostbus_ext="bus_name, port_name" *)`
-    For the vast majority of use cases (only a single ghostbus comes into the module), the above should be sufficient.
-    For those times where you want to conjure an external bus onto a single ghostbus in the same module with others,
-    you'll need to specify the bus (or risk it getting hooked up to the wrong one).  This only affects the routing
-    logic.
-    Let's make this agree with `ghostbus_port` above:
-      `(* ghostbus_ext="extbus_name, port_name", ghostbus_domain="ghostbus_name" *)`
-    The rule should be:
-      If `ghostbus_domain` is not None, get the bus net names from the named bus.
-      Else, use the generic bus port names.
-
-A few more considerations with multiple busses:
-  1. If a module appears as an instance in more than one domain, the bus protocol, AW, and DW of the two busses must be
-     identical.  This requirement makes sense if you consider hand-writing the bus ports and connecting each bus to them.
-     Of course AW and DW could be parameters of the module, but then that adds a new requirement for another GHOSTBUS
-     macro in the parameters section.  I want to avoid that and this tiny gotcha doesn't seem to be too bad.
-
-  2. Multiple busses can also be managed at the Makefile level by segmenting the codebase into domains and then treating
-     each domain as a separate project with a single ghostbus (using the simplified macros/attributes).  Then you'd end
-     up with a separate `regmap.json` generated for each domain which would need to be merged into a single JSON by some
-     other tool (outside the scope of this tool).
-
-
-### Decoding
-
-I'd like the decoding rules to be parameterized in the future.  For now, they're fixed.  These are the
-current decoding rules:
-1. Each module only sees its own address space on the bus.  Addresses passed to submodules always mask out the upper bits
-   to ensure this remains true.  This is the only portable solution (i.e. two instances at different parts of the memory
-   map must have the same decoding logic, so they must not be aware of the memory map beyond their own range).
-   The alignment of the memory map makes this trivial and resource-efficient.
-
-2. Local registers (CSRs and RAMs instantiated directly in a given module) are decoded with sequential (clocked) logic.
-   Bus decoding to submodules passes through with combinational logic (so that the transaction delay does not depend on
-   the hierarchy).
-
-3. Local registers should be packed as tightly as possible (i.e. try to avoid setting explicit addresses) to reduce the
-   LUT usage for address decoding.
-
-### Pipeline and fanout
-(slightly out-dated by the __Decoding__ section above, but still contains important consideration)
-
-The behavior of the decoder should be parameterized.  In the simplest case, we can route the whole bus with
-combinational logic (pipeline depth of 0).  This should be sufficient for small designs, but will create
-high fanout and resource usage as the project grows.
-
-As the HDL design itself is structured hierarchically and the whole _ghostbus_ memory management concept is
-similarly structured, it would make sense to use module boundaries as natural pipeline delimiters (i.e. the
-bus decoding in a child module will be one cycle delayed from the decoding in the parent).  Blindly applying
-this rule would create unnatural and buggy dependence of the bus timing on the hierarchy.  Instead, I propose
-a configurable parameter for pipeline length.
-
-Consider an example design as a tree of modules with the longest branch being 5 modules deep.  If we choose
-a decoder pipeline length of 2 for this design, the longest branch would behave like this:
-
-  |Cycle num     |Branch level| Notes                                             |
-  |--------------|------------|---------------------------------------------------|
-  |0             |0           |The top level is not delayed wrt the bus controller|
-  |1             |1           |The first level down is one cycle delayed          |
-  |2             |2, 3, 4     |The remainder of the branch is two cycles delayed  |
-  |--------------|------------|---------------------------------------------------|
-
-If it is determined to be important, extra logic could be added to ensure the delay between the bus controller
-asserting a write strobe and module receiving it is consistent across the entire design, regardless of hierarchy.
 
 ### Read cycles
 

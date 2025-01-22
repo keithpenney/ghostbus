@@ -33,11 +33,11 @@ end
 localparam ext_aw = 2;
 localparam ext_dw = 8;
 
-(* ghostbus_ext="ext_i, clk" *) wire bus_clk;
-(* ghostbus_ext="ext_i, addr" *) wire [ext_aw-1:0] ext_addr;
-(* ghostbus_ext="ext_i, wdata" *) wire [ext_dw-1:0] ext_wdata;
-(* ghostbus_ext="ext_i, rdata" *) wire [ext_dw-1:0] ext_rdata;
-(* ghostbus_ext="ext_i, we" *) wire ext_we;
+(* ghostbus_passenger="ext_i, clk" *) wire bus_clk;
+(* ghostbus_passenger="ext_i, addr" *) wire [ext_aw-1:0] ext_addr;
+(* ghostbus_passenger="ext_i, wdata" *) wire [ext_dw-1:0] ext_wdata;
+(* ghostbus_passenger="ext_i, rdata" *) wire [ext_dw-1:0] ext_rdata;
+(* ghostbus_passenger="ext_i, we" *) wire ext_we;
 
 extmod #(
   .aw(ext_aw),
