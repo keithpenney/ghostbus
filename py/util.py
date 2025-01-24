@@ -112,3 +112,38 @@ def identical(ll):
         if l != l0:
             return False
     return True
+
+def identical_or_none(ll):
+    """Return True if all items in list 'll' are the same or None"""
+    if len(ll) <= 1:
+        return True
+    l0 = ll[0]
+    for l in ll[1:]:
+        if l is not None:
+            if l0 is None:
+                l0 = l
+            elif l != l0:
+                return False
+    return True
+
+def get_non_none(ll):
+    """Return the first instance in list ll that is not None (or None)."""
+    for l in ll:
+        if l is not None:
+            return l
+    return None
+
+def check_consistent_offset(ll):
+    offset = None
+    last_item = ll[0]
+    for item in ll[1:]:
+        this_offset = item-last_item
+        if offset is None:
+            offset = this_offset
+        elif offset != this_offset:
+            return False
+        last_item = item
+    return True
+
+
+

@@ -2,7 +2,7 @@
 
 import os
 
-from memory_map import Register, MemoryRegion, bits
+from memory_map import Register, MemoryRegion, bits, is_aligned
 from gbexception import GhostbusException, GhostbusFeatureRequest, GhostbusInternalException
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, isForLoop
 from util import strDict, check_complete_indices, feature_print
@@ -106,9 +106,9 @@ class BusLB():
         self._base = None
         self._sub = None
         self.alias = None # TODO Is this even used?
-        # 'extmod_name' is used for pseudo-bus domains which are associated with an extmod
+        # 'association' is used for pseudo-bus domains which are associated with an extmod
         # declared in the same module
-        self.extmod_name = None
+        self.association = None
         self._port_list = None
         self.genblock = None
 
@@ -1069,7 +1069,7 @@ class DecoderDomainLB():
         self.gbportbus = gbportbus
         # Keep a list of all known ghostbusses (global, could be anywhere)
         self._ghostbusses = ghostbusses
-        self.busdomain = self.mod.busname # I think this may be identical to self.domain
+        self.busdomain = self.mod.domain # I think this may be identical to self.domain
         self.ghostbus_dict = {}
         for bus in self._ghostbusses:
             self.ghostbus_dict[bus.name] = bus
@@ -1088,7 +1088,7 @@ class DecoderDomainLB():
             # If the toptag is set, no implied busses coming in
             implied_busses = ()
         else:
-            implied_busses = (self.mod.busname,)
+            implied_busses = (self.mod.domain,)
         memregion.implicit_busses = implied_busses
         # ========================================= Cute print formatting - DELETEME
         if False:
@@ -1160,14 +1160,14 @@ class DecoderDomainLB():
             elif isinstance(ref, ExternalModule):
                 ref.ghostbus = self.ghostbus
                 if hasattr(ref, "genblock") and ref.genblock is not None:
-                    feature_print(f"ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
+                    print(f"7223 ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
                     # BUBBLES - The relative address 'start' is available here.  Do I need to store it for future use, or is extmod.base equivalent?
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
                     self.parent.register_block_verilogger(ref.genblock.branch)
                 else:
-                    #print(f"ExternalModule {ref.name} is at the top level")
+                    print(f"7224 ExternalModule {ref.name} is at the top level")
                     self.exts.append((start, ref))
             if isinstance(ref, GBRegister): # Only CSRs are local now
                 if stop > self.max_local:
@@ -1180,6 +1180,26 @@ class DecoderDomainLB():
         code is generated."""
         resolved_map = {}
         for branch, extmods in self.block_exts.items():
+            # Annoyingly, I need to keep a separate list of 'handled' objects since I'm storing
+            # them as copies in 'resolved_list' (so I can't just check there)
+            handled = []
+            resolved_list = []
+            for passenger in extmods:
+                if passenger.parent_ref is None:
+                    pref = passenger
+                else:
+                    pref = passenger.parent_ref
+                if pref not in handled:
+                    handled.append(pref)
+                    #parent = pref.copy()
+                    parent = pref # Need to find a way to safely copy
+                    ref_list = parent.ref_list
+                    parent.base_list = [ref.base for ref in ref_list]
+                    new_aw = bits(len(ref_list)) + parent.aw
+                    parent.block_aw = new_aw
+                    parent.name = parent.basename
+                    resolved_list.append(parent)
+            """
             to_resolve = {}
             # Gather any extmods that share a base (copies from a for-loop)
             for extmod in extmods:
@@ -1221,6 +1241,7 @@ class DecoderDomainLB():
                     ext.block_aw = new_aw
                     ext.base_list = [x.base for x in ext_list]
                     resolved_list.append(ext)
+            """
             resolved_map[branch] = resolved_list
         self.block_exts = resolved_map
         return
@@ -1360,13 +1381,16 @@ class DecoderDomainLB():
                 if csr.genblock.isFor():
                     # If the CSR is in a FOR loop, I need to unroll it here
                     #base = csr.base
-                    copies = csr.unroll()
+                    #copies = csr.unroll()
                     #print(f"CSR {csr.name} in FOR loop of loop_len {csr.genblock.loop_len} from 0x{csr.base:x}")
-                    for copy in copies:
+                    #for copy in copies:
                         #copy = csr.copy()
                         #copy.base = base + n
-                        copy._domain = (self.base, self.mod.name)
-                        csrlist.append(copy)
+                    #    copy._domain = (self.base, self.mod.name)
+                    #    csrlist.append(copy)
+                    copy = csr.copy()
+                    copy._domain = (self.base, self.mod.name)
+                    csrlist.append(copy)
                 else:
                     # CSRs in IF block just go in like normal
                     copy = csr.copy()
@@ -1386,11 +1410,14 @@ class DecoderDomainLB():
             ramlist.append(copy)
         for branch, rams in self.block_rams.items():
             for ram in rams:
-                copies = ram.unroll()
-                for copy in copies:
-                    #copy = ram.copy()
-                    copy._domain = (self.base, self.mod.name)
-                    ramlist.append(copy)
+                #copies = ram.unroll()
+                #for copy in copies:
+                #    #copy = ram.copy()
+                #    copy._domain = (self.base, self.mod.name)
+                #    ramlist.append(copy)
+                copy = ram.copy()
+                copy._domain = (self.base, self.mod.name)
+                ramlist.append(copy)
         for base, submod in self.submods:
             submod._collectRAMs(ramlist)
         # TODO: include submods in generate blocks
@@ -1406,15 +1433,19 @@ class DecoderDomainLB():
             for ext in exts:
                 if ext.genblock.isFor():
                     # Unroll it here
-                    copies = ext.unroll()
+                    #copies = ext.unroll()
                     #for n in range(len(ext.base_list)):
-                    for copy in copies:
-                        #base = ext.base_list[n]
-                        #copy = ext.copy()
-                        #copy.base = base
-                        #copy.name = f"{ext.name}_{n}"
-                        copy._domain = (self.base, self.mod.name)
-                        extlist.append(copy)
+                    #for copy in copies:
+                    #    base = ext.base_list[n]
+                    #    copy = ext.copy()
+                    #    copy.base = base
+                    #    copy.name = f"{ext.name}_{n}"
+                    #    copy._domain = (self.base, self.mod.name)
+                    #    extlist.append(copy)
+                    copy = ext.copy()
+                    #copy.base = base
+                    copy._domain = (self.base, self.mod.name)
+                    extlist.append(copy)
                 else:
                     copy = ext.copy()
                     copy._domain = (self.base, f"{self.mod.name}_{branch}")
@@ -1585,12 +1616,12 @@ class DecoderDomainLB():
         divwidth = local_aw - ram.aw
         base_rel = ram.base
         end = base_rel + (1<<ram.aw) - 1
+        addrhit = f"wire addrhit_{branch}_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)};" \
+                + f" // 0x{base_rel:x}-0x{end:x}"
         if None in ram.range:
             rangestr = ""
         else:
             rangestr = f"[{ram.range[0]}:{ram.range[1]}] "
-            addrhit = f"wire addrhit_{branch}_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)};" \
-                    + f" // 0x{base_rel:x}-0x{end:x}"
             if ram.genblock.isFor():
                 rangestr = ram.genblock.unrollRangeString(rangestr) + " "
                 addrhit_range = f"[{ram.genblock.unrolled_size}-1:0] "
@@ -2282,7 +2313,7 @@ class DecoderDomainLB():
             for submod in submods:
                 if submod.genblock.isIf():
                     continue
-                index = csr.genblock.index
+                index = submod.genblock.index
                 aw = submod.domains[None].mod.aw
                 base = submod.domains[None].mod.base
                 awdiff = self.ghostbus.aw - aw

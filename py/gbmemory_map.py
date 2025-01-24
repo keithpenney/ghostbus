@@ -3,8 +3,10 @@
 import re
 
 from yoparse import getUnparsedWidthAndDepthRange, getUnparsedWidthRangeType, NetTypes
-from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory
+from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbexception import GhostbusException
+from policy import Policy
+from util import check_consistent_offset
 
 _DEBUG_PRINT=False
 def printd(*args, **kwargs):
@@ -24,13 +26,11 @@ class GBRegister(Register):
         "read_strobes": [],
         "alias": None,
         "signed": None,
-        # TODO - Can I get rid of "manually_assigned"?
-        "manually_assigned": False,
         "manual_addr": None,
         "net_type": None,
-        "busname": None,
+        "domain": None,
         "genblock": None,
-        #"ref_list": [],
+        "ref_list": [],
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -42,6 +42,18 @@ class GBRegister(Register):
             setattr(self, name, default)
         # A bit weird, but helpful
         #self.ref_list.append(self)
+
+    @property
+    def busname(self):
+        # TODO - elevate this to Exception and squash
+        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
+        return self.domain
+
+    @busname.setter
+    def busname(self, value):
+        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
+        self.domain = value
+        return
 
     @property
     def base_list(self):
@@ -98,6 +110,13 @@ class GBRegister(Register):
             return False
         return True
 
+    def _copyRangeDepth(self, register):
+        """Copy the range, access, and net_type from GBRegister object 'register'"""
+        self.range = register.range
+        self.access = register.access
+        self.net_type = register.net_type
+        return
+
     @property
     def size_str(self):
         """Get the size of the register as an unpreprocessed string
@@ -134,13 +153,12 @@ class GBMemory(Memory):
         "depth": (None, None),
         "alias": None,
         "signed": None,
-        # TODO - Can I get rid of "manually_assigned"?
-        "manually_assigned": False,
         "manual_addr": None,
-        "busname": None,
+        "domain": None,
         "access": Memory.RW,
         "genblock": None,
-        #"ref_list": [],
+        "ref_list": [],
+        "block_aw": 0,
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -151,6 +169,18 @@ class GBMemory(Memory):
             setattr(self, name, default)
         # A bit weird, but helpful
         #self.ref_list.append(self)
+
+    @property
+    def busname(self):
+        # TODO - elevate this to Exception and squash
+        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
+        return self.domain
+
+    @busname.setter
+    def busname(self, value):
+        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
+        self.domain = value
+        return
 
     @property
     def base_list(self):
@@ -185,6 +215,12 @@ class GBMemory(Memory):
             _pass = False
         return _pass
 
+    def _copyRangeDepth(self, memory):
+        """Copy the range, access, and net_type from GBMemory object 'memory'"""
+        self.range = memory.range
+        self.depth = memory.depth
+        return
+
     @property
     def size_str(self):
         """Get the size of the register as an unpreprocessed string
@@ -209,6 +245,7 @@ class GBMemory(Memory):
             return f"({d1}+1)"
         return f"({d1}-{d0}+1)"
 
+    # DELETEME - I'm trying to not use this anymore
     def unroll(self):
         if self.genblock is None:
             return (self,)
@@ -230,7 +267,7 @@ class GBMemoryRegionStager(MemoryRegionStager):
         "bustop": False,
         "declared_busses": (),
         "implicit_busses": (),
-        "busname": None,
+        "_busname": None, # TODO Do I need this?
         "domain": None,
         # A pseudo-domain is one that looks like a bus domain top, but is actually
         # a branch of another domain's tree.
@@ -239,6 +276,9 @@ class GBMemoryRegionStager(MemoryRegionStager):
         "pseudo_domain": None,
         "toptag": False,
         "genblock": None,
+        # Keep track of anything instantiated within a generate block
+        "_generates": [],
+        "_explicit_generates": [],
     }
     def __init__(self, addr_range=(0, (1<<24)), label=None, hierarchy=None, domain=None):
         super().__init__(addr_range=addr_range, label=label, hierarchy=hierarchy)
@@ -247,6 +287,19 @@ class GBMemoryRegionStager(MemoryRegionStager):
                 default = default.copy()
             setattr(self, name, default)
         self.domain = domain
+        self.init()
+
+    @property
+    def busname(self):
+        # TODO - elevate this to Exception and squash
+        raise Exception("Aha! Caught you using GBMemoryRegionStager.busname!")
+        return self._busname
+
+    @busname.setter
+    def busname(self, value):
+        raise Exception("Aha! Caught you using GBMemoryRegionStager.busname!")
+        self._busname = value
+        return
 
     def copy(self):
         ref = super().copy()
@@ -256,6 +309,95 @@ class GBMemoryRegionStager(MemoryRegionStager):
                 val = val.copy()
             setattr(ref, name, val)
         return ref
+
+    def init(self):
+        self._resolve_pass_methods = []
+        self.add_resolve_pass(self._resolve_pass_keepouts)
+        self.add_resolve_pass(self._resolve_pass_explicits)
+        self.add_resolve_pass(self._resolve_pass_generates)
+        self.add_resolve_pass(self._resolve_pass_else)
+        self._resolve_passes = len(self._resolve_pass_methods)
+        return
+
+    def add(self, width=0, ref=None, addr=None):
+        """Overloaded to stage Generate-For entries separately"""
+        if hasattr(ref, "genblock") and isForLoop(ref.genblock):
+            print(f"5550 adding {ref.name} which is in a for loop")
+            if addr is not None:
+                self._explicit_generates.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
+            else:
+                self._generates.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
+            self._resolved = False
+        else:
+            print(f"5550 adding {ref.name} as usual")
+            return super().add(width, ref, addr)
+        return
+
+    def _resolve_pass_generates(self):
+        # Add generate instances in blocks of consistent offset
+        todo = (self._explicit_generates, self._generates)
+        if len(self._explicit_generates) + len(self._generates) > 0:
+            print(f"555 _resolve_pass_generates {self.label}({self.domain}) {len(self._explicit_generates)} {len(self._generates)}")
+        for genlist in todo:
+            for m in range(len(genlist)):
+                data = genlist[m]
+                if data is None:
+                    continue
+                ref, base, aw, _type, resolved = data
+                aw = self._resolve_ref(ref, aw)
+                name = None
+                if ref is not None:
+                    name = ref.name
+                unrolled_refs = ref.ref_list
+                # Find N empty spaces with consistent offsets between them
+                if ref.genblock.loop_len is None:
+                    raise Exception(f"{ref.name} with {ref.genblock} has loop_len = None!")
+                bases = self.get_base_list(ref.block_aw, ref.genblock.loop_len, start = base)
+                print(f"    5551 {ref.name} aw = {ref.block_aw}; bases = {' '.join([hex(base) for base in bases])}, len(unrolled_refs) = {len(unrolled_refs)}")
+                # Then add each entry as its own unrolled copy
+                if resolved != self.RESOLVED:
+                    for n in range(len(unrolled_refs)):
+                        print(f"    5559 {self.label}: Adding {name} ({aw} bits) to (0x{bases[n]:x})")
+                        #newbase = super(MemoryRegionStager, self).add(aw, ref=unrolled_refs[n], addr=bases[n])
+                        newbase = self._base_add(ref.block_aw, ref=unrolled_refs[n], addr=bases[n])
+                        if newbase != bases[n]:
+                            raise GhostbusInternalException(f"Somehow failed to add ref to base 0x{base:x} and instead added it to 0x{newbase:x}")
+                    genlist[m] = (ref, bases[0], aw, _type, self.RESOLVED)
+                else:
+                    print("    555a {self.label} {name}. why is this already resolved?")
+        return
+
+    def get_base_list(self, aw, num, start=0):
+        """Get a list of available base addresses for 'num' entries of width 'aw'.
+        The offset between adjacent base addresses is guaranteed consistent."""
+        if start is None:
+            start = 0
+        size = 1<<aw
+        if Policy.aligned_for_loops:
+            full_aw = aw + bits(num-1)
+            # Get the base address for a packed block of adjacent entries
+            base = self.get_available_base(full_aw, start = start)
+            ll = [base + n*size for n in range(num)]
+            return ll
+        else:
+            # Start by finding the lowest address that fits one item of 'aw'
+            found = False
+            base = self.get_available_base(aw, start = start)
+            nblocks_max = 10
+            _ll = []
+            while True:
+                for nblocks in range(1, nblocks_max):
+                    _ll = [base]
+                    for n in range(num):
+                        _ll.append(self.get_available_base(aw, start = _ll[-1] + nblocks*size))
+                    if check_consistent_offset(_ll):
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                return _ll
+        return []
 
 
 class ExternalModule():
@@ -271,13 +413,13 @@ class ExternalModule():
         "READ": None,
         "WRITE": None,
         "RW": None,
-        "busname": None,
-        "manually_assigned": False,
+        "domain": None,
         "_base": None,
-        "sub_bus": None,
         "sub_mr": None,
         "base_list": [],
-        "_block_aw": None
+        "_block_aw": None,
+        "ref_list": [],
+        "association": None,
     }
     def __init__(self, name, extbus, basename=None):
         for attr, default in self._attrs.items():
@@ -301,21 +443,37 @@ class ExternalModule():
         if self.base is None:
             printd(f"New external module: {name}; size = 0x{size:x}")
         else:
-            self.manually_assigned = True
             printd(f"New external module: {name}; size = 0x{size:x}; base = 0x{self.base:x}")
         self.base_list.append(self.base)
+        # Clobber this for ExternalModule instances in generate loops so they have an easy reference
+        # back to their rolled up parent instance (typically just the 0th instance)
+        self.parent_ref = None
 
     def __str__(self):
         return f"ExternalModule: {self.name}"
 
     def copy(self):
-        ref = self.__class__(self.name, self.extbus)
+        ref = self.__class__(name=self.name, extbus=self.extbus, basename=self.basename)
         for name, default in self._attrs.items():
             val = getattr(self, name)
             if hasattr(val, "copy"):
                 val = val.copy()
             setattr(ref, name, val)
+        # This one needs to be handled specially to avoid infinite recursion
+        ref.parent_ref = self.parent_ref
         return ref
+
+    @property
+    def busname(self):
+        # TODO - elevate this to Exception and squash
+        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
+        return self.domain
+
+    @busname.setter
+    def busname(self, value):
+        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
+        self.domain = value
+        return
 
     @property
     def genblock(self):
@@ -402,18 +560,18 @@ class GenerateBranch():
     TYPE_FOR = 1
     def __init__(self, branch_name):
         self.branch = branch_name
-        self.type = None
+        self._type = None
 
     def isFor(self):
-        return self.type == self.TYPE_FOR
+        return self._type == self.TYPE_FOR
 
     def isIf(self):
-        return self.type == self.TYPE_IF
+        return self._type == self.TYPE_IF
 
 class GenerateIf(GenerateBranch):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.type = self.TYPE_IF
+        self._type = self.TYPE_IF
         self.unrolled_size = "1"
         self.loop_range = "[0:0]"
 
@@ -483,7 +641,7 @@ class GenerateFor(GenerateBranch):
         self.op = self._parseOp(op)
         self.comp = comp
         self.inc = self._parseInc(inc)
-        self.type = self.TYPE_FOR
+        self._type = self.TYPE_FOR
         self.unrolled_size = self._getUnrolledSizeStr()
         self.loop_range = f"[0:{self.unrolled_size}-1]"
         # This will get set by the resolution function Ghostbusser._resolveGenerates

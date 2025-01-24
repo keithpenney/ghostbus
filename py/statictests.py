@@ -2,7 +2,7 @@
 from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
-from util import check_complete_indices
+from util import check_complete_indices, identical_or_none, check_consistent_offset
 
 
 def test_get_modname():
@@ -267,6 +267,56 @@ def test_decomment():
         return 1
     return 0
 
+def test_identical_or_none():
+    tests = (
+        ((None,), True),
+        ((None, None), True),
+        ((1,), True),
+        (("foo",), True),
+        (("foo", "foo"), True),
+        (("foo", None), True),
+        ((None, "foo"), True),
+        ((0, 0, 0, None, None, 0), True),
+        ((None, 0, 0, None, None, 0), True),
+        ((1, 0, 0, None, None, 0), False),
+        ((0, 1, 0, 0, 0, 0), False),
+        ((1, 1, 1, 1, 1, "bar"), False),
+        ((1, 1, 1, 1, 1, None), True),
+    )
+    fails = 0
+    for inlist, expected in tests:
+        result = identical_or_none(inlist)
+        if result != expected:
+            print(f"FAIL: {inlist} expected {expected}, got {result}")
+            fails += 1
+    return fails
+
+
+def test_check_consistent_offset():
+    goodies = (
+        [n for n in range(10)],
+        [2*n for n in range(10)],
+        [100 + 31*n for n in range(10)],
+    )
+    baddies = (
+        (0, 0, 1, 2, 3),
+        (10, 20, 30, 50),
+        (0, 2, 1, 3),
+    )
+    fails = 0
+    for goody in goodies:
+        if not check_consistent_offset(goody):
+            print(f"FAIL: {baddy} has consistent offset")
+            fails += 1
+    for baddy in baddies:
+        if check_consistent_offset(baddy):
+            print(f"FAIL: {baddy} has inconsistent offset")
+            fails += 1
+    if fails > 0:
+        print(f"FAIL: {fails}/{len(goodies) + len(baddies)} failed.")
+        return 1
+    return 0
+
 
 def doStaticTests():
     tests = (
@@ -281,6 +331,7 @@ def doStaticTests():
         test__matchForLoop,
         test_check_complete_indices,
         test_decomment,
+        test_identical_or_none,
     )
     rval = 0
     fails = []

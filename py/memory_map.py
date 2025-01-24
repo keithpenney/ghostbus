@@ -656,6 +656,24 @@ class MemoryRegion():
             break
         return base, end
 
+    def get_available_base(self, width=0, start=0):
+        """Get the next available base address that fits an entry of address
+        width 'width' starting from (and including) address 'base'."""
+        size = 1<<int(width)
+        for n in range(len(self.vacant)):
+            vmem = self.vacant[n]
+            vmem_size = vmem[1]-vmem[0]
+            if vmem[1] <= start:
+                # This vacant region ends before 'start'
+                continue
+            _start = max(vmem[0], start)
+            aligned_start = size*math.ceil(_start / size)
+            aligned_size = vmem[1]-aligned_start
+            if aligned_size >= size:
+                # We can add it!
+                return aligned_start
+        return None
+
     def _push(self, width=0, ref=None):
         """Add a memory element of address width 'width' to the memory map
         at the first location which fits and is aligned to 'width'."""
@@ -880,6 +898,7 @@ class MemoryRegionStager(MemoryRegion):
         self._keepouts = []
         self._explicits = []
         self._resolved = False
+        self.init()
 
     def copy(self):
         cp = super().copy()
@@ -887,6 +906,10 @@ class MemoryRegionStager(MemoryRegion):
         cp._keepouts = self._keepouts.copy()
         cp._explicits = self._explicits.copy()
         return cp
+
+    def _base_add_item(self, *args, **kwargs):
+        # Weird hack to allow inheriting classes to bypass the overloaded methods
+        return super().add_item(*args, **kwargs)
 
     def add_item(self, item, offset=None, keep_base=False):
         """Overloaded to Stage-only"""
@@ -899,6 +922,10 @@ class MemoryRegionStager(MemoryRegion):
             self._entries.append((item, offset, addr_width, self.TYPE_MEM, self.UNRESOLVED))
         self._resolved = False
         return
+
+    def _base_add(self, *args, **kwargs):
+        # Weird hack to allow inheriting classes to bypass the overloaded methods
+        return super().add(*args, **kwargs)
 
     def add(self, width=0, ref=None, addr=None):
         """Overloaded to Stage-only"""
@@ -943,11 +970,44 @@ class MemoryRegionStager(MemoryRegion):
             aw = ref.aw
         return aw
 
+    def init(self):
+        self._resolve_pass_methods = []
+        self.add_resolve_pass(self._resolve_pass_keepouts)
+        self.add_resolve_pass(self._resolve_pass_explicits)
+        self.add_resolve_pass(self._resolve_pass_else)
+        self._resolve_passes = len(self._resolve_pass_methods)
+        return
+
+    def add_resolve_pass(self, method):
+        #TODO - Sanitize/check the 'method' input as callable
+        self._resolve_pass_methods.append(method)
+        return
+
+    def set_resolve_pass(self, npass, method):
+        #TODO - Sanitize/check the 'method' input as callable
+        self._resolve_pass_methods[npass] = method
+        return
+
+    def _resolve_pass(self, npass):
+        if npass > len(self._resolve_pass_methods):
+            raise Exception(f"MemoryRegionStager has no resolve pass {npass} (only have {len(self._resolve_pass_methods)})")
+        #method = getattr(self, self._resolve_pass_methods[npass])
+        method = self._resolve_pass_methods[npass]
+        return method()
+
     def resolve(self):
         """Allocate the staged items in an explicit memory map.  Items staged with
         explicit addresses get priority."""
-        # First pass, keepouts
         #print(f"RESOLVE: {len(self._keepouts)} {len(self._explicits)} {len(self._entries)} {self.width} {self.vacant}")
+        if self._resolved:
+            return True
+        for n in range(self._resolve_passes):
+            self._resolve_pass(n)
+        self._resolved = True
+        return True
+
+    def _resolve_pass_keepouts(self):
+        # First pass, keepouts
         for n in range(len(self._keepouts)):
             ref, base, aw, _type, resolved = self._keepouts[n]
             # This is probably not useful, but maybe I'll find a use for keepouts with 'ref's?
@@ -955,6 +1015,9 @@ class MemoryRegionStager(MemoryRegion):
             if resolved != self.RESOLVED:
                 super().keepout(base, aw)
                 self._keepouts[n] = (ref, base, aw, _type, self.RESOLVED)
+        return
+
+    def _resolve_pass_explicits(self):
         # Second pass, add any with explicit addresses
         for n in range(len(self._explicits)):
             data = self._explicits[n]
@@ -969,6 +1032,9 @@ class MemoryRegionStager(MemoryRegion):
                 #print(f"{self.label}: Adding {name} to addr 0x{base:x}")
                 super().add(aw, ref=ref, addr=base)
                 self._explicits[n] = (ref, base, aw, _type, self.RESOLVED)
+        return
+
+    def _resolve_pass_else(self):
         # Third pass, add everything else
         for n in range(len(self._entries)):
             data = self._entries[n]
@@ -983,8 +1049,7 @@ class MemoryRegionStager(MemoryRegion):
                 #print(f"{self.label}: Adding {name} ({aw} bits) to anywhere ({base})")
                 newbase = super().add(aw, ref=ref, addr=None)
                 self._entries[n] = (ref, newbase, aw, _type, self.RESOLVED)
-        self._resolved = True
-        return True
+        return
 
     def unstage(self):
         """Unstage everything so you can resolve() again (presumably after

@@ -72,6 +72,13 @@ _errs = {
     ,"INVALID_ACCESS": \
         "A wire-type net can only have read access (read-only) while a reg-type net can have both" \
         + " read and write access (write-only, read-write, or read-only)."
+    ,"BUS_DOMAIN_AMBIGUOUS": \
+        "The domain for the bus declared at {source} is ambiguous because it received both names {name0}" \
+        + " and {name1} (possibly via inclusion of both (* ghostbus_domain=\"{name0}\" *) and" \
+        + " (* ghostbus_driver=\"{name1}, port\" *).  This is valid for ghostbus passengers which require" \
+        + " a name and can have an optional domain, but ghostbus drivers need only one (name and domain are" \
+        + " equivalent)."
+        # {"source": yosys_source, "name0": "foo", "name1": "bar"}
 }
 
 class GhostbusNewException(Exception):
@@ -81,10 +88,10 @@ class GhostbusNewException(Exception):
     #for errno, errstr in self._errnos.items():
     #    setattr(GhostbusNewException, errstr, errno)
 
-    def __init__(self, errno, msg=None):
+    def __init__(self, errno, msg=None, paramdict={}):
         if msg is None:
             msg = self.get_errno_msg(errno)
-        super().__init__("Ghostbus ERROR: " + msg)
+        super().__init__("Ghostbus ERROR: " + msg.format(**paramdict))
 
     @staticmethod
     def get_errno_string(errno):
