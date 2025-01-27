@@ -567,6 +567,10 @@ class DecoderLB():
         self.autogen_loop_index = "GHOSTBUS_AUTOGEN_INDEX" # TODO - Harmonize this with a singleton netname generator class
         self.init_veriloggers()
         for memregion in memorytree.memories:
+            #if isForLoop(memorytree.genblock):
+            #    hierarchy = [Policy.flatten_instance_label(x) for x in memregion.hierarchy]
+            #    print(f"332 hierarchy {memregion.hierarchy} -> {hierarchy}")
+            #    memregion.hierarchy = hierarchy
             domain = memregion.domain
             # print(f"Creating DecoderDomainLB for {memregion.name} in {domain}")
             self.domains[domain] = DecoderDomainLB(self, memregion, ghostbusses, gbportbus)
@@ -829,7 +833,7 @@ class DecoderLB():
             f"    {bus['wstb']} = 1'b0;" if (bus['wstb'] is not None and bus['wstb'] != bus['we']) else "",
             "`ifndef YOSYS",
             "`ifdef DEBUG_WRITES",
-            f"       $display(\"DEBUG: Write 0x%x to addr 0x%x\", data, addr);",
+            f"     $display(\"DEBUG: Write 0x%x to addr 0x%x\", data, addr);",
             "`endif",
             "`endif",
             "  end",
@@ -852,7 +856,7 @@ class DecoderLB():
             f"    {bus['re']} = 1'b0;" if bus['re'] is not None else "",
             "`ifndef YOSYS",
             "`ifdef DEBUG_READS",
-            f"       $display(\"DEBUG: Read from addr 0x%x. Expected 0x%x, got 0x%x\", addr, checkval, {bus['din']});",
+            f"     $display(\"DEBUG: Read from addr 0x%x. Expected 0x%x, got 0x%x\", addr, checkval, {bus['din']});",
             "`endif",
             "`endif",
             f"    if ({bus['din']} !== checkval) begin",
@@ -970,14 +974,14 @@ class DecoderLB():
         print("CSRs:")
         csr_writeable = []
         for csr in csrs:
-            print("{}.{}: 0x{:x}".format(csr._domain[1], csr.name, csr._domain[0] + csr.base))
+            print("{}.{}: 0x{:x}".format(csr._domain[1], csr.netname, csr._domain[0] + csr.base))
             wa = 1 if (((csr.access & Register.WRITE) > 0) and not csr.strobe) else 0
             csr_writeable.append(wa)
         cw = flatten_bits(csr_writeable)
         print("RAMs:")
         ram_writeable = []
         for ram in rams:
-            print("{}.{}: 0x{:x}".format(ram._domain[1], ram.name, ram._domain[0] + ram.base))
+            print("{}.{}: 0x{:x}".format(ram._domain[1], ram.netname, ram._domain[0] + ram.base))
             wa = 1 if (ram.access & Register.WRITE) > 0 else 0
             ram_writeable.append(wa)
         rw = flatten_bits(ram_writeable)
@@ -993,8 +997,8 @@ class DecoderLB():
         ram_names = []
         for n in range(len(rams)):
             ram = rams[n]
-            name = f"{ram._domain[1].replace('.', '_')}_{ram.name.replace('.', '_')}"
-            ram_names.append(f"localparam {name.upper()}_BASE = {vhex(ram._domain[0] + ram.base, 32)}; // {ram._domain[1]}.{ram.name}")
+            name = f"{ram._domain[1].replace('.', '_')}_{ram.netname.replace('.', '_')}"
+            ram_names.append(f"localparam {name.upper()}_BASE = {vhex(ram._domain[0] + ram.base, 32)}; // {ram._domain[1]}.{ram.netname}")
         ext_names = []
         for n in range(len(exts)):
             ext = exts[n]
@@ -1025,14 +1029,14 @@ class DecoderLB():
         # Initialize CSR info
         for n in range(len(csrs)):
             csr = csrs[n]
-            ss.append(f"  GHOSTBUS_ADDRS[{n}] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.name}")
+            ss.append(f"  GHOSTBUS_ADDRS[{n}] = {vhex(csr._domain[0] + csr.base, aw)}; // {csr._domain[1]}.{csr.netname}")
             ss.append(f"  GHOSTBUS_INITVALS[{n}] = {vhex(csr.initval, dw)};")
             randval = random.randint(0, (1<<csr.dw)-1) # Random number within the range of the CSR's width
             ss.append(f"  GHOSTBUS_RANDVALS[{n}] = {vhex(randval, dw)}; // 0 <= x <= 0x{(1<<csr.dw) - 1:x}")
         # Initialize RAM info
         for n in range(len(rams)):
             ram = rams[n]
-            ss.append(f"  GHOSTBUS_RAM_BASES[{n}] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.name}")
+            ss.append(f"  GHOSTBUS_RAM_BASES[{n}] = {vhex(ram._domain[0] + ram.base, aw)}; // {ram._domain[1]}.{ram.netname}")
             ss.append(f"  GHOSTBUS_RAM_WIDTHS[{n}] = {vhex(ram.dw, dw)}; // TODO - may not be accurate due to parameterization...")
             ss.append(f"  GHOSTBUS_RAM_DEPTHS[{n}] = {vhex((1<<ram.aw), aw)}; // TODO - may not be accurate due to parameterization...")
         #ss.append("  end")
@@ -1178,6 +1182,10 @@ class DecoderDomainLB():
     def _resolveBlockExts(self):
         """Any ExternalModules in a for-loop scope need to be rolled up into a single module before decoding
         code is generated."""
+        if Policy.aligned_for_loops:
+            # In this mode, we only add to the memory map a single entry representing all loop
+            # instances of entries in generate blocks, so this job is already done!
+            return
         resolved_map = {}
         for branch, extmods in self.block_exts.items():
             # Annoyingly, I need to keep a separate list of 'handled' objects since I'm storing
@@ -1296,9 +1304,9 @@ class DecoderDomainLB():
                     err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
                         + f" ({len(indices)} != {loop_len})"
                     raise GhostbusInternalException()
+                print(f"3320 Submod {modname} ({ref.inst} -> {modname}) gets addresses: {ref.gen_addrs}")
                 ref.setInst(modname)
                 ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
-                #print(f"Submod {modname} gets addresses: {ref.gen_addrs}")
                 block_submods[branch].append(ref)
             #print(f"Branch {branch}: submods = {block_submods[branch]}")
         # Clobber block_submods
@@ -1317,7 +1325,7 @@ class DecoderDomainLB():
             if csr.strobe or (len(csr.write_strobes) > 0):
                 if self.ghostbus["wstb"] is None:
                     if csr.strobe:
-                        strobe_name = csr.name
+                        strobe_name = csr.netname
                     else:
                         strobe_name = csr.write_strobes[0]
                     serr = f"\n{strobe_name} requires a 'wstb' signal in the ghostbus. " + \
@@ -1379,18 +1387,24 @@ class DecoderDomainLB():
         for branch, csrs in self.block_csrs.items():
             for csr in csrs:
                 if csr.genblock.isFor():
+                    if Policy.aligned_for_loops:
+                        ref_list = csr.ref_list
+                    else:
+                        ref_list = (csr,)
                     # If the CSR is in a FOR loop, I need to unroll it here
                     #base = csr.base
                     #copies = csr.unroll()
-                    #print(f"CSR {csr.name} in FOR loop of loop_len {csr.genblock.loop_len} from 0x{csr.base:x}")
+                    #print(f"CSR {csr.netname} in FOR loop of loop_len {csr.genblock.loop_len} from 0x{csr.base:x}")
                     #for copy in copies:
                         #copy = csr.copy()
                         #copy.base = base + n
                     #    copy._domain = (self.base, self.mod.name)
                     #    csrlist.append(copy)
-                    copy = csr.copy()
-                    copy._domain = (self.base, self.mod.name)
-                    csrlist.append(copy)
+                    for ref in ref_list:
+                        copy = ref.copy()
+                        copy._domain = (self.base, self.mod.name)
+                        copy.netname = f"{ref.netname}_{ref.genblock._loop_index}"
+                        csrlist.append(copy)
                 else:
                     # CSRs in IF block just go in like normal
                     copy = csr.copy()
@@ -1410,14 +1424,16 @@ class DecoderDomainLB():
             ramlist.append(copy)
         for branch, rams in self.block_rams.items():
             for ram in rams:
-                #copies = ram.unroll()
-                #for copy in copies:
-                #    #copy = ram.copy()
-                #    copy._domain = (self.base, self.mod.name)
-                #    ramlist.append(copy)
-                copy = ram.copy()
-                copy._domain = (self.base, self.mod.name)
-                ramlist.append(copy)
+                if ram.genblock.isFor() and Policy.aligned_for_loops:
+                    ref_list = ram.ref_list
+                else:
+                    ref_list = (ram,)
+                for ref in ref_list:
+                    copy = ref.copy()
+                    if ref.isFor():
+                        copy.netname = f"{ref.netname}_{ref.genblock._loop_index}"
+                    copy._domain = (self.base, self.mod.name)
+                    ramlist.append(copy)
         for base, submod in self.submods:
             submod._collectRAMs(ramlist)
         # TODO: include submods in generate blocks
@@ -1432,20 +1448,17 @@ class DecoderDomainLB():
         for branch, exts in self.block_exts.items():
             for ext in exts:
                 if ext.genblock.isFor():
-                    # Unroll it here
-                    #copies = ext.unroll()
-                    #for n in range(len(ext.base_list)):
-                    #for copy in copies:
-                    #    base = ext.base_list[n]
-                    #    copy = ext.copy()
-                    #    copy.base = base
-                    #    copy.name = f"{ext.name}_{n}"
-                    #    copy._domain = (self.base, self.mod.name)
-                    #    extlist.append(copy)
-                    copy = ext.copy()
-                    #copy.base = base
-                    copy._domain = (self.base, self.mod.name)
-                    extlist.append(copy)
+                    if Policy.aligned_for_loops:
+                        ref_list = ext.ref_list
+                    else:
+                        ref_list = (ext,)
+                    for ref in ref_list:
+                        copy = ref.copy()
+                        if ref.isFor():
+                            copy.netname = f"{ref.netname}_{ref.genblock._loop_index}"
+                        # copy.name = f"{ext.name}_{n}"
+                        copy._domain = (self.base, self.mod.name)
+                        extlist.append(copy)
                 else:
                     copy = ext.copy()
                     copy._domain = (self.base, f"{self.mod.name}_{branch}")
@@ -1585,14 +1598,14 @@ class DecoderDomainLB():
         end = ram.base + (1<<ram.aw) - 1
         dw = ram.size_str
         ss = [
-            f"localparam {ram.name.upper()}_AW = $clog2({ram.depth_str}); // must resolve to <={ram.aw} or upper regions will be inaccessible",
-            f"wire addrhit_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)}; // 0x{ram.base:x}-0x{end:x}",
+            f"localparam {ram.netname.upper()}_AW = $clog2({ram.depth_str}); // must resolve to <={ram.aw} or upper regions will be inaccessible",
+            f"wire addrhit_{ram.netname} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)}; // 0x{ram.base:x}-0x{end:x}",
         ]
         if Policy.registered_rams:
-            ss.append(f"reg [{dw}-1:0] {ram.name}_registered_read=0;") # TODO - harmonize in per-module net namer class
+            ss.append(f"reg [{dw}-1:0] {ram.netname}_registered_read=0;") # TODO - harmonize in per-module net namer class
         else:
-            ss.append(f"wire [{dw}-1:0] {ram.name}_registered_read = " \
-                    + f"{{{{{self.ghostbus['dw']}-{ram.size_str}{{1'b0}}}}, {ram.name}[{self.ghostbus['addr']}[{ram.name.upper()}_AW-1:0]]}};")
+            ss.append(f"wire [{dw}-1:0] {ram.netname}_registered_read = " \
+                    + f"{{{{{self.ghostbus['dw']}-{ram.size_str}{{1'b0}}}}, {ram.netname}[{self.ghostbus['addr']}[{ram.netname.upper()}_AW-1:0]]}};")
         return "\n".join(ss)
 
     def _blockCsrInit(self, csr, branch):
@@ -1605,8 +1618,8 @@ class DecoderDomainLB():
         looprange = ""
         if isForLoop(csr.genblock):
             looprange = f" {csr.genblock.loop_range}"
-        ss.append(f"reg {rangestr}{branch}_{csr.name}_r{looprange};")
-        ss.append(f"reg {rangestr}{branch}_{csr.name}_w{looprange};")
+        ss.append(f"reg {rangestr}{branch}_{csr.netname}_r{looprange};")
+        ss.append(f"reg {rangestr}{branch}_{csr.netname}_w{looprange};")
         return "\n".join(ss)
 
     def _blockRamInit(self, ram, branch):
@@ -1616,7 +1629,7 @@ class DecoderDomainLB():
         divwidth = local_aw - ram.aw
         base_rel = ram.base
         end = base_rel + (1<<ram.aw) - 1
-        addrhit = f"wire addrhit_{branch}_{ram.name} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)};" \
+        addrhit = f"wire addrhit_{branch}_{ram.netname} = {self.ghostbus['addr']}[{local_aw-1}:{ram.aw}] == {vhex(ram.base>>ram.aw, divwidth)};" \
                 + f" // 0x{base_rel:x}-0x{end:x}"
         if None in ram.range:
             rangestr = ""
@@ -1625,46 +1638,46 @@ class DecoderDomainLB():
             if ram.genblock.isFor():
                 rangestr = ram.genblock.unrollRangeString(rangestr) + " "
                 addrhit_range = f"[{ram.genblock.unrolled_size}-1:0] "
-                addrhit = f"wire {addrhit_range}addrhit_{branch}_{ram.name};"
+                addrhit = f"wire {addrhit_range}addrhit_{branch}_{ram.netname};"
         ss = []
-        ss.append(f"wire {rangestr}{branch}_{ram.name}_r;")
+        ss.append(f"wire {rangestr}{branch}_{ram.netname}_r;")
         if Policy.registered_rams:
-            ss.append(f"reg {rangestr}{branch}_{ram.name}_registered_read=0;")
+            ss.append(f"reg {rangestr}{branch}_{ram.netname}_registered_read=0;")
         else:
-            ss.append(f"wire {rangestr}{branch}_{ram.name}_registered_read = {branch}_{ram.name}_r;")
+            ss.append(f"wire {rangestr}{branch}_{ram.netname}_registered_read = {branch}_{ram.netname}_r;")
         ss.extend([
-            f"localparam {branch.upper()}_{ram.name.upper()}_AW = $clog2({ram.depth[1]}+1);",
+            f"localparam {branch.upper()}_{ram.netname.upper()}_AW = $clog2({ram.depth[1]}+1);",
             addrhit,
         ])
         return "\n".join(ss)
 
     def _blockExtInit(self, extmod, branch, verilogger):
         vl = verilogger
-        vl.comment(f"Extmod {extmod.name}")
+        vl.comment(f"Extmod {extmod.netname}")
         base_rel = extmod.base # BUBBLES Is this right? Or does extmod.base store the global/absolute address?
         if extmod.genblock.isFor():
             #vl.comment("TODO! FIXME!")
             loop_size = extmod.genblock.unrolled_size
-            vl.add(f"wire [{loop_size}-1:0] addrhit_{extmod.name};")
+            vl.add(f"wire [{loop_size}-1:0] addrhit_{extmod.netname};")
             if Policy.aligned_for_loops:
                 #`ifdef ALIGNED_FOR_LOOPS
                 bus_aw = self.ghostbus.aw # TODO aw_str!
                 mod_aw = extmod.block_aw
-                vl.add(self._addrhit_logic("wire", f"addrhit_{extmod.name}_any", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw))
+                vl.add(self._addrhit_logic("wire", f"addrhit_{extmod.netname}_any", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw))
             else:
-                vl.add(f"wire addrhit_{extmod.name}_any = |addrhit_{extmod.name};")
+                vl.add(f"wire addrhit_{extmod.netname}_any = |addrhit_{extmod.netname};")
             #vl.add("wire [EXT_DW-1:0] fooext_rdata_topscope;")
             #vl.add(self._addrHit(base_rel, extmod, self))
             dw_range = extmod.extbus["dw_range"]
             #dw_range = self.ghostbus["dw_range"]
             rangestr = f"[{dw_range[0]}:{dw_range[1]}]"
-            vl.add(f"wire {rangestr} {extmod.name}_rdata_topscope;")
+            vl.add(f"wire {rangestr} {extmod.netname}_rdata_topscope;")
         else:
             vl.add(self._addrHit(base_rel, extmod, self))
             dw_range = extmod.extbus["dw_range"]
             #dw_range = self.ghostbus["dw_range"]
             rangestr = f"[{dw_range[0]}:{dw_range[1]}]"
-            vl.add(f"wire {rangestr} {extmod.name}_rdata_topscope;")
+            vl.add(f"wire {rangestr} {extmod.netname}_rdata_topscope;")
         return
 
     @staticmethod
@@ -1823,10 +1836,10 @@ class DecoderDomainLB():
         vl.add(f"assign {namemap['din']} =")
         for n in range(len(self.rams)):
             ram = self.rams[n]
-            vl.add(f"  addrhit_{ram.name} ? {ram.name}_registered_read :")
+            vl.add(f"  addrhit_{ram.netname} ? {ram.netname}_registered_read :")
         for branch, rams in self.block_rams.items():
             for ram in rams:
-                vl.add(f"  addrhit_{branch}_{ram.name} ? {branch}_{ram.name}_registered_read :")
+                vl.add(f"  addrhit_{branch}_{ram.netname} ? {branch}_{ram.netname}_registered_read :")
         for n in range(len(self.submods)):
             base, submod = self.submods[n]
             inst = submod.inst
@@ -1836,7 +1849,7 @@ class DecoderDomainLB():
             if not ext.access & Register.READ:
                 # Skip non-readable ext modules
                 continue
-            inst = ext.name
+            inst = ext.netname
             gb_dwstr = self.ghostbus.dw_str
             dwstr = ext.extbus.dw_str
             din = ext.extbus['din']
@@ -1848,11 +1861,11 @@ class DecoderDomainLB():
                     continue
                 gb_dwstr = self.ghostbus.dw_str
                 ext_dwstr = ext.extbus.dw_str
-                din = f"{ext.name}_rdata_topscope"
+                din = f"{ext.netname}_rdata_topscope"
                 postfix = ""
                 if ext.genblock.isFor():
                     postfix = "_any"
-                vl.add(f"  addrhit_{ext.name}{postfix} ? {{{{{gb_dwstr}-{ext_dwstr}{{1'b0}}}}, {din}}} :")
+                vl.add(f"  addrhit_{ext.netname}{postfix} ? {{{{{gb_dwstr}-{ext_dwstr}{{1'b0}}}}, {din}}} :")
         if self.has_local_csrs:
             vl.add(f"  {en_local} ? {local_din} :")
         vl.add(f"  {vhex(0, self.ghostbus['dw'])};")
@@ -1934,7 +1947,7 @@ class DecoderDomainLB():
             for csr in block_csrs:
                 if csr.genblock is not None and csr.genblock.isIf():
                     copy = csr.copy()
-                    copy.name = f"{branch}_{csr.name}{block_append}"
+                    copy.name = f"{branch}_{csr.netname}{block_append}"
                     csrs.append(copy)
         return csrs
 
@@ -1963,16 +1976,16 @@ class DecoderDomainLB():
             writes += 1
             if len(csr.write_strobes) == 0:
                 if csr.strobe and csr.dw == 1:
-                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {vhex(1, csr.dw)};")
+                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.netname} <= {vhex(1, csr.dw)};")
                 else:
                     # For a multi-bit (vector) strobe, the default assignment will cause this assignment to be single-cycle
-                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.name} <= {namemap['dout']}[{csr.range[0]}:0];")
+                    ss.append(f"  {vhex(csr.base, self.local_aw)}: {csr.netname} <= {namemap['dout']}[{csr.range[0]}:0];")
             else:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
                 if csr.strobe:
-                    ss.append(f"    {csr.name} <= {vhex(0, strobe.dw)};")
+                    ss.append(f"    {csr.netname} <= {vhex(0, strobe.dw)};")
                 else:
-                    ss.append(f"    {csr.name} <= {namemap['dout']}[{csr.range[0]}:0];")
+                    ss.append(f"    {csr.netname} <= {namemap['dout']}[{csr.range[0]}:0];")
                 for strobe_name in csr.write_strobes:
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
@@ -2010,9 +2023,9 @@ class DecoderDomainLB():
                 #addrs.sort()
                 base = csr.base
                 dec = f"{self.ghostbus['addr']}{ar} == {vhex(base, self.local_aw)} + {agi}{ar}"
-                ss.append(f"  // {csr.name}")
+                ss.append(f"  // {csr.netname}")
                 ss.append(f"  if ({dec}) begin")
-                ss.append(f"    {branch}_{csr.name}_w[{agi}] <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
+                ss.append(f"    {branch}_{csr.netname}_w[{agi}] <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
                 ss.append( "  end")
             ss.append("end")
         return "\n".join(ss)
@@ -2042,15 +2055,15 @@ class DecoderDomainLB():
                 continue
             if csr.signed:
                 # Signed, sign-bit-extended
-                expanded = "{{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{{csr.name}[{csr.range[0]}]}}}}, {csr.name}}}"
+                expanded = "{{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{{csr.netname}[{csr.range[0]}]}}}}, {csr.netname}}}"
             else:
                 # Unsigned, 0-padded
-                expanded = f"{{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}}"
+                expanded = f"{{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.netname}}}"
             if len(csr.read_strobes) == 0:
-                ss.append(f"  {vhex(csr.base, self.local_aw)}: {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
+                ss.append(f"  {vhex(csr.base, self.local_aw)}: {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.netname}}};")
             else:
                 ss.append(f"  {vhex(csr.base, self.local_aw)}: begin")
-                ss.append(f"    {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.name}}};")
+                ss.append(f"    {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {csr.netname}}};")
                 for strobe_name in csr.read_strobes:
                     ss.append(f"    {strobe_name} <= 1'b1;")
                 ss.append(f"  end")
@@ -2095,11 +2108,11 @@ class DecoderDomainLB():
                 #base = addrs[0]
                 base = csr.base
                 dec = f"{self.ghostbus['addr']}{ar} == {vhex(base, self.local_aw)} + {agi}{ar}"
-                ss.append(f"  // {csr.name}")
+                ss.append(f"  // {csr.netname}")
                 ss.append(f"  if ({dec}) begin")
-                ss.append(f"    {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {branch}_{csr.name}_r[{agi}]}};")
-                #ss.append(f"    {local_din} <= {{32-(3+1){1'b0}}, {branch}_{csr.name}_r[{agi}]};")
-                #ss.append(f"    {branch}_{csr.name}_w <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
+                ss.append(f"    {local_din} <= {{{{{self.ghostbus['dw']}-({csr.range[0]}+1){{1'b0}}}}, {branch}_{csr.netname}_r[{agi}]}};")
+                #ss.append(f"    {local_din} <= {{32-(3+1){1'b0}}, {branch}_{csr.netname}_r[{agi}]};")
+                #ss.append(f"    {branch}_{csr.netname}_w <= {self.ghostbus['dout']}[{csr.range[0]}:{csr.range[1]}];")
                 ss.append( "  end")
             ss.append("end")
         return "\n".join(ss)
@@ -2111,7 +2124,7 @@ class DecoderDomainLB():
             for ram in block_rams:
                 if ram.genblock is not None and ram.genblock.isIf():
                     copy = ram.copy()
-                    copy.name = f"{branch}_{ram.name}{block_append}"
+                    copy.name = f"{branch}_{ram.netname}{block_append}"
                     rams.append(copy)
         return rams
 
@@ -2126,11 +2139,11 @@ class DecoderDomainLB():
         # Writes to RAMs in generate-if blocks are handled in block scope
         for n in range(len(self.rams)):
             ram = self.rams[n]
-            s0 = f"if (addrhit_{ram.name}) begin"
+            s0 = f"if (addrhit_{ram.netname}) begin"
             if n > 0:
                 s0 = " else " + s0
             ss[-1] = ss[-1] + s0
-            ss.append(f"  {ram.name}[{namemap['addr']}[{ram.name.upper()}_AW-1:0]] <= {namemap['dout']}[{ram.range[0]}:{ram.range[1]}];")
+            ss.append(f"  {ram.netname}[{namemap['addr']}[{ram.netname.upper()}_AW-1:0]] <= {namemap['dout']}[{ram.range[0]}:{ram.range[1]}];")
             ss.append("end")
         return "\n".join(ss)
 
@@ -2153,11 +2166,11 @@ class DecoderDomainLB():
             ]
         for n in range(len(rams)):
             ram = rams[n]
-            s0 = f"if (addrhit_{ram.name}) begin"
+            s0 = f"if (addrhit_{ram.netname}) begin"
             if n > 0:
                 s0 = " else " + s0
             ss[-1] = ss[-1] + s0
-            ss.append(f"  {ram.name}_registered_read <= {{{{{self.ghostbus['dw']}-{ram.size_str}{{1'b0}}}}, {ram.name}[{self.ghostbus['addr']}[{ram.name.upper()}_AW-1:0]]}};")
+            ss.append(f"  {ram.netname}_registered_read <= {{{{{self.ghostbus['dw']}-{ram.size_str}{{1'b0}}}}, {ram.netname}[{self.ghostbus['addr']}[{ram.netname.upper()}_AW-1:0]]}};")
             ss.append("end")
         genrams = self.genRamReads()
         if len(genrams) > 0:
@@ -2191,20 +2204,20 @@ class DecoderDomainLB():
                 # Generate-For
                 ss.append(f"for ({agi}=0; {agi}<{block_size}; {agi}={agi}+1) begin")
                 for ram in rams:
-                    read_dest = f"{branch}_{ram.name}_registered_read"
+                    read_dest = f"{branch}_{ram.netname}_registered_read"
                     depth = f"({ram.depth[1]}+1)"
-                    ss.append(f"  // {ram.name}")
-                    ss.append(f"  if (addrhit_{branch}_{ram.name}[{agi}]) begin")
-                    ss.append(f"    {read_dest} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r[(({agi}+1)*{depth})-1-:{depth}]}};")
+                    ss.append(f"  // {ram.netname}")
+                    ss.append(f"  if (addrhit_{branch}_{ram.netname}[{agi}]) begin")
+                    ss.append(f"    {read_dest} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.netname}_r[(({agi}+1)*{depth})-1-:{depth}]}};")
                     ss.append( "  end")
                 ss.append("end")
             else:
                 # Generate-If
                 for ram in rams:
-                    ss.append(f"// {ram.name}")
-                    read_dest = f"{branch}_{ram.name}_registered_read"
-                    ss.append(f"if (addrhit_{branch}_{ram.name}) begin")
-                    ss.append(f"  {read_dest} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.name}_r}};")
+                    ss.append(f"// {ram.netname}")
+                    read_dest = f"{branch}_{ram.netname}_registered_read"
+                    ss.append(f"if (addrhit_{branch}_{ram.netname}) begin")
+                    ss.append(f"  {read_dest} <= {{{{{self.ghostbus['dw']}-({ram.range[0]}+1){{1'b0}}}}, {branch}_{ram.netname}_r}};")
                     ss.append("end")
             num_rams += len(rams)
         if num_rams == 0:
@@ -2243,7 +2256,7 @@ class DecoderDomainLB():
                     sindex = ""
                     if extmod.genblock is not None and extmod.genblock.isFor():
                         sindex = f"[{extmod.genblock.index}]"
-                    vl.add(f"assign {ext_port} = {gb_port} & addrhit_{extmod.name}{sindex};")
+                    vl.add(f"assign {ext_port} = {gb_port} & addrhit_{extmod.netname}{sindex};")
                 else:
                     vl.add(f"assign {ext_port} = {gb_port};")
         #return "\n".join(ss)
@@ -2254,40 +2267,40 @@ class DecoderDomainLB():
         for branch, csrs in self.block_csrs.items():
             vl = verilogger_dict[branch]
             for csr in csrs:
-                vl.comment(f"CSR {csr.name}")
+                vl.comment(f"CSR {csr.netname}")
                 if csr.genblock.isIf():
                     vl.initial()
-                    vl.add(f"{branch}_{csr.name}_w = {csr.name};")
+                    vl.add(f"{branch}_{csr.netname}_w = {csr.netname};")
                     vl.end()
-                    vl.always_at(f"{csr.name} or {branch}_{csr.name}_w")
-                    vl.add(f"{csr.name} <= {branch}_{csr.name}_w;")
-                    vl.add(f"{branch}_{csr.name}_r <= {csr.name};")
+                    vl.always_at(f"{csr.netname} or {branch}_{csr.netname}_w")
+                    vl.add(f"{csr.netname} <= {branch}_{csr.netname}_w;")
+                    vl.add(f"{branch}_{csr.netname}_r <= {csr.netname};")
                     vl.end()
                 else:
                     index = csr.genblock.index
                     vl.initial()
-                    vl.add(f"{branch}_{csr.name}_w[{index}] = {csr.name};")
+                    vl.add(f"{branch}_{csr.netname}_w[{index}] = {csr.netname};")
                     vl.end()
-                    vl.always_at(f"{csr.name} or {branch}_{csr.name}_w[{index}]")
-                    vl.add(f"{branch}_{csr.name}_r[{index}] <= {csr.name};")
-                    vl.add(f"{csr.name} <= {branch}_{csr.name}_w[{index}];")
+                    vl.always_at(f"{csr.netname} or {branch}_{csr.netname}_w[{index}]")
+                    vl.add(f"{branch}_{csr.netname}_r[{index}] <= {csr.netname};")
+                    vl.add(f"{csr.netname} <= {branch}_{csr.netname}_w[{index}];")
                     vl.end()
         # RAMs
         gbah = self.ghostbus.get_range('addr')[0]
         for branch, rams in self.block_rams.items():
             vl = verilogger_dict[branch]
             for ram in rams:
-                vl.comment(f"RAM {ram.name}")
-                ramname = f"{branch}_{ram.name}"
+                vl.comment(f"RAM {ram.netname}")
+                ramname = f"{branch}_{ram.netname}"
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
                 sizestr = ram.size_str
-                awstr = f"{branch.upper()}_{ram.name.upper()}_AW"
+                awstr = f"{branch.upper()}_{ram.netname.upper()}_AW"
                 if ram.genblock.isIf():
                     awdiff = self.ghostbus.aw - ram.aw
-                    vl.add(f"assign {branch}_{ram.name}_r = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
+                    vl.add(f"assign {branch}_{ram.netname}_r = {ram.netname}[{self.ghostbus['addr']}[{awstr}-1:0]];")
                     vl.always_at_clk(f"{self.ghostbus['clk']}")
                     vl._if(f"addrhit_{ramname} & {self._bus_we}")
-                    vl.add(f"{ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
+                    vl.add(f"{ram.netname}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
                     vl.end()
                     vl.end()
                 else:
@@ -2299,12 +2312,12 @@ class DecoderDomainLB():
                            comment=cmt)
                     # TODO awstr, not aw
                     #vl.add(self._addrhit_logic_block("assign", f"assign addrhit_{ramname}[{index}]", self.ghostbus['addr'], ram.base, self.ghostbus.aw, awstr, index))
-                    #vl.add(self._addrhit_logic_block("assign", f"addrhit_{extmod.name}[{index}]", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw, index))
-                    vl.add(f"assign {ramname}_r[(({index}+1)*{sizestr})-1-:{sizestr}] = {ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]];")
+                    #vl.add(self._addrhit_logic_block("assign", f"addrhit_{extmod.netname}[{index}]", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw, index))
+                    vl.add(f"assign {ramname}_r[(({index}+1)*{sizestr})-1-:{sizestr}] = {ram.netname}[{self.ghostbus['addr']}[{awstr}-1:0]];")
                     vl.always_at_clk(f"{self.ghostbus['clk']}")
                     #vl._if(f"addrhit_{ramname}[{index}] & {self.ghostbus['we']}")
                     vl._if(f"addrhit_{ramname}[{index}] & {self._bus_we}")
-                    vl.add(f"{ram.name}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
+                    vl.add(f"{ram.netname}[{self.ghostbus['addr']}[{awstr}-1:0]] <= {self.ghostbus['dout']}{rangestr};")
                     vl.end()
                     vl.end()
         # Submods
@@ -2318,27 +2331,27 @@ class DecoderDomainLB():
                 base = submod.domains[None].mod.base
                 awdiff = self.ghostbus.aw - aw
                 rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
-                vl.comment(f"Submodule {submod.name} {submod.inst}")
+                vl.comment(f"Submodule {submod.inst} {submod.inst}")
                 # TODO - This needs to be the submod instance, not the module name!
                 vl.add(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
         # Extmods TODO
         for branch, extmods in self.block_exts.items():
             vl = verilogger_dict[branch]
             for extmod in extmods:
-                vl.comment(f"Extmod {extmod.name}")
+                vl.comment(f"Extmod {extmod.netname}")
                 self.extmodHookup(extmod, vl, self)
                 if extmod.genblock.isFor():
                     index = extmod.genblock.index
                     bus_aw = self.ghostbus.aw # TODO aw_str!
                     mod_aw = extmod.aw
-                    vl.add(self._addrhit_logic_block("assign", f"addrhit_{extmod.name}[{index}]", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw, index))
+                    vl.add(self._addrhit_logic_block("assign", f"addrhit_{extmod.netname}[{index}]", self.ghostbus['addr'], extmod.base, bus_aw, mod_aw, index))
                     if extmod.extbus['din'] is not None: # Recall, some extmods are write-only
                         dw_str = extmod.extbus.dw_str
-                        vl.add(f"assign {extmod.name}_rdata_topscope = addrhit_{extmod.name}[{index}] ? {extmod.extbus['din']} : {{{dw_str}{{1'bZ}}}};")
+                        vl.add(f"assign {extmod.netname}_rdata_topscope = addrhit_{extmod.netname}[{index}] ? {extmod.extbus['din']} : {{{dw_str}{{1'bZ}}}};")
                 else:
                     if extmod.extbus['din'] is not None: # Recall, some extmods are write-only
-                        #vl.add(f"assign {extmod.name}_rdata_topscope = {{{{{self.ghostbus['dw']-extmod.dw}{{1'b0}}}}, {extmod.extbus['din']}}};")
-                        vl.add(f"assign {extmod.name}_rdata_topscope = {extmod.extbus['din']};")
+                        #vl.add(f"assign {extmod.netname}_rdata_topscope = {{{{{self.ghostbus['dw']-extmod.dw}{{1'b0}}}}, {extmod.extbus['din']}}};")
+                        vl.add(f"assign {extmod.netname}_rdata_topscope = {extmod.extbus['din']};")
         return
 
 def test_createPortBus():

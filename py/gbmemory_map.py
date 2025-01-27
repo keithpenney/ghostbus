@@ -2,7 +2,7 @@
 
 import re
 
-from yoparse import getUnparsedWidthAndDepthRange, getUnparsedWidthRangeType, NetTypes
+from yoparse import getUnparsedWidthAndDepthRange, getUnparsedWidthRangeType, NetTypes, block_inst
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbexception import GhostbusException
 from policy import Policy
@@ -31,6 +31,7 @@ class GBRegister(Register):
         "domain": None,
         "genblock": None,
         "ref_list": [],
+        "_netname": None,
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -61,6 +62,24 @@ class GBRegister(Register):
         for n in range(self.genblock.loop_len):
             ll.append(self.base + n*self.size)
         return ll
+
+    @property
+    def netname(self):
+        """For a net in a loop branch, 'name' returns branch_name[index].netname.  This returns
+        simply the last part (netname).  For a net not in a loop branch, this returns the same
+        as simply 'name'."""
+        if self._netname is not None:
+            return self._netname
+        if self.genblock is not None:
+            block_name, netname, loop_index = block_inst(self.name)
+            if block_name is not None:
+                return netname
+        return self.name
+
+    @netname.setter
+    def netname(self, val):
+        self._netname = val
+        return
 
     def copy(self):
         ref = super().copy()
@@ -144,6 +163,11 @@ class GBRegister(Register):
             copies.append(copy)
         return copies
 
+    def isFor(self):
+        if self.genblock is not None:
+            return self.genblock.isFor()
+        return False
+
 
 # TODO - Combine this class with GBRegister
 class GBMemory(Memory):
@@ -159,6 +183,7 @@ class GBMemory(Memory):
         "genblock": None,
         "ref_list": [],
         "block_aw": 0,
+        "_netname": None,
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -188,6 +213,24 @@ class GBMemory(Memory):
         for n in range(self.genblock.loop_len):
             ll.append(self.base + n*self.size)
         return ll
+
+    @property
+    def netname(self):
+        """For a net in a loop branch, 'name' returns branch_name[index].netname.  This returns
+        simply the last part (netname).  For a net not in a loop branch, this returns the same
+        as simply 'name'."""
+        if self._netname is not None:
+            return self._netname
+        if self.genblock is not None:
+            block_name, netname, loop_index = block_inst(self.name)
+            if block_name is not None:
+                return netname
+        return self.name
+
+    @netname.setter
+    def netname(self, val):
+        self._netname = val
+        return
 
     def copy(self):
         ref = super().copy()
@@ -260,6 +303,11 @@ class GBMemory(Memory):
             copy.name = f"{self.genblock.branch}_{self.name}_{n}"
             copies.append(copy)
         return copies
+
+    def isFor(self):
+        if self.genblock is not None:
+            return self.genblock.isFor()
+        return False
 
 
 class GBMemoryRegionStager(MemoryRegionStager):
@@ -352,17 +400,27 @@ class GBMemoryRegionStager(MemoryRegionStager):
                 # Find N empty spaces with consistent offsets between them
                 if ref.genblock.loop_len is None:
                     raise Exception(f"{ref.name} with {ref.genblock} has loop_len = None!")
-                bases = self.get_base_list(ref.block_aw, ref.genblock.loop_len, start = base)
-                print(f"    5551 {ref.name} aw = {ref.block_aw}; bases = {' '.join([hex(base) for base in bases])}, len(unrolled_refs) = {len(unrolled_refs)}")
                 # Then add each entry as its own unrolled copy
                 if resolved != self.RESOLVED:
-                    for n in range(len(unrolled_refs)):
-                        print(f"    5559 {self.label}: Adding {name} ({aw} bits) to (0x{bases[n]:x})")
-                        #newbase = super(MemoryRegionStager, self).add(aw, ref=unrolled_refs[n], addr=bases[n])
-                        newbase = self._base_add(ref.block_aw, ref=unrolled_refs[n], addr=bases[n])
-                        if newbase != bases[n]:
-                            raise GhostbusInternalException(f"Somehow failed to add ref to base 0x{base:x} and instead added it to 0x{newbase:x}")
-                    genlist[m] = (ref, bases[0], aw, _type, self.RESOLVED)
+                    base0 = None
+                    if Policy.aligned_for_loops:
+                        # Add a single entry representing all N copies allocated adjacent and aligned to the total size
+                        base0 = self._base_add(ref.aw, ref=ref, addr=None)
+                        # Update the base address for refs in ref_list
+                        for n in range(1, len(unrolled_refs)):
+                            unrolled_refs[n].base = base0 + n*(1 << ref.block_aw)
+                    else:
+                        # Add each unrolled instance in its own location (wherever it fits)
+                        bases = self.get_base_list(ref.block_aw, ref.genblock.loop_len, start = base)
+                        base0 = bases[0]
+                        print(f"    5551 {ref.name} aw = {ref.block_aw}; bases = {' '.join([hex(base) for base in bases])}, len(unrolled_refs) = {len(unrolled_refs)}")
+                        for n in range(len(unrolled_refs)):
+                            print(f"    5559 {self.label}: Adding {name} ({aw} bits) to (0x{bases[n]:x})")
+                            #newbase = super(MemoryRegionStager, self).add(aw, ref=unrolled_refs[n], addr=bases[n])
+                            newbase = self._base_add(ref.block_aw, ref=unrolled_refs[n], addr=bases[n])
+                            if newbase != bases[n]:
+                                raise GhostbusInternalException(f"Somehow failed to add ref to base 0x{base:x} and instead added it to 0x{newbase:x}")
+                    genlist[m] = (ref, base0, aw, _type, self.RESOLVED)
                 else:
                     print("    555a {self.label} {name}. why is this already resolved?")
         return
@@ -420,6 +478,7 @@ class ExternalModule():
         "_block_aw": None,
         "ref_list": [],
         "association": None,
+        "_netname": None,
     }
     def __init__(self, name, extbus, basename=None):
         for attr, default in self._attrs.items():
@@ -478,6 +537,29 @@ class ExternalModule():
     @property
     def genblock(self):
         return self.extbus.genblock
+
+    @property
+    def netname(self):
+        """For a net in a loop branch, 'name' returns branch_name[index].netname.  This returns
+        simply the last part (netname).  For a net not in a loop branch, this returns the same
+        as simply 'name'."""
+        if self._netname is not None:
+            return self._netname
+        if self.genblock is not None:
+            block_name, netname, loop_index = block_inst(self.name)
+            if block_name is not None:
+                return netname
+        return self.name
+
+    @netname.setter
+    def netname(self, val):
+        self._netname = val
+        return
+
+    def isFor(self):
+        if self.genblock is not None:
+            return self.genblock.isFor()
+        return False
 
     @property
     def ghostbus(self):

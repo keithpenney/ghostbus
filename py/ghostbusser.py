@@ -614,19 +614,6 @@ class MemoryTree(WalkDict):
                 del node.memories[n]
         return top_memories
 
-    # TODO DELETEME
-    def purge_memories(self):
-        n = 0
-        while n < len(self.memories):
-            if self.memories[n] is None:
-                del self.memories[n]
-            else:
-                n += 1
-        # Purge memories from trunk to leaves
-        for key, node in self._dd.items():
-            node.purge_memories()
-        return
-
     def print(self):
         print("Walking:")
         for key, node in self.walk():
@@ -702,6 +689,7 @@ class GhostBusser(VParser):
                         else:
                             feature_print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
                             generate = parseForLoop(gen_block, source)
+                            generate._loop_index = gen_index
                             if generate is None:
                                 # UNPARSED_FOR_LOOP
                                 raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
@@ -827,7 +815,8 @@ class GhostBusser(VParser):
                             memname = gen_netname
                         else:
                             feature_print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
-                            #generate = parseForLoop(gen_block, source)
+                            generate = parseForLoop(gen_block, source)
+                            generate._loop_index = gen_index
                             #if generate is None:
                             #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                     attr_dict = mem_dict["attributes"]
@@ -1135,7 +1124,6 @@ class GhostBusser(VParser):
                 newbus.alias = alias
                 newbus.extmod_name = extmod_name
                 self._ghostbusses.append(newbus)
-
         return
 
     # TODO DELETEME
@@ -1189,7 +1177,6 @@ class GhostBusser(VParser):
             for inst_label in inst_list:
                 gen_block, inst, index = block_inst(inst_label)
                 passenger = ExternalModule(inst_label, extbus=bus, basename=basename)
-                # TODO FIXME START HERE
                 passenger.genblock = bus.genblock.copy()
                 passenger.genblock._loop_index = index
                 ref_list.append()
@@ -1370,16 +1357,17 @@ class GhostBusser(VParser):
                     ref.block_aw = aw
                     ref.aw = new_aw
                     #ref.aw = new_aw
-                    forloop.loop_len = loop_len
+                    #forloop.loop_len = loop_len
                     print(f"5552 setting {netname} loop_len to {loop_len}")
-                    ref.genblock = forloop
+                    #ref.genblock = forloop
                     if hasattr(ref, "_readRangeDepth"):
                         # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
                         ref._readRangeDepth()
                     for n in range(len(refs)):
-                        refs[n].genblock = forloop
+                        #refs[n].genblock = forloop
+                        refs[n].genblock.loop_len = loop_len
                         refs[n]._copyRangeDepth(ref)
-                        refs[n].name = Policy.flatten_instance_label(refs[n].name) # f"{forloop.branch}_{netname}_{n}"
+                        #FIXME NOT HERE, RIGHT? refs[n].name = Policy.flatten_instance_label(refs[n].name) # f"{forloop.branch}_{netname}_{n}"
                     ref.ref_list = refs
                     results.append(ref)
                     feature_print(f"Generate Loop {block_name} of len {loop_len}: {ref.name} now has AW {ref.aw}")
@@ -1539,9 +1527,9 @@ class JSONMaker():
         else:
             top_hierarchy = mem.hierarchy[1:]
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
-        #print_entries = [f"{ref[-1].name}" for ref in entries]
-        #sindent = " "*indent
-        #print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
+        print_entries = [f"{ref[-1].name}" for ref in entries]
+        sindent = " "*indent
+        print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
                 #print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")
@@ -1562,12 +1550,10 @@ class JSONMaker():
                     dd[ref.name] = subdd
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
                 #print(f"+ [{mem.domain}] {'.'.join(top_hierarchy)}.{ref.name}")
-                # FIXME HACK! Make up your damn mind, Keef!  Are you unrolling ExternalModules before, or AFTER adding to the memory map!?!?!
-                #if isinstance(ref, ExternalModule):
-                #    copies = (ref,)
-                #else:
-                #    copies = ref.unroll()
-                for ref in (ref,):
+                ref_list = (ref,)
+                if Policy.aligned_for_loops and ref.isFor():
+                    ref_list = ref.ref_list
+                for ref in ref_list:
                     if ref.signed is not None and ref.signed:
                         signstr = "signed"
                     else:
