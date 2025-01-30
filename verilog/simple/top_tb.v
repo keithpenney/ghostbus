@@ -40,8 +40,8 @@ top top_i (
 
 // =========== Stimulus =============
 `define GHOSTBUS_TEST_CSRS
-`define DEBUG_READS
-`define DEBUG_WRITES
+//`define DEBUG_READS
+//`define DEBUG_WRITES
 `include "gb_testbench.vh"
 
 initial begin

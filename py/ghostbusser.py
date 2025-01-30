@@ -492,7 +492,7 @@ class MemoryTree(WalkDict):
                     toptag = node._parent.toptag_map[node.label]
                     genblock = node._parent.genblock_map[node.label]
                 node.genblock = genblock
-                print(f"7220 node.label = {node.label}; genblock = {node.genblock}")
+                #print(f"7220 node.label = {node.label}; genblock = {node.genblock}")
                 if hasattr(node, "memories"):
                     # =========================================================
                     # At this point, a module with a declared bus but no implied bus will have
@@ -565,8 +565,13 @@ class MemoryTree(WalkDict):
                             printv(f"1234 {node.label} is supposedly in domain {parent_domain}")
                             for m in range(len(node._parent.memories)):
                                 if node._parent.memories[m].domain == parent_domain:
-                                    printv("    Adding {}({}) to {} memory {}".format(node.memories[n].name, node.memories[n].domain, node._parent.label, m))
-                                    node._parent.memories[m].add_item(node.memories[n])
+                                    #printv("    Adding {}({}) to {} memory {}".format(node.memories[n].name, node.memories[n].domain, node._parent.label, m))
+                                    if node.memories[n].size > 0:
+                                        #print(f"    +0405 Adding {node.memories[n].name} {node.memories[n].hierarchy} to memory {node._parent.label}")
+                                        node._parent.memories[m].add_item(node.memories[n])
+                                    else:
+                                        #print(f"    +0405 SKIPPING {node.memories[n].name} {node.memories[n].hierarchy}")
+                                        pass
                                     added = True
                             if not added:
                                 # Probably an item was found referencing a new domain
@@ -611,6 +616,7 @@ class MemoryTree(WalkDict):
                     if node.memories[n].size == 0:
                         todelete.append(n)
             for n in todelete:
+                #print(f"-0405 deleting {node.memories[n].label} {node.memories[n].hierarchy}")
                 del node.memories[n]
         return top_memories
 
@@ -759,7 +765,7 @@ class GhostBusser(VParser):
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
                         reg.alias = alias
                         reg.signed = signed
-                        reg.busname = busname
+                        reg.domain = busname
                         reg.genblock = generate
                         reg.manual_addr = addr
                         if gen_block is not None and gen_index is not None:
@@ -784,9 +790,6 @@ class GhostBusser(VParser):
                         #self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
                         self._newhandleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
                                            association=subname, generate=generate, driver=False)
-                        if mrs.get(busname, None) is None:
-                            mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("1: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
                     ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -833,7 +836,7 @@ class GhostBusser(VParser):
                         aw = math.ceil(math.log2(size))
                         mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source)
                         mem.signed = signed
-                        mem.busname = busname
+                        mem.domain = busname
                         mem.genblock = generate
                         mem.manual_addr = addr
                         if gen_block is not None and gen_index is not None:
@@ -865,23 +868,22 @@ class GhostBusser(VParser):
                 # Any ghostmod has an implied ghostbus coming in
                 if None not in busnames_implicit:
                     busnames_implicit.append(None)
-            print(f"5554 module_name = {module_name}")
+            #print(f"5554 module_name = {module_name}")
             generates = self._resolveGenerates()
             for ref in generates:
-                mrs[ref.busname].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
+                if mrs.get(ref.domain, None) is None:
+                    mrs[ref.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=ref.domain)
+                    printd("1: created mr label {} {} ({})".format(ref.domain, mrs[ref.domain].label, mod_hash))
+                mrs[ref.domain].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
             passengers = self._resolvePassengers()
             for passenger in passengers:
-                print(f"7225 passenger {passenger.name} ({passenger.domain}) has {passenger.genblock}")
+                #print(f"7225 passenger {passenger.name} ({passenger.domain}) has {passenger.genblock} and is type {type(passenger)}")
                 added = False
-                for busname, mr in mrs.items():
-                    if mr.domain == passenger.domain:
-                        # I need to ensure I'm adding to the right domain!
-                        mr.add(width=passenger.aw, ref=passenger, addr=passenger.base)
-                        print(f"  added {passenger.name} to MemoryRegion {mr.label} in domain {mr.domain}")
-                        added = True
-                if not added:
-                    # UNKNOWN_DOMAIN
-                    raise GhostbusException("Could not find the referenced domain {passenger.domain} for passenger {passenger.name} in module {module_name}.")
+                if mrs.get(passenger.domain, None) is None:
+                    mrs[passenger.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=passenger.domain)
+                mr = mrs[passenger.domain]
+                mr.add(width=passenger.aw, ref=passenger, addr=passenger.base)
+                #print(f"  added {passenger.name} to MemoryRegion {mr.label} in domain {mr.domain}")
             module_info[mod_hash]["memory"] = mrs
             module_info[mod_hash]["explicit_busses"] = busnames_explicit
             module_info[mod_hash]["implicit_busses"] = busnames_implicit
@@ -910,7 +912,7 @@ class GhostBusser(VParser):
         #for mmap in self.memory_maps:
         #    mmap.shrink()
         #memtree.distribute_busses()
-        #self.memory_map.print(4)
+        #self.memory_maps[0].print(4)
         ghostmods = {}
         for key, _info in module_info.items():
             mr = _info.get("memory", None)
@@ -1006,7 +1008,7 @@ class GhostBusser(VParser):
             for entry in entries:
                 netname, dw, portnames, source = entry[:4]
                 rangestr = getUnparsedWidthRange(source)
-                print(f"7531 {pbus.name} {netname}: {portnames}")
+                #print(f"7531 {pbus.name} {netname}: {portnames}")
                 for port in portnames:
                     pbus.set_port(port, netname, portwidth=dw, rangestr=rangestr, source=source)
             # TODO - Do I want to 'deblock' here?
@@ -1033,7 +1035,7 @@ class GhostBusser(VParser):
         # Now bundle up passengers from generate blocks
         for base_instance_name, plist in passenger_dict.items():
             # Sort by index
-            print(f"7532 plist {plist}")
+            #print(f"7532 plist {plist}")
             plist.sort(key=lambda x: x[2])
             indices = [p[2] for p in plist]
             if not check_complete_indices(indices):
@@ -1093,206 +1095,6 @@ class GhostBusser(VParser):
             self._bus_passengers.append((netname, dw, portnames, instnames, domain, source, addr, association, generate))
         return
 
-    def _handleBus(self, netname, ports, dw, source, busname=None, alias=None, extmod_name=None):
-        rangestr = getUnparsedWidthRange(source)
-        for port in ports:
-            hit = False
-            for bus in self._ghostbusses:
-                if bus.name == busname:
-                    #print(f"&&&&&&&&&&&&&&&&&&& _handleBus: adding {netname} to bus {busname} from source {source}")
-                    bus.set_port(port, netname, portwidth=dw, rangestr=rangestr, source=source)
-                    hit = True
-                    # TODO - How is 'alias' used for a bus? Is it even needed?
-                    if alias is not None:
-                        if bus.alias is not None:
-                            if alias != bus.alias:
-                                # NAME_COLLISION
-                                raise GhostbusException(f"Cannot give multiple aliases to the same bus ({alias} and {bus.alias}).")
-                        else:
-                            bus.alias = alias
-                    if extmod_name is not None:
-                        if bus.extmod_name is not None:
-                            if extmod_name != bus.extmod_name:
-                                # MULTIPLE_ASSOCIATION
-                                raise GhostbusException(f"Cannot make multiple branch assignments to the same bus ({extmod_name} and {bus.extmod_name}).")
-                        else:
-                            bus.extmod_name = extmod_name
-            if not hit:
-                #print(f"&&&&&&&&&&&&&&&&&&& _handleBus: New bus {busname}; adding {netname}")
-                newbus = BusLB(busname)
-                newbus.set_port(port, netname, portwidth=dw, rangestr=rangestr, source=source)
-                newbus.alias = alias
-                newbus.extmod_name = extmod_name
-                self._ghostbusses.append(newbus)
-        return
-
-    # TODO DELETEME
-    def _handleExtmod(self, module, netname, vals, dw, source, addr=None, sub=None, generate=None):
-        block_name, extname, loop_index = block_inst(netname)
-        if block_name is not None:
-            feature_print(f"Extmod {extname} is instantiated within a Generate Block!")
-        portnames = []
-        instnames = []
-        if len(vals) > 1:
-            for val in vals:
-                if BusLB.allowed_portname(val):
-                    portnames.append(val)
-                else:
-                    if val not in instnames:
-                        instnames.append(val)
-        else:
-            val = vals[0]
-            if BusLB.allowed_portname(val):
-                # It's a port name
-                portnames.append(val)
-            else:
-                # Assume it's an inst name
-                if val not in instnames:
-                    instnames.append(val)
-        if len(instnames) > 1:
-            if 'dout' in portnames or 'wdata' in portnames:
-                serr = "The 'dout' ('wdata') vector cannot be shared between multiple instances " + \
-                      f"({instnames}). See: {source}"
-                # SHARED_WDATA
-                raise GhostbusException(serr)
-        # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
-        #if generate is not None and generate.isFor():
-        #    netname = f"{generate.branch}_{generate._loop_index}_{netname}"
-        self._extmod_list.append((netname, dw, portnames, instnames, source, addr, sub, generate))
-        return
-
-    # TODO DELETEME
-    def _resolveExtmods(self):
-        if len(self._extmod_list) == 0:
-            return []
-        busses = self._resolveExtmod(self._extmod_list)
-        extmods = []
-        for instname, data in busses.items():
-            basename, bus, inst_list = data
-            #print(f"    instname {instname}; bus {bus.name}; bus['addr'] = {bus['addr']}; bus = {bus}")
-            # Maybe I'll just sanitize the genblock bus ports names here?
-            bus.deblock()
-            extmod = ExternalModule(instname, extbus=bus, basename=basename)
-            ref_list = []
-            for inst_label in inst_list:
-                gen_block, inst, index = block_inst(inst_label)
-                passenger = ExternalModule(inst_label, extbus=bus, basename=basename)
-                passenger.genblock = bus.genblock.copy()
-                passenger.genblock._loop_index = index
-                ref_list.append()
-            extmod.ref_list = ref_list
-            feature_print(f"  Resolving ExternalModule {instname}; bus.genblock = {bus.genblock}")
-            extmods.append(extmod)
-        return extmods
-
-    # TODO DELETEME
-    def _resolveExtmod(self, data):
-        ext_advice = "If there's only a " + \
-                    "single external instance in this module, you must label at " + \
-                    "least one net with the instance name, e.g.:\n" + \
-                    '  (* ghostbus_ext="inst_name, clk" *) wire ext_clk;\n' + \
-                    "If there is more than one external instance in this module, " + \
-                    "you need to include the instance name in the attribute value for " + \
-                    "each net in the bus (e.g. 'clk', 'addr', 'din', 'dout', 'we')."
-        module_instnames = {}
-        loop_dict = {}
-        for datum in data:
-            #netname, dw, portnames, instnames, source, addr, sub, generate = datum
-            #netname = Policy.flatten_instance_label(datum[0])
-            netname = datum[0]
-            block_name, extname, loop_index = block_inst(netname)
-            if block_name is not None:
-                netname = extname
-            generate = datum[7]
-            instnames = datum[3]
-            postfix = ""
-            if generate is not None and generate.isFor():
-                postfix = f"_{generate._loop_index}"
-            for instname in instnames:
-                #count = module_instnames.get(instname + postfix, 0)
-                #module_instnames[instname + postfix] = count + 1
-                ll = loop_dict.get(instname, [])
-                if instname + postfix not in ll:
-                    ll.append(instname + postfix)
-                    loop_dict[instname] = ll
-                module_data = module_instnames.get(instname, {})
-                net_list = module_data.get(netname, None)
-                if net_list is None:
-                    module_data[netname] = datum
-                module_instnames[instname] = module_data
-                #if instname not in module_instnames:
-                #    module_instnames.append(instname)
-        inst_err = False
-        busses = {}
-        universal_inst = None
-        if len(module_instnames) == 1:
-            #universal_inst = module_instnames[0]
-            universal_inst, universal_module_data = module_instnames.popitem()
-        if len(module_instnames) == 0:
-            inst_err = True
-        else:
-            # print(f"len(module_instnames) = {len(module_instnames)}")
-            for instname, module_data in module_instnames.items():
-                print(f"5557 instname = {instname}")
-                base_bus = busses.get(instname, None)
-                if base_bus is None:
-                    bus = BusLB()
-                    feature_print(f"    New bus id = {id(bus)}")
-                else:
-                    feature_print(f"    Got bus id = {id(bus)}")
-                    bus = base_bus[1]
-                this_instname = None
-                these_insts = []
-                for netname, datum in module_data.items():
-                    #print(f"  datum = {datum}")
-                    _, dw, portnames, instnames, source, addr, sub, generate = datum
-                    print(f"5558 {instname}: {netname}, {dw}, {portnames}, {instnames}")
-                    postfix = ""
-                    if generate is not None and generate.isFor():
-                        postfix = f"_{generate._loop_index}"
-                    #print(f"  :::: netname={netname}; dw={dw}; instnames={instnames}; portnames={portnames}; generate={generate}")
-                    #print(f"  :::: bus.genblock = {bus.genblock}; generate={generate}")
-                    rangestr = getUnparsedWidthRange(source)
-                    if len(instnames) == 0 and universal_inst is not None:
-                        instnames.append(universal_inst)
-                    for net_instname in instnames:
-                        print(f"  5558 net_instname = {net_instname}, net_instname+postfix = {net_instname+postfix}")
-                        #if net_instname+postfix == instname:
-                        if net_instname == instname:
-                            this_instname = net_instname
-                            if sub is not None and bus.sub is None:
-                                bus.sub = sub
-                            if bus.genblock is not None and bus.genblock.__class__ != generate.__class__:
-                                feature_print(f"%%%%%%%%%%%%%%% Wtf? {bus.genblock} != {generate}. {instname} {netname} {instnames} {portnames}")
-                            these_insts = loop_dict.get(instname)
-                            generate.loop_len = len(these_insts)
-                            bus.genblock = generate
-                            for portname in portnames:
-                                print(f"  bus.set_port({portname}, {netname}, portwidth={dw}, rangestr={rangestr})")
-                                bus.set_port(portname, netname, portwidth=dw, rangestr=rangestr, source=source)
-                            if addr is not None:
-                                # print(f"addr is not None: datum = {datum}")
-                                errst = None
-                                try:
-                                    bus.base = addr
-                                except GhostbusException as err:
-                                    errst = str(err)
-                                if errst != None:
-                                    # MULTIPLE_ADDRESSES
-                                    raise GhostbusException(f"{instnames}: {errst}")
-                busses[instname] = (this_instname, bus, these_insts) # A funny hack for block-scope extmods
-        if inst_err:
-            serr = "No instance referenced for external bus. " + ext_advice
-            # NO_EXTMOD_INSTANCE
-            raise GhostbusException(serr)
-        for instname, data in busses.items():
-            basename, bus, insts = data
-            valid, msg = bus.validate()
-            print(f"7226 bus.dw = {bus.dw}")
-            busses[instname] = (basename, bus, insts)
-            #print_dict(busses[instname])
-        return busses
-
     def _resetGenerates(self):
         """Get ready to handle a new module with potentitally more generate blocks."""
         self._generates = {}
@@ -1329,7 +1131,7 @@ class GhostBusser(VParser):
           3. Calculate the size of the resulting objects. `Unrolled_AW = element_AW + clog2(len(indicies))`
           4. Return items to be added to the memory map
         """
-        print(f"5553 _resolveGenerates: len(self._generates) = {len(self._generates)}")
+        #print(f"5553 _resolveGenerates: len(self._generates) = {len(self._generates)}")
         results = []
         for block_name, block_info in self._generates.items():
             forloop = parseForLoop(block_name, block_info["source"])
@@ -1337,10 +1139,10 @@ class GhostBusser(VParser):
                 # UNPARSED_FOR_LOOP
                 raise GhostbusException(f"Failed to find for-loop around {block_info['source']}")
             loop_len = None
-            for reftype in ("csrs", "rams", "exts"): # TODO again, 'exts' is probably unused
-                print(f"  5555 reftype = {reftype}")
+            for reftype in ("csrs", "rams"):
+                #print(f"  5555 reftype = {reftype}")
                 for netname, netdict in block_info[reftype].items():
-                    print(f"    5556 netname = {netname}")
+                    #print(f"    5556 netname = {netname}")
                     indices = netdict["indices"]
                     refs = netdict["refs"]
                     ref = refs[0]
@@ -1352,22 +1154,18 @@ class GhostBusser(VParser):
                         err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
                             + f" ({len(indices)} != {loop_len})"
                         raise GhostbusInternalException()
-                    aw = ref.aw
-                    new_aw = aw + bits(loop_len - 1) # I'm pretty sure it's -1
-                    ref.block_aw = aw
-                    ref.aw = new_aw
-                    #ref.aw = new_aw
-                    #forloop.loop_len = loop_len
-                    print(f"5552 setting {netname} loop_len to {loop_len}")
+                    #aw = ref.aw
+                    # Setting block_aw happens in _resolve_pass_generates
+                    #new_aw = aw + bits(loop_len - 1) # I'm pretty sure it's -1
+                    #ref.block_aw = new_aw
+                    #print(f"5552 setting {netname} loop_len to {loop_len}")
                     #ref.genblock = forloop
                     if hasattr(ref, "_readRangeDepth"):
                         # I need to call reg._readRangeDepth() on the resulting GBRegister or GBMemory objects
                         ref._readRangeDepth()
                     for n in range(len(refs)):
-                        #refs[n].genblock = forloop
                         refs[n].genblock.loop_len = loop_len
                         refs[n]._copyRangeDepth(ref)
-                        #FIXME NOT HERE, RIGHT? refs[n].name = Policy.flatten_instance_label(refs[n].name) # f"{forloop.branch}_{netname}_{n}"
                     ref.ref_list = refs
                     results.append(ref)
                     feature_print(f"Generate Loop {block_name} of len {loop_len}: {ref.name} now has AW {ref.aw}")
@@ -1435,7 +1233,6 @@ class GhostBusser(VParser):
                 }
         """
         # Start from leaf,
-        # (ExternalModule instance).
         memtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
         #print_dict(module_info)
         nodes_visited = 0
@@ -1479,8 +1276,8 @@ class GhostBusser(VParser):
                     memtree_node.memories[n].declared_busses = busses_explicit
             else:
                 #print(f"no {key} in ghostmods")
-                #memtree_node.memory = GBMemoryRegionStager(label=module_name, hierarchy=hier)
                 memtree_node.memories.append(GBMemoryRegionStager(label=module_name, hierarchy=hier))
+                #print(f"0405 new GBMemoryRegionStager for {module_name}, hier = {hier}")
         #print(f"Done building: visited {nodes_visited} nodes")
         return memtree
 
@@ -1529,7 +1326,7 @@ class JSONMaker():
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
         print_entries = [f"{ref[-1].name}" for ref in entries]
         sindent = " "*indent
-        print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
+        #print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
                 #print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")

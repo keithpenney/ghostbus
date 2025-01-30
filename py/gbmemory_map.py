@@ -370,22 +370,22 @@ class GBMemoryRegionStager(MemoryRegionStager):
     def add(self, width=0, ref=None, addr=None):
         """Overloaded to stage Generate-For entries separately"""
         if hasattr(ref, "genblock") and isForLoop(ref.genblock):
-            print(f"5550 adding {ref.name} which is in a for loop")
+            #print(f"5550 adding {ref.name} which is in a for loop")
             if addr is not None:
                 self._explicit_generates.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
             else:
                 self._generates.append((ref, addr, width, self.TYPE_MEM, self.UNRESOLVED))
             self._resolved = False
         else:
-            print(f"5550 adding {ref.name} as usual")
+            #print(f"5550 adding {ref.name} as usual")
             return super().add(width, ref, addr)
         return
 
     def _resolve_pass_generates(self):
         # Add generate instances in blocks of consistent offset
         todo = (self._explicit_generates, self._generates)
-        if len(self._explicit_generates) + len(self._generates) > 0:
-            print(f"555 _resolve_pass_generates {self.label}({self.domain}) {len(self._explicit_generates)} {len(self._generates)}")
+        #if len(self._explicit_generates) + len(self._generates) > 0:
+        #    print(f"555 _resolve_pass_generates {self.label}({self.domain}) {len(self._explicit_generates)} {len(self._generates)}")
         for genlist in todo:
             for m in range(len(genlist)):
                 data = genlist[m]
@@ -396,7 +396,8 @@ class GBMemoryRegionStager(MemoryRegionStager):
                 name = None
                 if ref is not None:
                     name = ref.name
-                unrolled_refs = ref.ref_list
+                full_aw = aw + bits(len(ref.ref_list)-1)
+                ref.block_aw = full_aw
                 # Find N empty spaces with consistent offsets between them
                 if ref.genblock.loop_len is None:
                     raise Exception(f"{ref.name} with {ref.genblock} has loop_len = None!")
@@ -405,24 +406,26 @@ class GBMemoryRegionStager(MemoryRegionStager):
                     base0 = None
                     if Policy.aligned_for_loops:
                         # Add a single entry representing all N copies allocated adjacent and aligned to the total size
-                        base0 = self._base_add(ref.aw, ref=ref, addr=None)
+                        base0 = self._base_add(ref.block_aw, ref=ref, addr=None)
+                        #print(f"    5560 {ref.name} aw = {ref.aw}; len(ref.ref_list) = {len(ref.ref_list)}; base0 = 0x{base0:x}")
                         # Update the base address for refs in ref_list
-                        for n in range(1, len(unrolled_refs)):
-                            unrolled_refs[n].base = base0 + n*(1 << ref.block_aw)
+                        for n in range(1, len(ref.ref_list)):
+                            ref.ref_list[n].base = base0 + n*(1 << ref.aw)
                     else:
                         # Add each unrolled instance in its own location (wherever it fits)
-                        bases = self.get_base_list(ref.block_aw, ref.genblock.loop_len, start = base)
+                        bases = self.get_base_list(ref.aw, ref.genblock.loop_len, start = base)
                         base0 = bases[0]
-                        print(f"    5551 {ref.name} aw = {ref.block_aw}; bases = {' '.join([hex(base) for base in bases])}, len(unrolled_refs) = {len(unrolled_refs)}")
-                        for n in range(len(unrolled_refs)):
-                            print(f"    5559 {self.label}: Adding {name} ({aw} bits) to (0x{bases[n]:x})")
-                            #newbase = super(MemoryRegionStager, self).add(aw, ref=unrolled_refs[n], addr=bases[n])
-                            newbase = self._base_add(ref.block_aw, ref=unrolled_refs[n], addr=bases[n])
+                        #print(f"    5551 {ref.name} aw = {ref.aw}; bases = {' '.join([hex(base) for base in bases])}, len(ref.ref_list) = {len(ref.ref_list)}")
+                        for n in range(len(ref.ref_list)):
+                            #print(f"    5559 {self.label}: Adding {name} ({aw} bits) to (0x{bases[n]:x})")
+                            #newbase = super(MemoryRegionStager, self).add(aw, ref=ref.ref_list[n], addr=bases[n])
+                            newbase = self._base_add(ref.aw, ref=ref.ref_list[n], addr=bases[n])
                             if newbase != bases[n]:
                                 raise GhostbusInternalException(f"Somehow failed to add ref to base 0x{base:x} and instead added it to 0x{newbase:x}")
                     genlist[m] = (ref, base0, aw, _type, self.RESOLVED)
                 else:
-                    print("    555a {self.label} {name}. why is this already resolved?")
+                    #print("    555a {self.label} {name}. why is this already resolved?")
+                    pass
         return
 
     def get_base_list(self, aw, num, start=0):

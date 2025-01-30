@@ -2,9 +2,9 @@
 
 import os
 
-from memory_map import Register, MemoryRegion, bits, is_aligned
+from memory_map import Register, bits, is_aligned
 from gbexception import GhostbusException, GhostbusFeatureRequest, GhostbusInternalException
-from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, isForLoop
+from gbmemory_map import GBRegister, GBMemory, ExternalModule, isForLoop
 from util import strDict, check_complete_indices, feature_print
 from yoparse import block_inst
 from verilogger import Verilogger
@@ -985,7 +985,7 @@ class DecoderLB():
             wa = 1 if (ram.access & Register.WRITE) > 0 else 0
             ram_writeable.append(wa)
         rw = flatten_bits(ram_writeable)
-        print("Extmods:")
+        print("Bus Passengers (External Module Instances):")
         ext_writeable = []
         for ext in exts:
             print("{}.{}: 0x{:x}".format(ext._domain[1], ext.name, ext._domain[0] + ext.base))
@@ -1164,14 +1164,13 @@ class DecoderDomainLB():
             elif isinstance(ref, ExternalModule):
                 ref.ghostbus = self.ghostbus
                 if hasattr(ref, "genblock") and ref.genblock is not None:
-                    print(f"7223 ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
-                    # BUBBLES - The relative address 'start' is available here.  Do I need to store it for future use, or is extmod.base equivalent?
+                    #print(f"7223 ExternalModule {ref.name} is instantiated at 0x{start:x} ?== 0x{ref.base:x} within generate block {ref.genblock.branch}")
                     if self.block_exts.get(ref.genblock.branch) is None:
                         self.block_exts[ref.genblock.branch] = []
                     self.block_exts[ref.genblock.branch].append(ref)
                     self.parent.register_block_verilogger(ref.genblock.branch)
                 else:
-                    print(f"7224 ExternalModule {ref.name} is at the top level")
+                    #print(f"7224 ExternalModule {ref.name} is at the top level")
                     self.exts.append((start, ref))
             if isinstance(ref, GBRegister): # Only CSRs are local now
                 if stop > self.max_local:
@@ -1304,7 +1303,7 @@ class DecoderDomainLB():
                     err = f"Somehow I'm getting inconsistent number of loops through {block_name} in {block_info['module_name']}" \
                         + f" ({len(indices)} != {loop_len})"
                     raise GhostbusInternalException()
-                print(f"3320 Submod {modname} ({ref.inst} -> {modname}) gets addresses: {ref.gen_addrs}")
+                #print(f"3320 Submod {modname} ({ref.inst} -> {modname}) gets addresses: {ref.gen_addrs}")
                 ref.setInst(modname)
                 ref.gen_addrs = {indices[n]: addrs[n] for n in range(len(addrs))}
                 block_submods[branch].append(ref)
@@ -1581,7 +1580,7 @@ class DecoderDomainLB():
             if len(exts) == 0:
                 continue
             if not any_block:
-                vl.comment("Extmods in block scope")
+                vl.comment("Bus passengers in block scope")
                 any_block = True
             vl.comment(f"Generate Block {branch}")
             for ext in exts:
@@ -2305,10 +2304,9 @@ class DecoderDomainLB():
                     vl.end()
                 else:
                     index = ram.genblock.index
-                    # FIXME technically "ram.aw" here in the comment is wrong. I need both "ram.aw" and "ram.block_aw"
-                    cmt = f"0x{ram.base:x}-0x{ram.base+(1<<ram.block_aw)-1:x} (+{index}*0x{1<<ram.block_aw:x})"
-                    awdiff = self.ghostbus.aw - ram.block_aw
-                    vl.add(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.block_aw}] == {vhex(ram.base>>ram.block_aw, awdiff)} + {index}[{awdiff}-1:0];",
+                    cmt = f"0x{ram.base:x}-0x{ram.base+(1<<ram.aw)-1:x} (+{index}*0x{1<<ram.aw:x})"
+                    awdiff = self.ghostbus.aw - ram.aw
+                    vl.add(f"assign addrhit_{ramname}[{index}] = {self.ghostbus['addr']}[{gbah}:{ram.aw}] == {vhex(ram.base>>ram.aw, awdiff)} + {index}[{awdiff}-1:0];",
                            comment=cmt)
                     # TODO awstr, not aw
                     #vl.add(self._addrhit_logic_block("assign", f"assign addrhit_{ramname}[{index}]", self.ghostbus['addr'], ram.base, self.ghostbus.aw, awstr, index))
@@ -2330,11 +2328,12 @@ class DecoderDomainLB():
                 aw = submod.domains[None].mod.aw
                 base = submod.domains[None].mod.base
                 awdiff = self.ghostbus.aw - aw
-                rangestr = f"[{ram.range[0]}:{ram.range[1]}]"
                 vl.comment(f"Submodule {submod.inst} {submod.inst}")
                 # TODO - This needs to be the submod instance, not the module name!
-                vl.add(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];")
-        # Extmods TODO
+                cmt = f"0x{base:x}-0x{base+(1<<aw)-1:x} (+{index}*0x{1<<aw:x})"
+                vl.add(f"assign addrhit_{branch}_{submod.inst}[{index}] = {self.ghostbus['addr']}[{self.ghostbus.aw}-1:{aw}] == {vhex(base>>aw, awdiff)} + {index}[{awdiff}-1:0];",
+                        comment=cmt)
+        # Passengers
         for branch, extmods in self.block_exts.items():
             vl = verilogger_dict[branch]
             for extmod in extmods:

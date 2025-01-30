@@ -760,6 +760,7 @@ class MemoryRegion():
         for entry, _type in self: # Iterator magic
             ref = entry[2]
             if ref is not None and isinstance(ref, MemoryRegion):
+                #print(f"1020 ref {ref.name} is type {type(ref)}: {ref}")
                 dn = indent+self._delta_indent
                 ref._delta_indent = self._delta_indent
                 rs = ref.str(dn)
@@ -775,6 +776,9 @@ class MemoryRegion():
                 rs = '\n'.join(rslines)
                 ss.append(rs)
             else:
+                if ref is not None:
+                    #print(f"1021 ref {ref.name} is type {type(ref)}: {ref}")
+                    pass
                 elemstr = " {:8x}-{:8x} ".format(self.base + entry[0], self.base + entry[1])
                 if _type == self.TYPE_MEM:
                     ordered = (elemstr, empty)
