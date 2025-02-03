@@ -721,10 +721,13 @@ class GhostBusser(VParser):
                 for netname, net_dict in netnames.items():
                     attr_dict = net_dict["attributes"]
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                    if not isGhostbus(token_dict):
+                        continue
                     # for token, val in token_dict.items():
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
                     gen_block, gen_netname, gen_index = block_inst(netname)
+                    print(f"1000 {netname}")
                     generate = None
                     if gen_block is not None:
                         if gen_index is None:
@@ -808,6 +811,10 @@ class GhostBusser(VParser):
                 for memname, mem_dict in memories.items():
                     gen_block, gen_netname, gen_index = block_inst(memname)
                     generate = None
+                    attr_dict = mem_dict["attributes"]
+                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                    if not isGhostbus(token_dict):
+                        continue
                     source = mem_dict['attributes']['src']
                     if gen_block is not None:
                         if autogenblk(gen_block):
@@ -822,9 +829,7 @@ class GhostBusser(VParser):
                             generate._loop_index = gen_index
                             #if generate is None:
                             #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
-                    attr_dict = mem_dict["attributes"]
                     signed = net_dict.get("signed", None)
-                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
                     # for token, val in token_dict.items():
                     #     printd("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
@@ -1491,6 +1496,13 @@ def parseForLoop(branch_name, yosrc):
     if loop_index is None:
         return None
     return GenerateFor(branch_name, loop_index, start, comp_op, comp_val, inc)
+
+
+def isGhostbus(token_dict):
+    """Only worry about nets that use one of our attributes."""
+    if len(token_dict) > 0:
+        return True
+    return False
 
 
 def handleGhostbus(args):
