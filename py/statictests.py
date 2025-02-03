@@ -211,6 +211,8 @@ def test__matchForLoop():
         "generate for (boop; bop; floop)": (None, None, None, None, None),
         # Make sure we get the last match
         "generate for (N=0;N<4;N=N+1) generate for (M=1;M<M_MAX;M=M+M_INC)": ("M", "1", "<", "M_MAX", "+M_INC"),
+        # TODO - Handle generates using the old "genvar" format
+        #"genvar e;\nwire [254:1] evStrobe;\nassign ppsMarker = evStrobe[EVCODE_SECONDS_MARKER];\nfor (e = 1 ; e <= 254 ; e = e + 1) begin : evstr": (),
     }
     fail = False
     for ss, exp in dd.items():
