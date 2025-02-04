@@ -1,6 +1,6 @@
 # Some utility functions/classes for use throughout the codebase
 
-DEBUG_BRANCH = True # Set to True for debug branches
+DEBUG_BRANCH = False # Set to True for debug branches
 def feature_print(*args, **kwargs):
     if DEBUG_BRANCH:
         print(*args, **kwargs)

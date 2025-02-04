@@ -727,7 +727,6 @@ class GhostBusser(VParser):
                     #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
                     gen_block, gen_netname, gen_index = block_inst(netname)
-                    print(f"1000 {netname}")
                     generate = None
                     if gen_block is not None:
                         if gen_index is None:
