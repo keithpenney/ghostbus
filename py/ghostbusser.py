@@ -93,7 +93,6 @@ class GhostbusInterface():
         "ghostbus_name":        tokens.DOMAIN, # DEPRECATED
         # Associate a driver with a passenger (or vice-versa)
         "ghostbus_branch":      tokens.BRANCH,
-        "ghostbus_sub":         tokens.BRANCH, # DEPRECATED
         # This one will hopefully be rarely needed.
         # It is to be added to a module instantiation and means "No ghostbusses pass through the top-level ports of this module"
         "ghostbus_top":         tokens.TOP,
