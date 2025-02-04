@@ -352,7 +352,14 @@ class BusLB():
                     busval[0].strip().lower(), source, busval[1]))
             else:
                 raise GhostbusFeatureRequest("Name-mangle a named bus if declared in a module that is instantiated more than once.")
-        return
+        return portname
+
+    def port_is_data(self, portname):
+        """Returns True if 'portname' is a valid name for 'wdata' or 'rdata' bus nets."""
+        portname = self._validate_portname(portname)
+        if portname in ("din", "dout"):
+            return True
+        return False
 
     def _set_width(self, name, width=1, rangestr=None):
         for wparam, ports in self._derived.items():

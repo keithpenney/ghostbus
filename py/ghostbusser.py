@@ -792,7 +792,7 @@ class GhostBusser(VParser):
                         dw = len(net_dict['bits'])
                         #self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
                         self._newhandleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
-                                           association=subname, generate=generate, driver=False)
+                                           association=subname, generate=generate, driver=False, signed=signed)
                     ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -976,14 +976,14 @@ class GhostBusser(VParser):
         passengers = []
         bus_dict = {} # {domain: net_entries}
         for net_entry in self._bus_passengers:
-            netname, dw, portnames, instnames, domain, source, addr, association, generate = net_entry
+            netname, dw, portnames, instnames, domain, source, addr, association, generate, signed = net_entry
             basename = instnames[0]
             if generate is not None and generate.isFor():
                 bus_name = f"{generate.branch}_{generate._loop_index}_{instnames[0]}"
             else:
                 bus_name = instnames[0]
             net_entries = bus_dict.get(bus_name, []) # NOTE Only handling one instance name per passenger
-            net_entries.append((netname, dw, portnames, source, domain, addr, association, generate, basename))
+            net_entries.append((netname, dw, portnames, source, domain, addr, association, generate, basename, signed))
             bus_dict[bus_name] = net_entries
         passenger_dict = {} # {instance_base_name, list_of_instance_copies_for_generate_loops}
         for instname, entries in bus_dict.items():
@@ -1010,12 +1010,16 @@ class GhostBusser(VParser):
             domains = [entry[4] for entry in entries]
             if not identical_or_none(domains):
                 raise GhostbusException(f"Inconsistent 'ghostbus_domain' attributes on bus passenger {instname}: {domains}")
+            signed_data = False
             for entry in entries:
                 netname, dw, portnames, source = entry[:4]
+                signed = entry[9]
                 rangestr = getUnparsedWidthRange(source)
                 #print(f"7531 {pbus.name} {netname}: {portnames}")
                 for port in portnames:
                     pbus.set_port(port, netname, portwidth=dw, rangestr=rangestr, source=source)
+                    if pbus.port_is_data(port) and signed:
+                        signed_data = True
             # TODO - Do I want to 'deblock' here?
             pbus.deblock()
             # Ok, now I need to use generate, association, addr, and domain
@@ -1024,6 +1028,7 @@ class GhostBusser(VParser):
             passenger = ExternalModule(instname, extbus=pbus, basename=basename)
             passenger.domain = get_non_none(domains)
             passenger.association = get_non_none(associations)
+            passenger.signed = signed_data
             # Lastly, I need to group by base name in the case of generates
             if pbus.genblock is None or pbus.genblock.isIf():
                 # Go straight to the return list
@@ -1058,7 +1063,8 @@ class GhostBusser(VParser):
             passengers.append(ref)
         return passengers
 
-    def _newhandleBus(self, netname, vals, dw, source, addr=None, domain=None, alias=None, association=None, generate=None, driver=False):
+    def _newhandleBus(self, netname, vals, dw, source, addr=None, domain=None, alias=None,
+                      association=None, generate=None, driver=False, signed=None):
         """This method will handle both bus drivers and passengers"""
         # Collect bus nets in separate buckets - drivers and passengers
         # Don't actually create BusLB objects until the "resolve" method
@@ -1097,7 +1103,7 @@ class GhostBusser(VParser):
             self._bus_drivers.append((netname, dw, portnames, domain, source, association, generate))
         else: # passenger
             # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
-            self._bus_passengers.append((netname, dw, portnames, instnames, domain, source, addr, association, generate))
+            self._bus_passengers.append((netname, dw, portnames, instnames, domain, source, addr, association, generate, signed))
         return
 
     def _resetGenerates(self):
