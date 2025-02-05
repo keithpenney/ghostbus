@@ -1859,7 +1859,7 @@ class DecoderDomainLB():
             gb_dwstr = self.ghostbus.dw_str
             dwstr = ext.extbus.dw_str
             din = ext.extbus['din']
-            vl.add(f"  addrhit_{inst} ? {{{{{gb_dwstr}-{dwstr}{{1'b0}}}}, {din}}} :")
+            vl.add(f"  addrhit_{inst} ? {{{{({gb_dwstr})-({dwstr}){{1'b0}}}}, {din}}} :")
         for branch, extmods in self.block_exts.items():
             for ext in extmods:
                 if not ext.access & Register.READ:
@@ -1871,7 +1871,7 @@ class DecoderDomainLB():
                 postfix = ""
                 if ext.genblock.isFor():
                     postfix = "_any"
-                vl.add(f"  addrhit_{ext.netname}{postfix} ? {{{{{gb_dwstr}-{ext_dwstr}{{1'b0}}}}, {din}}} :")
+                vl.add(f"  addrhit_{ext.netname}{postfix} ? {{{{({gb_dwstr})-({ext_dwstr}){{1'b0}}}}, {din}}} :")
         if self.has_local_csrs:
             vl.add(f"  {en_local} ? {local_din} :")
         vl.add(f"  {vhex(0, self.ghostbus['dw'])};")
