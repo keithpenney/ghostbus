@@ -759,7 +759,7 @@ class GhostBusser(VParser):
                         associated_strobes[netname] = (read_strobe, True)
                     elif access is not None:
                         dw = len(net_dict['bits'])
-                        initval = get_value(net_dict['bits'])
+                        initval = get_value(net_dict['bits']) # TODO - is get_value correct or bit-reversed?
                         #print(f"New CSR: {netname}")
                         reg = GBRegister(name=netname, dw=dw, meta=source, access=access)
                         reg.initval = initval
