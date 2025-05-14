@@ -324,8 +324,12 @@ class BusLB():
         return None
 
     def _validate_portname(self, name):
+        _match = self._matchExtra(name)
+        if _match is not None:
+            _dir, portname = _match
+            return portname
         if name not in self._alias_keys:
-            err = "Invalid value ({}) for attribute 'ghostbus_port'.".format(name) + \
+            err = "Invalid value ({}) for attribute 'ghostbus_driver'.".format(name) + \
                   "  Valid values are {}".format(self._alias_keys)
             raise GhostbusException(err)
         return self._alias_map[name]
