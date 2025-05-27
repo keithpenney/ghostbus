@@ -190,7 +190,7 @@ def _getSourceSnippet(yosrc, size=1024):
     characters into the string 'snippet'"""
     groups = srcParse(yosrc)
     if groups is None:
-        return False
+        return None, None
     filepath, linestart, charstart, lineend, charend = groups
     snippet = None
     offset = 0
