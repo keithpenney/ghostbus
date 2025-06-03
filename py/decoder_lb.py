@@ -1707,7 +1707,7 @@ class DecoderDomainLB():
         # TODO - Should I be using the string 'aw_str' here instead of the integer 'aw'? I would need to be implicit with the width
         #        to 'vhex' or do some tricky concatenation
         if divwidth == 0:
-            return f"1'b1; // 0x{base_rel:x}-0x{end:x}"
+            return f"{prefix} {signal} = 1'b1; // 0x{base_rel:x}-0x{end:x}"
         return f"{prefix} {signal} = {addr_net}[{bus_aw-1}:{ref_aw}] == {vhex(base_rel>>ref_aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
 
     @classmethod
