@@ -242,7 +242,7 @@ def _getSourceFromStart(yosrc):
 
 def _matchKw(ss):
     for kw in _net_keywords:
-        if ss.startswith(kw):
+        if re.search(r"\b" + kw + r"\b", ss):
             return kw
     return None
 
@@ -263,11 +263,11 @@ def _findRangeStr(snippet, offset, get_type=True):
         # Room for whitespace+'r'+'e'+'g'+whitespace
         slc = snippet[n:n+maxlen].replace('\n', ' ').replace('.', ' ')
         kw = _matchKw(slc.strip())
-        if kw is not None:
+        if (grouplevel == 0) and kw is not None:
             nettype = NetTypes.get(kw)
             if rangestr is None:
                 rangestr = "0:0"
-            #print(f"Breaking at offset {offset-n}: {snippet[n:n+10]}")
+            #print(f"xx Breaking at offset {offset-n}: {snippet[n:n+10]} (kw = {kw}) (using input \"{slc.strip()}\")")
             break
         elif char == ']': # walking backwards
             if grouplevel == 0:
@@ -278,7 +278,7 @@ def _findRangeStr(snippet, offset, get_type=True):
             if grouplevel == 0:
                 rangestr = snippet[n+1:endix]
                 if not get_type:
-                    #print(f"Breaking at offset {offset-n}: {snippet[n:n+10]}")
+                    #print(f"xy Breaking at offset {offset-n}: {snippet[n:n+10]}")
                     break
         if n == 0:
             raise Exception("Reached 0 looking for a keyword from netname {snippet[offset:offset+10]}")
@@ -342,6 +342,7 @@ def decomment(ss):
         result.append(ss[start:])
     return "".join(result)
 
+
 def _matchForLoop(ss):
     """Match the last Verilog generate-for-loop opening statement in the string 'ss'
     NOTE: This hack only catches simple for-loops.  It's pretty easy to break this if you're trying.
@@ -384,6 +385,7 @@ def findForLoop(yosrc):
 class YosysParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
+
 
 class VParser():
     # Helper values

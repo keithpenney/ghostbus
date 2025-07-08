@@ -1,5 +1,5 @@
 
-from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment
+from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment, _matchKw
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict, JSONMaker
 from util import check_complete_indices, identical_or_none, check_consistent_offset
@@ -320,6 +320,38 @@ def test_check_consistent_offset():
     return 0
 
 
+def test__matchKw():
+    tests = (
+        ("foo", None),
+        ("regval", None),
+        ("reg_addr", None),
+        ("reg addr", "reg"),
+        (" reg [15:0] reg_addr", "reg"),
+        ("\twire [15:0] reg_addr", "wire"),
+        ("0] reg_add", None),
+        ("input_baz", None),
+        (" outputt", None),
+        (" output", "output"),
+        ("output", "output"),
+        ("\toutput.", "output"),
+        ("\treg.", "reg"),
+        ("wire", "wire"),
+        ("wire.", "wire"),
+        ("wire_", None),
+        ("_wire", None),
+        ("\twire", "wire"),
+        ("     wire", "wire"),
+        ("wire foo baz", "wire"),
+    )
+    fails = 0
+    for arg, expected in tests:
+        result = _matchKw(arg)
+        if result != expected:
+            print(f"FAIL: _matchKw({arg}) expected {expected}, got {result}")
+            fails += 1
+    return fails
+
+
 def doStaticTests():
     tests = (
         test_get_modname,
@@ -334,6 +366,7 @@ def doStaticTests():
         test_check_complete_indices,
         test_decomment,
         test_identical_or_none,
+        test__matchKw,
     )
     rval = 0
     fails = []
@@ -351,6 +384,7 @@ def doStaticTests():
         for ntest, _rval in fails:
             print(f"  Test {ntest} returned {_rval}")
     return rval
+
 
 if __name__ == "__main__":
     import sys
