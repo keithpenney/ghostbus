@@ -35,26 +35,10 @@ class GBRegister(Register):
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        #self._rangeStr = None
-        #self._depthstr = None
         for name, default in self._attrs.items():
             if hasattr(default, "copy"):
                 default = default.copy()
             setattr(self, name, default)
-        # A bit weird, but helpful
-        #self.ref_list.append(self)
-
-    @property
-    def busname(self):
-        # TODO - elevate this to Exception and squash
-        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
-        return self.domain
-
-    @busname.setter
-    def busname(self, value):
-        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
-        self.domain = value
-        return
 
     @property
     def base_list(self):
@@ -187,25 +171,10 @@ class GBMemory(Memory):
     }
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        #self._rangeStr = None
         for name, default in self._attrs.items():
             if hasattr(default, "copy"):
                 default = default.copy()
             setattr(self, name, default)
-        # A bit weird, but helpful
-        #self.ref_list.append(self)
-
-    @property
-    def busname(self):
-        # TODO - elevate this to Exception and squash
-        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
-        return self.domain
-
-    @busname.setter
-    def busname(self, value):
-        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
-        self.domain = value
-        return
 
     @property
     def base_list(self):
@@ -288,22 +257,6 @@ class GBMemory(Memory):
             return f"({d1}+1)"
         return f"({d1}-{d0}+1)"
 
-    # DELETEME - I'm trying to not use this anymore
-    def unroll(self):
-        if self.genblock is None:
-            return (self,)
-        if not self.genblock.isFor():
-            return (self,)
-        copies = []
-        base_list = self.base_list
-        for n in range(len(base_list)):
-            base = base_list[n]
-            copy = self.copy()
-            copy.base = base
-            copy.name = f"{self.genblock.branch}_{self.name}_{n}"
-            copies.append(copy)
-        return copies
-
     def isFor(self):
         if self.genblock is not None:
             return self.genblock.isFor()
@@ -336,18 +289,6 @@ class GBMemoryRegionStager(MemoryRegionStager):
             setattr(self, name, default)
         self.domain = domain
         self.init()
-
-    @property
-    def busname(self):
-        # TODO - elevate this to Exception and squash
-        raise Exception("Aha! Caught you using GBMemoryRegionStager.busname!")
-        return self._busname
-
-    @busname.setter
-    def busname(self, value):
-        raise Exception("Aha! Caught you using GBMemoryRegionStager.busname!")
-        self._busname = value
-        return
 
     def copy(self):
         ref = super().copy()
@@ -460,6 +401,14 @@ class GBMemoryRegionStager(MemoryRegionStager):
                 return _ll
         return []
 
+    @property
+    def instance_name(self):
+        return self.shortname
+
+    @property
+    def module_name(self):
+        return self.label
+
 
 class ExternalModule():
     _attrs = {
@@ -526,16 +475,9 @@ class ExternalModule():
         return ref
 
     @property
-    def busname(self):
-        # TODO - elevate this to Exception and squash
-        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
-        return self.domain
-
-    @busname.setter
-    def busname(self, value):
-        print("DEPRECATION WARNING! Stop using 'busname' in favor of 'domain'")
-        self.domain = value
-        return
+    def label(self):
+        """Alias"""
+        return self.inst
 
     @property
     def genblock(self):

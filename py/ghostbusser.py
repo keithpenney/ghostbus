@@ -18,6 +18,7 @@ from gbexception import GhostbusException, GhostbusNameCollision, GhostbusIntern
 from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices, feature_print, \
                     identical_or_none, get_non_none, identical
 from policy import Policy
+from syntax import ROMX, ROMN
 
 import random
 # I need a unique value that's not None that's basically impossible to collide
@@ -1320,11 +1321,16 @@ class JSONMaker():
                 "sign": "unsigned",
                 "base_addr": 327681,
                 "data_width": 1,
-                "global": false
             },
         }
         """
-        dd = {}
+        if flat:
+            flavor = ROMX
+        else:
+            flavor = ROMN
+        dd = flavor.empty()
+        if flavor == ROMN:
+            dd[ROMN.key_instanceof] = mem.module_name
         entries = mem.get_entries()
         #top_hierarchy = mem.hierarchy
         if top:
@@ -1333,60 +1339,58 @@ class JSONMaker():
         else:
             top_hierarchy = mem.hierarchy[1:]
         # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
-        print_entries = [f"{ref[-1].name}" for ref in entries]
-        sindent = " "*indent
+        #print_entries = [f"{ref[-1].name}" for ref in entries]
+        #sindent = " "*indent
         #print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
         for start, stop, ref in entries:
             if isinstance(ref, MemoryRegion):
                 #print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")
                 subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
                 #print(f"{sindent}6671 Done with {ref.name}.{ref.domain}")
-                if flat:
+                if flavor == ROMX:
                     #print(f"{sindent}Updating from subdd {ref.name} {ref.domain} id(ref) = {id(ref)}")
                     update_without_collision(dd, subdd)
+                elif flavor == ROMN:
+                    #dd["modules"][ref.instance_name] = subdd
+                    flavor.add_module(dd, ref.instance_name, subdd)
                 else:
-                    dd[ref.name] = subdd
+                    raise Exception("Should never get here")
             elif isinstance(ref, ExternalModule) and ref.sub_mr is not None:
                 # If this extmod is a gluemod, I need to collect its branch like a submodule
                 #print(f"{sindent}6672 {ref.name} {id(ref)}")
                 subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
-                if flat:
+                if flavor == ROMX:
                     update_without_collision(dd, subdd)
+                elif flavor == ROMN:
+                    #dd["modules"][ref.label] = subdd
+                    flavor.add_module(dd, ref.label, subdd)
                 else:
-                    dd[ref.name] = subdd
+                    raise Exception("Should never get here")
             elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
                 #print(f"+ [{mem.domain}] {'.'.join(top_hierarchy)}.{ref.name}")
                 ref_list = (ref,)
                 if Policy.aligned_for_loops and ref.isFor():
                     ref_list = ref.ref_list
                 for ref in ref_list:
-                    if ref.signed is not None and ref.signed:
-                        signstr = "signed"
-                    else:
-                        signstr = "unsigned"
-                    entry = {
-                        "access": Register.accessToStr(ref.access),
-                        "addr_width": ref.aw,
-                        "sign": signstr,
-                        #"base_addr": mem.base + start,
-                        "base_addr": mem.base + ref.base,
-                        "data_width": ref.dw,
-                    }
-                    if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
-                        hier_str = str(ref.alias)
-                    elif flat:
-                        hierarchy = list(top_hierarchy)
-                        hierarchy.append(ref.name)
-                        hier_str = Policy.flatten_hierarchy(strip_empty(hierarchy))
-                        #hier_str = ".".join(strip_empty(hierarchy))
-                    else:
-                        hier_str = ref.name
+                    entry = flavor.new_entry(base = mem.base + ref.base, aw = ref.aw, dw = ref.dw,
+                                             access = ref.access, signed = ref.signed)
+                    if flavor == ROMX:
+                        if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
+                            hier_str = str(ref.alias)
+                        elif flat:
+                            hierarchy = list(top_hierarchy)
+                            hierarchy.append(ref.name)
+                            hier_str = Policy.flatten_hierarchy(strip_empty(hierarchy))
+                            #hier_str = ".".join(strip_empty(hierarchy))
+                        else:
+                            hier_str = ref.name
+                    else: # flavor == ROMN:
+                        hier_str = ref.label
                     if hier_str not in drops:
-                        dd[hier_str] = entry
+                        flavor.add_reg(dd, hier_str, entry)
             else:
                 printd(f"What is this? {ref}")
         return dd
-
 
     @classmethod
     def _shortenNames(cls, dd):

@@ -41,7 +41,7 @@ class Register():
         }
         return sd[access]
 
-    def __init__(self, name=None, dw=1, base=None, meta=None, access=RW):
+    def __init__(self, name=None, dw=1, base=None, meta=None, access=RW, label=None):
         self._name = name
         self._size = 1
         self._data_width = int(dw)
@@ -51,10 +51,14 @@ class Register():
         self.meta = meta
         #self.access = int(access) & self._accessMask
         self.access = access
+        if label is None:
+            self.label = name
+        else:
+            self.label = label
 
     def copy(self):
         return self.__class__(name=self._name, dw=self._data_width, base=self._base_addr,
-                              meta=self.meta, access=self.access)
+                              meta=self.meta, access=self.access, label=self.label)
 
     @property
     def name(self):
@@ -105,14 +109,15 @@ class Register():
 
 
 class Memory(Register):
-    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None, access=Register.RW):
-        super().__init__(name=name, dw=dw, base=base, meta=meta, access=access)
+    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None, access=Register.RW, label=None):
+        super().__init__(name=name, dw=dw, base=base, meta=meta, access=access, label=label)
         self._size = 1 << int(aw)
         self._addr_width = int(aw)
 
     def copy(self):
         return self.__class__(name=self._name, dw=self._data_width, aw=self._addr_width,
-                              base=self._base_addr, meta=self.meta, access=self.access)
+                              base=self._base_addr, meta=self.meta, access=self.access,
+                              label=self.label)
 
 
 def hexlist(ll):
@@ -357,6 +362,13 @@ class MemoryRegion():
             return self.label
         else:
             return ".".join([str(x) for x in self.hierarchy])
+
+    @property
+    def shortname(self):
+        if self.hierarchy is None:
+            return self.label
+        else:
+            return self.hierarchy[-1]
 
     def _vet_addr(self, addr, width=0):
         """Raise an exception if 'addr' is not aligned to 'width' or if an
