@@ -1,3 +1,4 @@
+![ghostbus chibi](doc/gb_icon_transparent.png)
 # GhostBus Auto-Bus Decoder
 A new auto-bus-decoder based on the successes of Newad and Gang Huang's SystemVerilog decoder scheme.
 
