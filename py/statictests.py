@@ -1,7 +1,8 @@
 
 from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment
 from memory_map import bits
-from ghostbusser import MemoryTree, WalkDict, JSONMaker
+from ghostbusser import MemoryTree, WalkDict
+from jsonmap import JSONMaker
 from util import check_complete_indices, identical_or_none, check_consistent_offset
 
 
