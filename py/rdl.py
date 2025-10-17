@@ -28,13 +28,10 @@ class SystemRDLMaker():
             sw_access = "r"
             name = "rw"
         ss = [
-            "reg reg_{}_t #(longint unsigned DW = 32, longint RESET = 32'h00000000) {{".format(name),
-            "  dw = DW;",
-            "  field {",
-            "    sw = {};".format(sw_access),
-            "    hw = {};".format(hw_access),
-            "    reset = RESET;",
-            "  } data[DW-1:0];",
+            "reg reg_{}_t #(longint unsigned DW = 32, longint RESET = 32'h00000000, string ACCESS = \"rw\") {{".format(name),
+            "  regwidth = DW;",
+            "  access = ACCESS;",
+            "  field {{ sw = {}; hw = {}; reset = RESET; }} data[DW-1:0];".format(sw_access, hw_access),
             "};",
         ]
         return "\n".join(ss)

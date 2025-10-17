@@ -1,0 +1,39 @@
+// Since Ghostbus will be auto-generating this file, we will not use
+// any of SystemRDL's implicit functionality.  Everything will be
+// explicitly defined.
+
+addrmap top_map {
+  // Ghostbus only supports 'fullalign' addressing. This is not needed with explicit
+  // addresses, but we'll include it for clarity.
+  addressing = fullalign;
+  // Ghostbus is addressable by the width of the bus (e.g. for 32-bit bus, it's "word-addressable")
+  default accesswidth=8;
+
+  // NOTE! regwidth must be 8, 16, 32, 64, 128, etc
+  reg gb_rw_t #(longint unsigned DW = 32, longint RESET = 32'h00000000) {
+    regwidth = DW;
+    field { sw = rw; hw = r; reset = RESET; } data[DW-1:0];
+  };
+
+  reg gb_ro_t #(longint unsigned DW = 32, longint RESET = 32'h00000000) {
+    regwidth = DW;
+    field { sw = r; hw = rw; reset = RESET; } data[DW-1:0];
+  };
+
+  // CSRs
+  gb_ro_t { DW=32; RESET=32'h00000000; } foo @0x00; // Explicit regwidth (dw) and address for each entry
+  gb_rw_t { DW=16; RESET=16'hffff; } bar @0x01;
+
+  // RAMs
+  // Could specify as an array of regs
+  gb_ro_t { DW=8; RESET=8'h00; } myReadOnlyArray[24] @0x20; // An array of 24 entries of 1-byte each
+  // Or as a memory
+  mem myReadOnlyRAM { mementries = 512; memwidth = 8; } @0x200;
+
+  // For hierarchical memory maps, we can nest addrmaps
+  addrmap myModuleInst0 {
+    addressing = fullalign;
+    default accesswidth=8;
+    gb_rw_t { DW=16; RESET=16'hffff; } enable @0x00; // Note! Relative to base of enclosing addrmap
+  } @0x400; // Explicit base address for this addrmap as well (relative to its enclosing addrmap)
+};
