@@ -15,6 +15,7 @@ class _JSONMemoryMap():
     key_dw = "data_width"
     key_sign = "sign"
     key_base = "base_addr"
+    key_desc = "desc"
 
     @classmethod
     def accessToStr(cls, access):
@@ -27,7 +28,7 @@ class _JSONMemoryMap():
         return "unsigned"
 
     @classmethod
-    def new_entry(cls, base=0, access=READ, aw=0, dw=0, signed=False):
+    def new_entry(cls, base=0, access=READ, aw=0, dw=0, signed=False, descript = None):
         entry = {
             cls.key_access: cls.accessToStr(access),
             cls.key_aw: aw,
@@ -35,6 +36,8 @@ class _JSONMemoryMap():
             cls.key_base: base,
             cls.key_dw: dw,
         }
+        if descript is not None:
+            entry[cls.key_desc] = descript
         return entry
 
 

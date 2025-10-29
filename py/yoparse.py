@@ -10,10 +10,11 @@ from util import enum
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
+SLANG_JSON_BUG_WORKAROUND = True
 
 def srcParse(s):
     # FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
-    reYoSrc = "\A([^:]+):(\d+).(\d+)-(\d+).(\d+)"
+    reYoSrc = r"\A([^:]+):(\d+).(\d+)-(\d+).(\d+)"
     _match = re.match(reYoSrc, s)
     if not _match:
         return None
@@ -52,8 +53,8 @@ def block_inst(inst_name):
     else:
         return None, None, None
     """
-    restr = "([^.$]+)\.(\w+)"
-    reindex = "(\w+)\[(\d+)\]"
+    restr = r"([^.$]+)\.(\w+)"
+    reindex = r"(\w+)\[(\d+)\]"
     gen_block = None
     inst = None
     index = None
@@ -72,7 +73,7 @@ def autogenblk(gen_block):
     """Yosys lazily gives names to anonymous generate blocks and doesn't detect collisions if you happen
     to name a block with the same auto-generated internal names assigned by Yosys.
     Return True if the string 'gen_block' matches Yosys's internal naming convention (else False)."""
-    restr = "genblk(\d+)"
+    restr = r"genblk(\d+)"
     if re.match(restr, gen_block):
         return True
     return False
@@ -349,7 +350,7 @@ def _matchForLoop(ss):
     I need a proper lexer to do this generically.
     Return (loop_index, start, stop, inc)"""
     ss = decomment(ss)
-    restr = "generate\s+for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
+    restr = r"generate\s+for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
     #_match = re.search(restr, ss)
     #if _match:
     _matches = re.findall(restr, ss)
@@ -393,10 +394,11 @@ class VParser():
     LINETYPE_PORT  = 0
     LINETYPE_MACRO = 1
 
-    def __init__(self, filelist, top=None, include_dirs=None):
+    def __init__(self, filelist, top=None, include_dirs=None, sv=False):
         self._filelist = filelist
         self._top = top
         self._include_dirs = include_dirs
+        self._sv = sv
         self.valid = self.parse()
 
     def parse(self):
@@ -416,7 +418,13 @@ class VParser():
             incstr = " ".join([f"-I {inc}" for inc in self._include_dirs])
         else:
             incstr = ""
-        ycmd = f'yosys -q -p "verilog_defines -DYOSYS\nread_verilog {incstr}{filestr}{topstr}\nproc" -p write_json'
+        if self._sv:
+            yosys = "yosys -m slang"
+            read_cmd = "read_slang"
+        else:
+            yosys = "yosys"
+            read_cmd = "read_verilog"
+        ycmd = f'{yosys} -q -p "verilog_defines -DYOSYS\n{read_cmd} {incstr}{filestr}{topstr}\nproc" -p write_json'
         err = None
         try:
             jsfile = subprocess.check_output(ycmd, shell=True).decode('latin-1')
@@ -424,6 +432,9 @@ class VParser():
             err = str(e)
         if err is not None:
             raise YosysParsingError(err)
+        if SLANG_JSON_BUG_WORKAROUND:
+            ix = jsfile.index('{')
+            jsfile = jsfile[ix:]
         self._dict = json.loads(jsfile)
         # Separate attributes for this module
         mod = self._dict.get("modules", None)
@@ -676,9 +687,10 @@ def doBrowse():
     parser.add_argument("-d", "--depth", default=4, help="Depth to browse from the partselect.")
     parser.add_argument("-s", "--select", default=None, help="Partselect string.")
     parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
+    parser.add_argument("--sv", default=False, action="store_true", help="[EXPERIMENTAL] Enable SystemVerilog parsing (requires yosys-slang).")
     parser.add_argument("files", default=None, action="append", nargs="+", help="Source files.")
     args = parser.parse_args()
-    vp = VParser(args.files[0], top=args.top)
+    vp = VParser(args.files[0], top=args.top, sv=args.sv)
     if not vp.valid:
         return False
     print(vp.strToDepth(int(args.depth), args.select))

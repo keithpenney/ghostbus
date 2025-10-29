@@ -15,10 +15,9 @@ from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalMod
                     isForLoop
 from decoder_lb import DecoderLB, BusLB, createPortBus
 from gbexception import GhostbusException, GhostbusNameCollision, GhostbusInternalException
-from util import enum, strDict, print_dict, strip_empty, deep_copy, check_complete_indices, feature_print, \
+from util import enum, strDict, print_dict, deep_copy, check_complete_indices, feature_print, \
                     identical_or_none, get_non_none, identical
 from policy import Policy
-from syntax import ROMX, ROMN
 
 import random
 # I need a unique value that's not None that's basically impossible to collide
@@ -57,6 +56,7 @@ class GhostbusInterface():
         "DOMAIN",
         "BRANCH",
         "TOP",
+        "DOC",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -97,6 +97,9 @@ class GhostbusInterface():
         # This one will hopefully be rarely needed.
         # It is to be added to a module instantiation and means "No ghostbusses pass through the top-level ports of this module"
         "ghostbus_top":         tokens.TOP,
+        # Two aliases to simply add a description to a CSR/RAM/bus
+        "ghostbus_doc":         tokens.DOC,
+        "ghostbus_desc":        tokens.DOC,
     }
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -136,17 +139,18 @@ class GhostbusInterface():
         return (val,)
 
     _val_decoders = {
-        tokens.HA:       handle_token_ha,
-        tokens.ADDR:     lambda x: int(x, 2),
-        tokens.DRIVER:     split_strs,
-        tokens.STROBE:   lambda x: True,
-        tokens.STROBE_W: lambda x: str(x),
-        tokens.STROBE_R: lambda x: str(x),
+        tokens.HA:        handle_token_ha,
+        tokens.ADDR:      lambda x: int(x, 2),
+        tokens.DRIVER:    split_strs,
+        tokens.STROBE:    lambda x: True,
+        tokens.STROBE_W:  lambda x: str(x),
+        tokens.STROBE_R:  lambda x: str(x),
         tokens.PASSENGER: split_strs,
-        tokens.ALIAS:    lambda x: str(x),
-        tokens.DOMAIN:  lambda x: x,
-        tokens.BRANCH:      lambda x: x,
-        tokens.TOP:      lambda x: True,
+        tokens.ALIAS:     lambda x: str(x),
+        tokens.DOMAIN:    lambda x: x,
+        tokens.BRANCH:    lambda x: x,
+        tokens.TOP:       lambda x: True,
+        tokens.DOC:       lambda x: str(x),
     }
 
     @classmethod
@@ -751,6 +755,7 @@ class GhostBusser(VParser):
                     alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
                     busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
                     subname = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
+                    docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
                     if write_strobe is not None:
                         # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
@@ -762,7 +767,7 @@ class GhostBusser(VParser):
                         dw = len(net_dict['bits'])
                         initval = get_value(net_dict['bits']) # TODO - is get_value correct or bit-reversed?
                         #print(f"New CSR: {netname}")
-                        reg = GBRegister(name=netname, dw=dw, meta=source, access=access)
+                        reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
                         reg.initval = initval
                         reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
                         reg.alias = alias
@@ -789,9 +794,8 @@ class GhostBusser(VParser):
                                 gen_index_str = f"at index {gen_index} "
                             feature_print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
                         dw = len(net_dict['bits'])
-                        #self._handleExtmod(module_name, netname, exts, dw, source, addr=addr, sub=subname, generate=generate)
-                        self._newhandleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
-                                           association=subname, generate=generate, driver=False, signed=signed)
+                        self._handleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
+                                        association=subname, generate=generate, driver=False, signed=signed, desc=docstr)
                     ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
                     if subname is not None:
                         busname_to_subname_map[busname] = subname
@@ -799,9 +803,8 @@ class GhostBusser(VParser):
                         bustop = True
                         dw = len(net_dict['bits'])
                         # printd(f"     About to _handleBus for {mod_hash}")
-                        #self._handleBus(   netname, ports, dw, source, busname, alias=alias, extmod_name=subname)
-                        self._newhandleBus(netname, ports, dw, source, domain=busname, alias=alias,
-                                           association=subname, generate=generate, driver=True)
+                        self._handleBus(netname, ports, dw, source, domain=busname, alias=alias,
+                                        association=subname, generate=generate, driver=True, desc=docstr)
                         if busname not in busnames_explicit:
                             busnames_explicit.append(busname)
             # Check for RAMs
@@ -834,11 +837,12 @@ class GhostBusser(VParser):
                     access = token_dict.get(GhostbusInterface.tokens.HA, None)
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
                     busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+                    docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
                     if access is not None:
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
                         aw = math.ceil(math.log2(size))
-                        mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source)
+                        mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source, desc=docstr)
                         mem.signed = signed
                         mem.domain = busname
                         mem.genblock = generate
@@ -872,7 +876,6 @@ class GhostBusser(VParser):
                 # Any ghostmod has an implied ghostbus coming in
                 if None not in busnames_implicit:
                     busnames_implicit.append(None)
-            #print(f"5554 module_name = {module_name}")
             generates = self._resolveGenerates()
             for ref in generates:
                 if mrs.get(ref.domain, None) is None:
@@ -881,13 +884,11 @@ class GhostBusser(VParser):
                 mrs[ref.domain].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
             passengers = self._resolvePassengers()
             for passenger in passengers:
-                #print(f"7225 passenger {passenger.name} ({passenger.domain}) has {passenger.genblock} and is type {type(passenger)}")
                 added = False
                 if mrs.get(passenger.domain, None) is None:
                     mrs[passenger.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=passenger.domain)
                 mr = mrs[passenger.domain]
                 mr.add(width=passenger.aw, ref=passenger, addr=passenger.base)
-                #print(f"  added {passenger.name} to MemoryRegion {mr.label} in domain {mr.domain}")
             module_info[mod_hash]["memory"] = mrs
             module_info[mod_hash]["explicit_busses"] = busnames_explicit
             module_info[mod_hash]["implicit_busses"] = busnames_implicit
@@ -900,8 +901,6 @@ class GhostBusser(VParser):
         if len(self._ghostbusses) == 0:
             # NO_GHOSTBUS
             raise GhostbusException("No ghostbus found in codebase.")
-        #print_dict(module_info)
-        #self._busValid = self._top_bus.validate()
         self._top = top_mod
         #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
         #print_dict(modtree, dohash=True)
@@ -913,10 +912,6 @@ class GhostBusser(VParser):
         memtree = self.build_memory_tree(modtree, module_info)
         self.memory_maps = memtree.resolve(verbose=False)
         print(f"Number of independent memory maps: {len(self.memory_maps)}")
-        #for mmap in self.memory_maps:
-        #    mmap.shrink()
-        #memtree.distribute_busses()
-        #self.memory_maps[0].print(4)
         ghostmods = {}
         for key, _info in module_info.items():
             mr = _info.get("memory", None)
@@ -1062,12 +1057,12 @@ class GhostBusser(VParser):
             passengers.append(ref)
         return passengers
 
-    def _newhandleBus(self, netname, vals, dw, source, addr=None, domain=None, alias=None,
-                      association=None, generate=None, driver=False, signed=None):
+    def _handleBus(self, netname, vals, dw, source, addr=None, domain=None, alias=None,
+                   association=None, generate=None, driver=False, signed=None, desc=None):
         """This method will handle both bus drivers and passengers"""
         # Collect bus nets in separate buckets - drivers and passengers
         # Don't actually create BusLB objects until the "resolve" method
-        # Old Handle extmod
+        # TODO - stash the 'desc' string somewhere
         block_name, _netname, loop_index = block_inst(netname)
         if block_name is not None:
             feature_print(f"Bus {netname} is instantiated within a Generate Block!")
@@ -1292,213 +1287,6 @@ class GhostBusser(VParser):
         return memtree
 
 
-class JSONMaker():
-    # TODO - I need to make one JSON for every ghostbus in the design, which will each
-    #        specify the regmap of its own tree relative to its own base (0)
-    #        Then a separate tool can merge the JSONs into a complete memory map. This
-    #        is outside the scope of this tool because it is not aware of how the
-    #        individual ghostbusses are assigned (paged) globally
-    def __init__(self, memtree, drops=()):
-        self.memtree = memtree
-        self._drops = drops
-
-    @classmethod
-    def finalizeJSONDict(cls, dd, flat=True, mangle_names=False, short=True):
-        if flat and short:
-            dd = cls._shortenNames(dd)
-        if mangle_names:
-            dd = cls._mangleNames(dd)
-        return dd
-
-    @classmethod
-    def memoryRegionToJSONDict(cls, mem, flat=True, mangle_names=False, top=True, drops=(), short=True, indent=0):
-        """ Returns a dict ready for JSON-ification using our preferred memory map style:
-        // Example
-        {
-            "regname": {
-                "access": "rw",
-                "addr_width": 0,
-                "sign": "unsigned",
-                "base_addr": 327681,
-                "data_width": 1,
-            },
-        }
-        """
-        if flat:
-            flavor = ROMX
-        else:
-            flavor = ROMN
-        dd = flavor.empty()
-        if flavor == ROMN:
-            dd[ROMN.key_instanceof] = mem.module_name
-        entries = mem.get_entries()
-        #top_hierarchy = mem.hierarchy
-        if top:
-            # Note! Discarding top-level name in hierarcy
-            top_hierarchy = []
-        else:
-            top_hierarchy = mem.hierarchy[1:]
-        # Returns a list of entries. Each entry is (start, end+1, ref) where 'ref' is applications-specific
-        #print_entries = [f"{ref[-1].name}" for ref in entries]
-        #sindent = " "*indent
-        #print(f"{sindent}6670 {mem.name}({mem.domain})-- {print_entries}")
-        for start, stop, ref in entries:
-            if isinstance(ref, MemoryRegion):
-                #print(f"{sindent}6671 {ref.name}.{ref.domain} {id(ref)}")
-                subdd = cls.memoryRegionToJSONDict(ref, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
-                #print(f"{sindent}6671 Done with {ref.name}.{ref.domain}")
-                if flavor == ROMX:
-                    #print(f"{sindent}Updating from subdd {ref.name} {ref.domain} id(ref) = {id(ref)}")
-                    update_without_collision(dd, subdd)
-                elif flavor == ROMN:
-                    #dd["modules"][ref.instance_name] = subdd
-                    flavor.add_module(dd, ref.instance_name, subdd)
-                else:
-                    raise Exception("Should never get here")
-            elif isinstance(ref, ExternalModule) and ref.sub_mr is not None:
-                # If this extmod is a gluemod, I need to collect its branch like a submodule
-                #print(f"{sindent}6672 {ref.name} {id(ref)}")
-                subdd = cls.memoryRegionToJSONDict(ref.sub_mr, flat=flat, mangle_names=mangle_names, top=False, drops=drops, short=False, indent=indent+2)
-                if flavor == ROMX:
-                    update_without_collision(dd, subdd)
-                elif flavor == ROMN:
-                    #dd["modules"][ref.label] = subdd
-                    flavor.add_module(dd, ref.label, subdd)
-                else:
-                    raise Exception("Should never get here")
-            elif isinstance(ref, Register) or isinstance(ref, ExternalModule):
-                #print(f"+ [{mem.domain}] {'.'.join(top_hierarchy)}.{ref.name}")
-                ref_list = (ref,)
-                if Policy.aligned_for_loops and ref.isFor():
-                    ref_list = ref.ref_list
-                for ref in ref_list:
-                    entry = flavor.new_entry(base = mem.base + ref.base, aw = ref.aw, dw = ref.dw,
-                                             access = ref.access, signed = ref.signed)
-                    if flavor == ROMX:
-                        if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):
-                            hier_str = str(ref.alias)
-                        elif flat:
-                            hierarchy = list(top_hierarchy)
-                            hierarchy.append(ref.name)
-                            hier_str = Policy.flatten_hierarchy(strip_empty(hierarchy))
-                            #hier_str = ".".join(strip_empty(hierarchy))
-                        else:
-                            hier_str = ref.name
-                    else: # flavor == ROMN:
-                        hier_str = ref.label
-                    if hier_str not in drops:
-                        flavor.add_reg(dd, hier_str, entry)
-            else:
-                printd(f"What is this? {ref}")
-        return dd
-
-    @classmethod
-    def _shortenNames(cls, dd):
-        """Replace hierarchical names with the shortest version that remains unique for each."""
-        namedict = {}
-        # First pass: {short: longs}
-        conflicts = []
-        for key in dd.keys():
-            short = key.split('.')[-1]
-            if namedict.get(short) is None:
-                namedict[short] = [key]
-            else:
-                namedict[short].append(key)
-                conflicts.append(short)
-        # Second pass: handle conflicts
-        longmap = {}
-        for short in conflicts:
-            longs = namedict.get(short)
-            if longs is None:
-                # Already handled
-                continue
-            n = 1
-            newshortlist = None
-            while True:
-                # No one gets to stay short (otherwise we couldn't predict which one is correct)
-                newshorts = []
-                isdone = False
-                for long in longs:
-                    newshort, isdone = cls._flatten(long, n)
-                    longmap[newshort] = long
-                    newshorts.append(newshort)
-                good = True
-                for newshort in newshorts:
-                    if newshorts.count(newshort) > 1:
-                        good = False
-                if good:
-                    newshortlist = newshorts
-                    break
-                if isdone:
-                    raise GhostbusNameCollision(f"Could not disambiguate {longs}")
-                n += 1
-            if newshortlist is None:
-                raise Exception("How did this happen?")
-            del namedict[short]
-            for newshort in newshorts:
-                namedict[newshort] = [longmap[newshort]]
-        newdd = {}
-        for short, longs in namedict.items():
-            newdd[short] = dd[longs[0]]
-        return newdd
-
-    @classmethod
-    def _mangleNames(cls, dd):
-        """Replace '.' in string keys with '_'"""
-        newdd = {}
-        for key, val in dd.items():
-            key = key.replace('.', '_')
-            if hasattr(val, "items"):
-                val = cls._mangleNames(val)
-            newdd[key] = val
-        return newdd
-
-    @staticmethod
-    def _flatten(ss, n=0):
-        """Change 'a.b.c.d' to 'd' if n==0, 'c_d' if n==1, 'b_c_d' if n==2, 'a_b_c_d' if n >= 3"""
-        subs = ss.split('.')
-        done = False
-        if n > len(subs) - 1:
-            done = True
-            n = len(subs)-1
-        n = -(n+1)
-        return '_'.join(subs[n:]), done
-
-    def write(self, filename, path="_auto", flat=False, mangle=False, short=False):
-        import os
-        import json
-        if path is not None:
-            filepath = os.path.join(path, filename)
-        else:
-            filepath = filename
-        dd = self.memoryRegionToJSONDict(self.memtree, flat=flat, mangle_names=mangle, drops=self._drops, short=short)
-        dd = self.finalizeJSONDict(dd, flat=flat, mangle_names=mangle, short=short)
-        ss = json.dumps(dd, indent=2)
-        with open(filepath, 'w') as fd:
-            fd.write(ss)
-        return
-
-
-def update_without_collision(old_dict, new_dict):
-    """Calls old_dict.update(new_dict) after ensuring there are no identical keys in both dicts."""
-    all_errs = []
-    for key in new_dict.keys():
-        if key in old_dict:
-            #err = f"Memory map key {key} defined more than once." + \
-            #      f" If {key} is an alias, remember that they are global," + \
-            #      " so you can't use an alias in a module that gets instantiated more than once." + \
-            #      f" If {key} is not an alias, ensure it is indeed only declared once per module." + \
-            #      " If it's only declared once (and thus passes Verilog linting), submit a bug report."
-            all_errs.append(key)
-            #raise GhostbusNameCollision(err)
-    if len(all_errs) > 0:
-        err = f"Found duplicate entry names in the memory map:" + \
-              "\n  ".join(all_errs)
-        raise GhostbusNameCollision(err)
-    old_dict.update(new_dict)
-    return
-
-
 def parseForLoop(branch_name, yosrc):
     loop_index, start, comp_op, comp_val, inc = findForLoop(yosrc)
     if loop_index is None:
@@ -1532,7 +1320,7 @@ def handleGhostbus(args):
                 dec.GhostbusMagic(dest_dir=args.dest)
             if args.map is not None:
                 dec.ExtraVerilogTestbench(args.map, gbusses)
-        if args.json is not None:
+        if args.json is not None or args.rdl is not None:
             # JSON
             if trim:
                 gb.trim_hierarchy()
@@ -1543,14 +1331,26 @@ def handleGhostbus(args):
             for domain, mem_map in domains.items():
                 if mem_map is None:
                     continue
-                jm = JSONMaker(mem_map, drops=args.ignore)
-                if domain is None or single_bus:
-                    filename = str(args.json)
-                else:
-                    import os
-                    fname, ext = os.path.splitext(args.json)
-                    filename = fname + f".{domain}" + ext
-                jm.write(filename, path=args.dest, flat=args.flat, mangle=args.mangle, short=args.short)
+                if args.json is not None:
+                    from jsonmap import JSONMaker
+                    jm = JSONMaker(mem_map, drops=args.ignore)
+                    if domain is None or single_bus:
+                        filename = str(args.json)
+                    else:
+                        import os
+                        fname, ext = os.path.splitext(args.json)
+                        filename = fname + f".{domain}" + ext
+                    jm.write(filename, path=args.dest, flat=args.flat, mangle=args.mangle, short=args.short)
+                if args.rdl is not None:
+                    from rdl import SystemRDLMaker
+                    sm = SystemRDLMaker(mem_map, drops=args.ignore)
+                    if domain is None or single_bus:
+                        filename = str(args.rdl)
+                    else:
+                        import os
+                        fname, ext = os.path.splitext(args.rdl)
+                        filename = fname + f".{domain}" + ext
+                    sm.write(filename, path=args.dest, flat=args.flat, mangle=args.mangle, short=args.short)
     except GhostbusException as e:
         print(e)
         return 1
@@ -1566,6 +1366,7 @@ def doGhostbus():
     parser.add_argument("--dest",   default="_autogen", help="Directory name for auto-generated files.")
     parser.add_argument("--map",    default=None, help="[experimental] Filename for a generated memory map in Verilog form for testing.")
     parser.add_argument("--json",   default=None, help="Filename for a generated memory map as a JSON file.")
+    parser.add_argument("--rdl",    default=None, help="Filename for a generated memory map as a SystemRDL file.")
     parser.add_argument("--flat",   default=False, action="store_true", help="Yield a flat JSON, rather than hierarchical.")
     parser.add_argument("--notrim", default=False, action="store_true", help="Disable trimming common root from register hierarchy.")
     parser.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")

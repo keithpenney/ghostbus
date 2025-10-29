@@ -1,39 +1,39 @@
+![ghostbus chibi](doc/gb_icon_transparent.png)
+
 # GhostBus Auto-Bus Decoder
-A new auto-bus-decoder based on the successes of Newad and Gang Huang's SystemVerilog decoder scheme.
+An RDL-free automatic memory map handler and bus router.
+
+_Imagine..._ When you're designing a codebase, you could create a `reg`, `wire`, etc
+right where it's used and just point to it and say, _"I declare this to be a CSR!"_ and
+you're done. __Ghostbus__ gets you as close to that magic reality as possible within the
+constructs of the (System)Verilog language.
+
+| Traditional Methods (RDLs)           | Ghostbus                             |
+|--------------------------------------|--------------------------------------|
+|* Define CSRs in a separate language (an RDL) | * Define CSRs in Verilog, right where they are used |
+|* Address decoding logic at top level with CSRs routed as ports from top to destination | * Distributed address decoding. "Invisible" (ghost) bus automatically routed where it needs to go and CSR addresses decoded in local scope |
+|* Memory map is top-level source code | * Memory map is a generated artifact |
+
+I assert that Verilog (and to a much greater extent, SystemVerilog) is a sufficiently
+expressive language to capture the entirety of your design intent in one place.
 
 __The name__: the decoding happens via a bus that's instantiated but not routed
 ("invisible") until after preprocessing.
 
 ## Core Features
-1. Automatically decode bus transactions for register/memory reads/writes
-2. Automatically manage the memory map, allowing easy, maintainable scaling of codebase.
-3. Avoid errors associated with hand-written bus decoders.
-4. Reduces boilerplate code, improving readability/maintainability.
+0. Define your memory map in your Verilog codebase using standard Verilog attributes.
+1. Automatically manage address assignment, allowing easy, maintainable scaling of codebase.
+2. Automatically decode bus transactions for register/memory reads/writes
+3. Reduce boilerplate code, improving readability/maintainability.
 
 ## Design Philosophy
-1. The Verilog code is the ONLY source (no information stored "elsewhere").
+0. The Verilog code is the ONLY source (no information stored "elsewhere").
+1. Stay in our lane. Ghostbus will only ever be about memory maps and bus routing. Nothing else.
 2. Don't break code. Unprocessed Verilog is still valid/functional.
 3. Be explicit; avoid heuristics. No guessing at functionality based on e.g. net names.
 4. Use existing Verilog parser(s). Avoid hand-rolled parser/scanner.
 5. Be obvious; attribute names all start with `ghostbus_` so that a reader immediately
    knows what tool the attribute targets. A few extra characters avoids a lot of confusion.
-
-## Comparison with Newad
-
-|__Newad__                           |__Ghostbus__                            |
-|------------------------------------|----------------------------------------|
-|Decoding at top level               |Distributed decoder (in each module)    |
-|"Magic" (auto-generated) ports      |...sadly, magic ports for the bus       |
-|Flat memory map; all registers in the same scope; name mangling|Hierarchical memory map; flattening with name mangling if needed|
-|Preprocessing required              |Valid Verilog without preprocessing; host-accessible registers retain initial values|
-|Manual (global) address via static JSON |Manual (module-relative) address via Verilog attribute|
-
-## Status
-__TODO:__
-  * Mangle ghostbus port names to reduce potential for port/net name collisions
-  * Configurable pipelining
-  * Auto-pipelining for module-specific read delays
-  * Alternate bus architectures (AXI4/AXI4LITE, wishbone, etc)
 
 ## Usage
 See the [API documentation]("API.md") for usage.
@@ -81,3 +81,21 @@ The final question would be where the simple mirror memory RAM decoding logic go
 is either at the top level or at the same level as the bus controller since it functions purely as RAM attached to
 the bus.  As of writing, these two are sort of required to be the same place (there's currently no provision for
 auto-routing the bus "upwards" from a submodule bus controller to the top-level.
+
+# About
+*** Copyright Notice ***
+
+ghostbus Copyright (c) 2025, The Regents of the University of California,
+through Lawrence Berkeley National Laboratory (subject to receipt of
+any required approvals from the U.S. Dept. of Energy). All rights reserved.
+
+If you have questions about your rights to use or distribute this software,
+please contact Berkeley Lab's Intellectual Property Office at
+IPO@lbl.gov.
+
+NOTICE.  This Software was developed under funding from the U.S. Department
+of Energy and the U.S. Government consequently retains certain rights.  As
+such, the U.S. Government has been granted for itself and others acting on
+its behalf a paid-up, nonexclusive, irrevocable, worldwide license in the
+Software to reproduce, distribute copies to the public, prepare derivative 
+works, and perform publicly and display publicly, and to permit others to do so.

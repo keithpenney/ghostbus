@@ -1,5 +1,29 @@
-# Quick Links
+# Ghostbus API Documentation
 
+## Attribute Reference (Alphabetized)
+* [ghostbus](#csr)
+* [ghostbus\_addr](#address)
+* [ghostbus\_alias](#alias)
+* [ghostbus\_branch](#ghostbus_branch)
+* [ghostbus\_controller](#busdefine) (alias for _ghostbus\_driver_)
+* [ghostbus\_csr](#csr) (alias for _ghostbus_)
+* [ghostbus\_desc](#docstring) (alias for _ghostbus\_doc_)
+* [ghostbus\_doc](#docstring)
+* [ghostbus\_domain](#domains)
+* [ghostbus\_driver](#busdefine)
+* [ghostbus\_passenger](#busattach)
+* [ghostbus\_peripheral](#busattach) (alias for _ghostbus\_passenger_)
+* [ghostbus\_pub](#busdefine) (alias for _ghostbus\_driver_)
+* [ghostbus\_ram](#csr) (alias for _ghostbus_)
+* [ghostbus\_read\_strobe](#ascstrobe)
+* [ghostbus\_rs](#ascstrobe) (alias for _ghostbus\_read\_strobe_)
+* [ghostbus\_strobe](#simplestrobe)
+* [ghostbus\_sub](#busattach) (alias for _ghostbus\_passenger_)
+* [ghostbus\_write\_strobe](#ascstrobe)
+* [ghostbus\_ws](#ascstrobe) (alias for _ghostbus\_write\_strobe_)
+* [ghostbus\_top](#ghostbus_top)
+
+## Table of Contents
 [The API](#api)
 
 [Metaphors](#metaphors)
@@ -8,19 +32,19 @@
 
 * [Define a Ghostbus](#busdefine)
 
-* [Define a CSR/RAM](#csr)
+* [ghostbus\_csr: Define a CSR/RAM](#csr)
 
-* [Place a CSR/RAM at an explicit global address](#address)
+* [Place a CSR/RAM at an explicit address](#address)
 
-* [Add a simple strobe to the memory map](#simplestrobe)
+* [ghostbus\_strobe: Add a simple strobe to the memory map](#simplestrobe)
 
 * [Add a strobe vector to the memory map](#vectorstrobe)
 
 * [Add an associated strobe to a particular CSR/RAM](#ascstrobe)
 
-* [Conjuring: Add an external module to the Ghostbus](#conjure)
+* [Attach an explicit external module to the Ghostbus](#busattach)
 
-* [Assign a CSR/RAM a global alias for the JSON memory map](#alias)
+* [Assign a CSR/RAM a global alias for the exported memory map file](#alias)
 
 * [Create multiple independent ghostbusses](#ghostbus_top)
 
@@ -172,7 +196,7 @@ _Example_:
 
 // Declare a bus passenger sometime later.  Could be anywhere the ghostbus goes.
 (* ghostbus_passenger="foo_bus, clk" *)        wire foo_clk;
-//... again assume we conjure as much of the bus as needed
+//... again assume we declare as many nets of the bus as needed
 
 // We'll also grab this special signal we defined earlier
 (* ghostbus_passenger="foo_bus, extra_out0" *) wire foo_odd_duck;
@@ -219,7 +243,7 @@ type net, the assumed access is read/write (rw).  For a 'wire' type net, the ass
 read-only (ro).  These assumptions only apply when no explicit specifier is given.
 
 ---------------------------------------------------------------------------------------------------
-### Place a CSR/RAM at an explicit global address <a name="address"></a>
+### Place a CSR/RAM at an explicit address <a name="address"></a>
 ```verilog
 // A simple CSR at 0x2000
 (* ghostbus_addr='h2000 *) reg foo;
@@ -234,7 +258,11 @@ read-only (ro).  These assumptions only apply when no explicit specifier is give
 // A portion of an 8-bit passenger bus at base 0x100
 (* ghostbus_addr='h100, ghostbus_passenger="foo, addr" *) wire [7:0] foo_addr;
 ```
-Forces the tool to place the marked CSR/RAM/submodule/passenger at an explicit base address.
+Forces the tool to place the marked CSR/RAM/submodule/passenger at an explicit bas offset address
+relative to the base address of the containing module.  Thus, if you want to place the object at
+an explicit _global_ address, either do this at the top level (the same level the bus is declared),
+or be careful about your math and assign explicit addresses at every layer of the hierarchy up
+to the target object.
 Explicit addresses get priority when assigning the memory map.
 The tool will raise a Python exception if:
 * the address conflicts with any other explicit address
@@ -299,7 +327,7 @@ _Example_:
 ```
 
 ---------------------------------------------------------------------------------------------------
-### Declaring a bus passenger <a name="conjure"></a>
+### Attach an explicit external module to the Ghostbus <a name="busattach"></a>
 ```verilog
 (* ghostbus_passenger="bus_name, port_name" *)
 ```
@@ -326,7 +354,7 @@ __NOTE__: If you already have access to the clock signal, the `clk` net on a _pa
 
 _Example_: Instantiating a config romx and attaching it to a ghostbus at one of the LEEP-standard addresses
 ```verilog
-// Conjure a bus to connect the romx
+// Declare a bus to connect the ROM
 (* ghostbus_passenger="rom, rdata" *) wire [15:0] romx_rdata;
 // Note that I'm giving it an explicit address here
 (* ghostbus_passenger="rom, addr", ghostbus_addr='h4000 *) wire [10:0] romx_addr;
@@ -341,7 +369,7 @@ config_romx rom (
 ```
 
 ---------------------------------------------------------------------------------------------------
-### Assign a CSR/RAM a global alias for the JSON memory map <a name="alias"></a>
+### Assign a CSR/RAM a global alias for the exported memory map file <a name="alias"></a>
 ```verilog
 (* ghostbus_alias="foo" *)
 ```
@@ -384,6 +412,51 @@ this attribute specifies the particular ghostbus which should be auto-routed int
 __NOTE__: Only one ghostbus can be auto-routed into a module... sorry!
 
 ---------------------------------------------------------------------------------------------------
+### Joining ghostbusses <a name="ghostbus_branch"></a>
+Sometimes you need to attach a ghostbus as a passenger of another ghostbus. I know that sounds silly,
+but I've actually seen one legitimate use for such a feature.  If you need your bus to cross clock
+domains (from domain __X__ to domain __Y__), you need to provide that logic yourself - it is
+thoroughly outside of the ghostbus lane (see rule #1).
+
+So you can start by attaching a [ghostbus passenger](#busattach) in domain __X__ to get explicit nets
+hanging on the ghostbus, then use your own logic to cross the bus to domain __Y__.  Then you declare
+the bus clock domain __Y__ as a [ghostbus driver](#busdefine) to automatically handle CSRs in that
+domain as well.
+
+But that would leave you with two unrelated memory maps (recall, ghostbus does _not_ inspect how
+your nets are connected).  But what we want is for the second bus to be a _branch_ of the first,
+allocating the appropriate addresses and memory alignment for the portion of the memory map in
+this second domain.
+
+We communicate this association to the tool with the `ghostbus_branch` attribute.  It can either
+be placed on the _passenger_ or _driver_ side.  If placed on the _passenger_ bus in domain __X__,
+the attribute value should be the name given to the _driver_ bus in domain __Y__.  If placed on
+the _driver_ bus in domain __Y__, the attribute value should be the name of the _passenger_ bus
+in domain __X__.
+
+Example using `ghostbus_branch` on the _driver_ bus in domain __Y__:
+```verilog
+// ====================== Bus passenger in domain X ===========================
+// This address width is fake! It will get its aw from "bus_y"
+(* ghostbus_passenger="bus_x, clk"   *) wire bus_x_clk;
+(* ghostbus_passenger="bus_x, addr"  *) wire [AW-1:0] bus_x_addr;
+// etc... the other nets of the bus
+
+// ======================== Bus driver in domain Y ============================
+// This address width must match that of bus_x. Ultimately, it will
+// only use the address bits needed to span the CSRs in its domain.
+(* ghostbus_driver="bus_y, clk", ghostbus_domain="domain_y", ghostbus_branch="bus_x" *) wire bus_y_clk;
+(* ghostbus_driver="bus_y, addr", ghostbus_domain="domain_y", ghostbus_branch="bus_x" *) wire [AW-1:0] bus_y_addr;
+// etc... the other nets of the bus
+
+// ======================= Roll-your-own CDC logic ============================
+my_bus_cdc my_bus_cdc_i (
+  .clk_x(bus_x_clk),
+  .clk_y(bus_y_clk),
+  ... // etc... other nets of both busses
+);
+```
+---------------------------------------------------------------------------------------------------
 ### Create multiple independent ghostbusses <a name="ghostbus_top"></a>
 ```verilog
 (* ghostbus_top *) my_module my_module_inst (...);
@@ -401,16 +474,16 @@ in practice as it's easy to structure your codebase to avoid such wackiness.
 
 ## Routing Macros  <a name="macros"></a>
 
-For any module through with the __ghostbus__ routes, there are 3 places where you will need to add guarded macros.
+For any module through which the __ghostbus__ routes, there are 3 places where you will need to add guarded macros.
 
-The macro to guard the ghostbus macros is arbitrary (you decide).  All that is implied is that if you use it properly
-you can build _with_ the auto-generated code included simply by defining the macro or do not define it to build
-_without_ the auto-generated code (still remains valid, synthesizable, but the bus connects to nothing).
+The method of guarding the ghostbus macros is arbitrary (you decide).  All that is implied is that if you use it properly
+you can build _with_ the auto-generated code included simply by defining the macro, or do not define it to build
+_without_ the auto-generated code (still remains valid and synthesizable, but the bus connects to nothing).
 
-In these examples, I use the macro `GHOSTBUS_LIVE`, but again it's an arbitrary choice.  In any case, a properly
-guarded ghostbus macro will look something like this:
+In these examples, I simply use the macro `GHOSTBUS` to include the auto-generated code, but again it's an arbitrary choice.
+In any case, a properly guarded ghostbus macro will look something like this:
 ```verilog
-`ifdef GHOSTBUS_LIVE
+`ifdef GHOSTBUS
 `GHOSTBUS_auto_generated_macro_goes_here
 `endif
 ```
@@ -425,7 +498,7 @@ module foo (
   input clk,
   input [1:0] some_input,
   output [7:0] some_output // Note no comma! See "valid verilog" discussion
-`ifdef GHOSTBUS_LIVE
+`ifdef GHOSTBUS
 `GHOSTBUSPORTS
 `endif
 );
@@ -449,7 +522,7 @@ module gerald (
 // Two instances of the same module necessarily have different instance names
 vince guaraldi (
   .clk(clk)
-`ifdef GHOSTBUS_LIVE
+`ifdef GHOSTBUS
 `GHOSTBUS_gerald_guaraldi
 `endif
 );
@@ -457,7 +530,7 @@ vince guaraldi (
 // Thus, they have different macros associated with them
 vince staples (
   .clk(clk)
-`ifdef GHOSTBUS_LIVE
+`ifdef GHOSTBUS
 `GHOSTBUS_gerald_staples
 `endif
 );
@@ -487,7 +560,7 @@ module foo (
   Assume there's a bunch of stuff here, including at least one CSR/RAM or ghostbus module
  */
 
-`ifdef GHOSTBUS_LIVE
+`ifdef GHOSTBUS
 `GHOSTBUS_foo
 `endif
 
@@ -505,7 +578,7 @@ a guarded include of the `defs.vh` file at the top of each such file.  This is c
 
 _Example_:
 ```verilog
-`ifdef GHOSTBUS_LIVE
+`ifdef GHOSTBUS
 `include "defs.vh"
 `endif
 

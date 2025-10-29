@@ -41,12 +41,14 @@ class Register():
         }
         return sd[access]
 
-    def __init__(self, name=None, dw=1, base=None, meta=None, access=RW, label=None):
+    def __init__(self, name=None, dw=1, base=None, meta=None, access=RW, label=None, desc=None):
         self._name = name
         self._size = 1
         self._data_width = int(dw)
         self._addr_width = 0
         self._base_addr = base
+        # And optional descriptor/docstring
+        self.desc = desc
         # A helpful bit of optional metadata
         self.meta = meta
         #self.access = int(access) & self._accessMask
@@ -58,7 +60,7 @@ class Register():
 
     def copy(self):
         return self.__class__(name=self._name, dw=self._data_width, base=self._base_addr,
-                              meta=self.meta, access=self.access, label=self.label)
+                              meta=self.meta, access=self.access, label=self.label, desc=self.desc)
 
     @property
     def name(self):
@@ -109,15 +111,15 @@ class Register():
 
 
 class Memory(Register):
-    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None, access=Register.RW, label=None):
-        super().__init__(name=name, dw=dw, base=base, meta=meta, access=access, label=label)
+    def __init__(self, name=None, dw=1, aw=0, base=None, meta=None, access=Register.RW, label=None, desc=None):
+        super().__init__(name=name, dw=dw, base=base, meta=meta, access=access, label=label, desc=desc)
         self._size = 1 << int(aw)
         self._addr_width = int(aw)
 
     def copy(self):
         return self.__class__(name=self._name, dw=self._data_width, aw=self._addr_width,
                               base=self._base_addr, meta=self.meta, access=self.access,
-                              label=self.label)
+                              label=self.label, desc=self.desc)
 
 
 def hexlist(ll):
@@ -131,6 +133,7 @@ def _deepCopy(ll):
     for entry in ll:
         copy.append(entry.copy())
     return copy
+
 
 class MemoryRegion():
     """A memory allocator.
