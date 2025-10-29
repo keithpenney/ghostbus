@@ -1736,7 +1736,9 @@ class DecoderDomainLB():
         busaw = bus['aw']
         addr_net = bus['addr']
         divwidth = busaw - mod.aw
-        if divwidth == 0:
+        if (divwidth < 0):
+            raise GhostbusException(f"Module {mod.name} requires address width of {mod.aw}, which is greater than that of the bus ({busaw})!")
+        elif divwidth == 0:
             return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {addr_net}[{mod.aw-1}:0]; // address relative to own base (0x0)"
         return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
 
