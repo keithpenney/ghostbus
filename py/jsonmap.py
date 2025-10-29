@@ -40,9 +40,13 @@ class JSONMaker():
         """
         if flat:
             flavor = ROMX
+            kwargs = {}
         else:
             flavor = ROMN
-        dd = flavor.empty()
+            kwargs = {ROMN.key_instanceof: mem.module_name,
+                      ROMN.key_base: mem.relative_base,
+                      ROMN.key_aw: mem.aw}
+        dd = flavor.empty(**kwargs)
         if flavor == ROMN:
             dd[ROMN.key_instanceof] = mem.module_name
         entries = mem.get_entries()
@@ -89,7 +93,11 @@ class JSONMaker():
                     desc = None
                     if hasattr(ref, "desc") and (ref.desc is not None) and (len(ref.desc) > 0):
                         desc = str(ref.desc)
-                    entry = flavor.new_entry(base = mem.base + ref.base, aw = ref.aw, dw = ref.dw,
+                    if flavor == ROMX:
+                        base = mem.base + ref.base
+                    else: # ROMN
+                        base = ref.base
+                    entry = flavor.new_entry(base = base, aw = ref.aw, dw = ref.dw,
                                              access = ref.access, signed = ref.signed, descript = desc)
                     if flavor == ROMX:
                         if hasattr(ref, "alias") and (ref.alias is not None) and (len(str(ref.alias)) != 0):

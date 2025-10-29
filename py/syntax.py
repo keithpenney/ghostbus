@@ -47,8 +47,12 @@ class ROMN(_JSONMemoryMap):
     key_instanceof = "instanceof"
 
     @classmethod
-    def empty(cls):
-        return {cls.key_regs: {}, cls.key_modules: {}, cls.key_instanceof: ""}
+    def empty(cls, **kwargs):
+        instanceof = kwargs.get(cls.key_instanceof, "")
+        base = kwargs.get(cls.key_base, 0)
+        aw = kwargs.get(cls.key_aw, 0)
+        return {cls.key_instanceof: instanceof, cls.key_base: base, cls.key_aw: aw,
+                cls.key_regs: {}, cls.key_modules: {}}
 
     @classmethod
     def add_module(cls, dd, module_name, module_dict):
@@ -63,7 +67,7 @@ class ROMN(_JSONMemoryMap):
 
 class ROMX(_JSONMemoryMap):
     @classmethod
-    def empty(cls):
+    def empty(cls, **kwargs):
         return {}
 
     @classmethod

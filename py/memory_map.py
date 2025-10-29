@@ -177,6 +177,7 @@ class MemoryRegion():
         """
         self._init_addr_range = addr_range
         self._offset = addr_range[0]
+        self._relative_offset = self._offset
         # -1 because the upper address is not inclusive
         self._aw = bits((addr_range[1]-addr_range[0])-1)
         # Its own memory map will be defined relative to the base (not absolute addresses)
@@ -338,12 +339,12 @@ class MemoryRegion():
         return self.size == 0
 
     @property
-    def base(self):
-        return self._offset
-
-    @property
     def top(self):
         return self._offset + self._top
+
+    @property
+    def base(self):
+        return self._offset
 
     @base.setter
     def base(self, value):
@@ -353,6 +354,15 @@ class MemoryRegion():
             start, end, ref = self.map[n]
             if isinstance(ref, MemoryRegion):
                 ref.base = value + start
+        return
+
+    @property
+    def relative_base(self):
+        return self._relative_offset
+
+    @relative_base.setter
+    def relative_base(self, value):
+        self._relative_offset = value
         return
 
     @property
@@ -562,6 +572,8 @@ class MemoryRegion():
         # If the item referenced by 'ref' has a 'base' attribute, update it
         if ref is not None and hasattr(ref, "base"):
             ref.base = base
+        if ref is not None and hasattr(ref, "relative_base"):
+            ref.relative_base = base
         return base
 
     def keepout(self, addr, width=0):
