@@ -10,6 +10,7 @@ GHOSTBUS_TOP=top
 .PHONY: all
 all: test rule_check
 
+GHOSTBUS_FLAGS=--live --debug
 include $(GHOSTBUS_DIR)/rules.mk
 
 .PHONY: json

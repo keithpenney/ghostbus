@@ -57,6 +57,7 @@ class GhostbusInterface():
         "BRANCH",
         "TOP",
         "DOC",
+        "PIPE",
     ]
     tokens = enum(_tokens, base=0)
     _attributes = {
@@ -100,6 +101,7 @@ class GhostbusInterface():
         # Two aliases to simply add a description to a CSR/RAM/bus
         "ghostbus_doc":         tokens.DOC,
         "ghostbus_desc":        tokens.DOC,
+        "ghostbus_pipeline":    tokens.PIPE,
     }
 
     # NOTE! This is only callable via the _val_decoders dict below
@@ -151,6 +153,7 @@ class GhostbusInterface():
         tokens.BRANCH:    lambda x: x,
         tokens.TOP:       lambda x: True,
         tokens.DOC:       lambda x: str(x),
+        tokens.PIPE:      lambda x: True,
     }
 
     @classmethod
@@ -289,6 +292,7 @@ class MemoryTree(WalkDict):
         self.memories = []
         self.domain_map = {}
         self.toptag_map = {}
+        self.pipeline_map = {}
         # This is a map of instances within generate branches.  This should be distributed to child nodes.
         # What changes if an instance is instantiated within a generate block? The hookup auto-generated code.
         # So every node needs to know which instances are instantiated within a generate block
@@ -492,9 +496,11 @@ class MemoryTree(WalkDict):
                 if node._parent is None:
                     toptag = True
                     genblock = None
+                    pipeline = False
                 else:
                     toptag = node._parent.toptag_map[node.label]
                     genblock = node._parent.genblock_map[node.label]
+                    pipeline = node._parent.pipeline_map[node.label]
                 node.genblock = genblock
                 #print(f"7220 node.label = {node.label}; genblock = {node.genblock}")
                 if hasattr(node, "memories"):
@@ -516,6 +522,9 @@ class MemoryTree(WalkDict):
                                         + " with the (* ghostbus_domain=\"domain_name\" *) attribute which indicates the inteded domain."
                                     # UNSPECIFIED_DOMAIN
                                     raise GhostbusException(err)
+                    if pipeline:
+                        for mem in node.memories:
+                            mem.set_pipeline()
                     nmems, extmod_map = self._getMemoryOrder(node.memories, module_name=node.label)
                     printv(" *** Parsing in this order:", end="")
                     for nmem in nmems:
@@ -709,7 +718,9 @@ class GhostBusser(VParser):
                         token_dict = GhostbusInterface.decode_attrs(attr_dict)
                         busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
                         toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
-                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
+                        pipeline = token_dict.get(GhostbusInterface.tokens.PIPE, False)
+                        module_info[mod_hash]["insts"][inst_name] = \
+                            {"busname": busname, "toptag": toptag, "generate": generate, "pipeline": pipeline}
                         modtree[mod_hash][inst_name] = inst_dict["type"]
             mrs = {}
             self._resetBusses()
@@ -727,8 +738,6 @@ class GhostBusser(VParser):
                     token_dict = GhostbusInterface.decode_attrs(attr_dict)
                     if not isGhostbus(token_dict):
                         continue
-                    # for token, val in token_dict.items():
-                    #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
                     source = attr_dict.get('src', None)
                     gen_block, gen_netname, gen_index = block_inst(netname)
                     generate = None
@@ -756,6 +765,10 @@ class GhostBusser(VParser):
                     busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
                     subname = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
                     docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
+                    pipeline = token_dict.get(GhostbusInterface.tokens.PIPE, False)
+                    if pipeline:
+                        raise GhostbusUsageError("Attribute ghostbus_pipeline can only be used on module instance declarations." +
+                                                 f"Found improper usage at {source} on net {netname}.")
                     if write_strobe is not None:
                         # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                         # Add this to the to-do list to associate when the module is done parsing
@@ -838,6 +851,10 @@ class GhostBusser(VParser):
                     addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
                     busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
                     docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
+                    pipeline = token_dict.get(GhostbusInterface.tokens.PIPE, False)
+                    if pipeline:
+                        raise GhostbusUsageError("Attribute ghostbus_pipeline can only be used on module instance declarations." +
+                                                 f"Found improper usage at {source} on net {netname}.")
                     if access is not None:
                         dw = int(mem_dict["width"])
                         size = int(mem_dict["size"])
@@ -1257,6 +1274,7 @@ class GhostBusser(VParser):
             memtree_node.domain_map = {inst_name: insts[inst_name]["busname"] for inst_name in insts.keys()}
             memtree_node.toptag_map = {inst_name: insts[inst_name]["toptag"] for inst_name in insts.keys()}
             memtree_node.genblock_map = {inst_name: insts[inst_name]["generate"] for inst_name in insts.keys()}
+            memtree_node.pipeline_map = {inst_name: insts[inst_name]["pipeline"] for inst_name in insts.keys()}
             mrs = instdict.get("memory")
             busses_explicit = instdict.get("explicit_busses", [])
             # NOTE: Redundant 'declared_busses' is currently stored and used in both the node and each of its

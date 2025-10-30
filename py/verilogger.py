@@ -62,6 +62,17 @@ class Verilogger():
                 self._ss.append(line)
         return
 
+    def assign(self, lhs, rhs, comment="", depth=1):
+        s = f"{lhs} = {rhs};"
+        return self.add(s, comment=comment, depth=depth)
+
+    def flop(self, clk, lhs, rhs, posedge=True, comment="", depth=1):
+        self.always_at_clk(clk, posedge=posedge, comment="", depth=depth)
+        s = f"{lhs} <= {rhs};"
+        self.add(s, comment=comment, depth=depth)
+        self.end(depth=depth)
+        return
+
     def get(self):
         return "\n".join(self._ss)
 
@@ -86,16 +97,16 @@ class Verilogger():
     def always_at(self, condition, comment="", depth=3):
         return self.always(f"@({condition})", comment=comment, depth=depth)
 
-    def always_at_clk(self, clk, posedge=True, comment=""):
+    def always_at_clk(self, clk, posedge=True, comment="", depth=4):
         if posedge:
             edge = "posedge"
         else:
             edge = "negedge"
-        return self.always_at(f"{edge} {clk}", comment=comment, depth=4)
+        return self.always_at(f"{edge} {clk}", comment=comment, depth=depth)
 
-    def end(self, comment=""):
+    def end(self, comment="", depth=2):
         self.dedent()
-        self.add(f"end", comment=comment, depth=2)
+        self.add(f"end", comment=comment, depth=depth)
         return
 
     def _if(self, condition, comment=""):
@@ -124,6 +135,42 @@ class Verilogger():
         if int(val) < 0:
             raise Exception(f"Negative indent {val}!")
         self._indent_ = val
+        return
+
+    def no_flop(self, x, y="", clk=None, rangestr="", comment="", depth=1):
+        if len(y) > 0:
+            _y = f" = {y}"
+        else:
+            _y = y
+        self.add(f"wire {rangestr}{x}{_y};", comment=comment, depth=depth)
+        return
+
+    def flop_in(self, x, y=None, clk="clk", rangestr="", comment="", depth=2):
+        """
+            f"wire {rangestr}{x};",
+            f"reg {rangestr}x_f=0;",
+            f"always @(posedge clk) begin",
+            f"  x <= x_f;",
+            f"end",
+        """
+        self.add(f"wire {rangestr}{x};", comment=comment, depth=depth)
+        self.add(f"reg {rangestr}{x}_f=0;", comment=comment, depth=depth)
+        self.always_at_clk(clk)
+        self.add(f"{x} <= {x}_f;", comment="", depth=depth)
+        self.end()
+        return
+
+    def flop_out(self, x, y, clk="clk", rangestr="", comment="", depth=2):
+        """
+            f"reg {rangestr}{x}=0;",
+            f"always @(posedge {clk}) begin",
+            f"  {x} <= {y};",
+            f"end",
+        """
+        self.add(f"reg {rangestr}{x}=0;", comment=comment, depth=depth)
+        self.always_at_clk(clk)
+        self.add(f"{x} <= {y};", comment="", depth=depth)
+        self.end()
         return
 
 

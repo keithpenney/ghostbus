@@ -277,6 +277,7 @@ class GBMemoryRegionStager(MemoryRegionStager):
         "pseudo_domain": None,
         "toptag": False,
         "genblock": None,
+        "pipeline": False,
         # Keep track of anything instantiated within a generate block
         "_generates": [],
         "_explicit_generates": [],
@@ -408,6 +409,9 @@ class GBMemoryRegionStager(MemoryRegionStager):
     @property
     def module_name(self):
         return self.label
+
+    def set_pipeline(self):
+        self.pipeline = True
 
 
 class ExternalModule():

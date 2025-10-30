@@ -1727,8 +1727,13 @@ class DecoderDomainLB():
         #return f"wire addrhit_{mod.inst} = {addr_net}[{busaw-1}:{mod.aw}] == {vhex(base_rel>>mod.aw, divwidth)}; // 0x{base_rel:x}-0x{end:x}"
         return cls._addrhit_logic("wire", f"addrhit_{mod.inst}", addr_net, base_rel, busaw, mod.aw)
 
+    @classmethod
+    def _addrMask(cls, mod, parent):
+        rangstr, netname, rhs, comment = cls._addrMaskPieces(mod, parent)
+        return f"wire {rangestr}{netname} = {rhs}; // {comment}"
+
     @staticmethod
-    def _addrMask(mod, parent):
+    def _addrMaskPieces(mod, parent):
         if parent is None:
             bus = mod.ghostbus
         else:
@@ -1736,11 +1741,17 @@ class DecoderDomainLB():
         busaw = bus['aw']
         addr_net = bus['addr']
         divwidth = busaw - mod.aw
+        rangestr = f"[{busaw-1}:0] "
+        netname = f"{mod.ghostbus['addr']}_{mod.inst}"
+        comment = "address relative to own base (0x0)"
         if (divwidth < 0):
             raise GhostbusException(f"Module {mod.name} requires address width of {mod.aw}, which is greater than that of the bus ({busaw})!")
         elif divwidth == 0:
-            return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {addr_net}[{mod.aw-1}:0]; // address relative to own base (0x0)"
-        return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}; // address relative to own base (0x0)"
+            rhs = f"{addr_net}[{mod.aw-1}:0]"
+            #return f"wire [{busaw-1}:0] {mod.ghostbus['addr']}_{mod.inst} = {addr_net}[{mod.aw-1}:0]; // address relative to own base (0x0)"
+        else:
+            rhs = f"{{{vhex(0, divwidth)}, {addr_net}[{mod.aw-1}:0]}}"
+        return (rangestr, netname, rhs, comment)
 
     def _wen(self, mod, parent_bustop):
         return self._andPort(mod, "we", parent_bustop=parent_bustop)
@@ -1764,18 +1775,38 @@ class DecoderDomainLB():
         vl = verilogger
         parentbus = parent.ghostbus
         gbports = self.gbportbus
-        addrMask = self._addrMask(self, parent)
+        #addrMask = self._addrMask(self, parent)
         #ss = [f"// submodule {self.inst}"]
         vl.comment(f"submodule {self.inst}")
         # If this is in a For-Loop, addrHit needs to be declared here as a vector then assigned within the loop
         loopsize = ""
         loopvector = ""
         branch = ""
+        clknet = gbports['clk']
+        # TODO:
+        #   Do this better, you bum
+        net_ops = {
+            "clk":  "no_flop",
+            "addr": "flop_out",
+            "din":  "flop_in",
+            "dout": "flop_out",
+            "we":   "flop_out",
+            "re":   "flop_out",
+            "wstb": "flop_out",
+            "rstb": "flop_out",
+        }
+        def assign(netkey, rangestr, netname, rhs="", comment=""):
+            if self.mod.pipeline:
+                mname = net_ops[netkey]
+                method = getattr(vl, mname)
+                method(netname, rhs, clk=clknet, rangestr=rangestr, comment=comment, depth=1)
+            else:
+                _rhs = f" = {rhs}" if len(rhs) > 0 else ""
+                vl.add(f"wire {rangestr}{netname}{_rhs};")
         if isForLoop(self.genblock):
             loopsize = self.genblock.unrolled_size
             loopvector = f"[{loopsize}-1:0] "
             branch = self.genblock.branch
-            #ss.append(f"wire {loopvector} addrhit_{branch}_{self.inst};")
             vl.add(f"wire {loopvector} addrhit_{branch}_{self.inst};")
         else:
             addrHit = self._addrHit(base_rel, self, parent)
@@ -1785,8 +1816,9 @@ class DecoderDomainLB():
         for net in netlist:
             netkey, netname, rangestr, _dir = net
             if netkey == "addr":
-                #ss.append(addrMask)
-                vl.add(addrMask)
+                #vl.add(addrMask)
+                rangestr, netname, rhs, comment = self._addrMaskPieces(self, parent)
+                assign(netkey, rangestr, netname, rhs=rhs, comment=comment)
                 continue
             # If net is unused in parentbus
             # TODO - replace the following line with parentbus.get() when 'BusLB.get' is replaced with 'BusLB.getDict'
@@ -1794,17 +1826,15 @@ class DecoderDomainLB():
                 # If it's an input to the submod (host-centric output)
                 if _dir == BusLB._output:
                     # Wire to 0
-                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = 0; // (unused submod input)")
                     vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = 0; // (unused submod input)")
                 else:
-                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst}; // (unused submod output)")
                     vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst}; // (unused submod output)")
             else:
                 if len(rangestr):
                     rangestr += " "
                 if netkey in ('clk', 'addr', 'dout'):
-                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
-                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
+                    #vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]};")
+                    assign(netkey, rangestr, f"{gbports[netkey]}_{self.inst}", rhs=f"{parentbus[netkey]}")
                 elif netkey in ('we', 'wstb', 're', 'rstb'):
                     if loopsize == "":
                         pbk = f"{parentbus[netkey]}"
@@ -1814,16 +1844,16 @@ class DecoderDomainLB():
                     inst = self.inst
                     if len(branch) > 0:
                         inst = f"{branch}_{self.inst}"
-                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
-                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
+                    #vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {pbk} & addrhit_{inst};")
+                    assign(netkey, rangestr, f"{gbports[netkey]}_{self.inst}", rhs=f"{pbk} & addrhit_{inst}")
                 elif netkey in ('din',):
                     if isForLoop(self.genblock):
                         rangestr = self.genblock.unrollRangeString(rangestr) + " "
-                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
-                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
+                    #vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst};")
+                    assign(netkey, rangestr, f"{gbports[netkey]}_{self.inst}")
                 else:
-                    #ss.append(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
-                    vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
+                    #vl.add(f"wire {rangestr}{gbports[netkey]}_{self.inst} = {parentbus[netkey]}; // extra port?")
+                    assign(netkey, rangestr, f"{gbports[netkey]}_{self.inst}", rhs=f"{parentbus[netkey]}", comment="extra port?")
         #return "\n".join(ss)
         return
 

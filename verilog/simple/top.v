@@ -31,7 +31,7 @@ localparam FOO_RD = 8;
 
 `GHOSTBUS_top
 
-submod_foo #(
+(* ghostbus_pipeline *) submod_foo #(
   .AW(FOO_AW),
   .DW(FOO_DW),
   .GW(FOO_GW),
