@@ -438,51 +438,58 @@ class VParser():
             ix = jsfile.index('{')
             jsfile = jsfile[ix:]
         self._dict = json.loads(jsfile)
-        # Separate attributes for this module
-        mod = self._dict.get("modules", None)
-        self.params = {}
-        if mod is not None:
-            # Get first (should be only) module
-            name,mdict = [x for x in mod.items()][0]
-            self.modname = name
-            self.elaboratePorts()
-            self.ports = mdict.get('ports', None)
-            paramdict = mdict.get("parameter_default_values", None)
-            if paramdict is not None:
-                dd = {}
-                for paramname, paramstr in paramdict.items():
-                    try:
-                        pval = int(paramstr, 2)
-                    except ValueError:
-                        # Handle the oddball value where the paramstr is literally '""'
-                        if len(paramstr.strip()) == 0:
-                            paramstr = '""'
-                        pval = paramstr
-                    dd[paramname] = pval
-                self.params[name] = dd
-        else:
-            self.modname = None
-            self.ports = {}
-        return True
-
-    def elaboratePorts(self):
-        """Capture the unparsed range string for all ports of all modules"""
-        mod = self._dict.get("modules", None)
-        if mod is not None:
-            for name, mdict in mod.items():
-                ports = mdict.get("ports", None)
-                nets = mdict.get("netnames", None)
-                for portname in ports.keys():
-                    _range = None
-                    net_dict = nets[portname]
-                    if net_dict is not None:
-                        attr_dict = net_dict.get("attributes", None)
-                        if attr_dict is not None:
-                            src = attr_dict.get("src", None)
-                            if src is not None:
-                                _range = getUnparsedWidthRange(src)
-                    ports[portname]['range'] = _range
+        self.find_top_module()
+        self.sort_nets()
         return
+
+    def find_top_module(self):
+        if self._top is None:
+            # Just get whatever slang says is first
+            defdict = self._dict["definitions"][0]
+            topname = defdict["name"]
+        else:
+            topname = self._top
+        self.modname = topname
+        design_dict = self._dict["design"]
+        ddict = None
+        for member in design_dict["members"]:
+            kind = member["kind"]
+            name = member["name"]
+            if (kind == "Instance") and (name == topname):
+                ddict = member
+                break
+        if ddict is not None:
+            self._dict = ddict["body"]
+        else:
+            raise SlangParsingError(f"Could not find {topname} in design.")
+        return
+
+    def sort_nets(self):
+        # FIXME - move this ghostbus stuff out of this generic file
+        params = []
+        ports = []
+        modinsts = []
+        gbstuff = []
+        members = self._dict["members"]
+        for member in members:
+            kind = member["kind"]
+            if kind == "Parameter":
+                params.append(member)
+            elif kind == "Port":
+                ports.append(member)
+            elif kind in ("UninstantiatedDef", "Instance"):
+                modinsts.append(member)
+            elif kind == "Net":
+                attrs = member.get("attributes", [])
+                for attr in attrs:
+                    attrname = attr["name"]
+                    if attrname.startswith("ghostbus"):
+                        gbstuff.append(member)
+        self.params = params
+        self.ports = ports
+        self.modinsts = modinsts
+        self.gbstuff = gbstuff
+        return True
 
     def getPorts(self, parsed=True):
         """Return list of (0, name, dirstr, rangeStart, rangeEnd), one for
@@ -689,6 +696,56 @@ class VParser():
                 cls._walk(val, trace, do)   # When this returns, we are done with this dict
             trace.pop() # So we can pop the key from the trace and continue the loop
         return True
+
+    def printSummary(self):
+        print("{:=^80s}".format(" " + self.modname + " "))
+        self._printParams()
+        self._printPorts()
+        self._printModinsts()
+        self._printGBStuff()
+        print("="*80)
+        return
+
+    def _printParams(self):
+        print("== Params")
+        for pdict in self.params:
+            name = pdict["name"]
+            val = pdict["value"]
+            local = pdict["isLocal"]
+            if local:
+                ptype = "localparam"
+            else:
+                ptype = "parameter"
+            print(f"  {ptype} {name} = {val}")
+        return
+
+    def _printPorts(self):
+        print("== Ports")
+        for port in self.ports:
+            name = port["name"]
+            _dir = port["direction"].lower()
+            _type = port["type"]
+            print(f"  {_dir}put {_type} {name}")
+        return
+
+    def _printModinsts(self):
+        print("== Mod Insts")
+        for modinst in self.modinsts:
+            name = modinst["name"]
+            print("  " + name)
+        return
+
+    def _printGBStuff(self):
+        print("== Ghostbus Stuff")
+        for member in self.gbstuff:
+            name = member["name"]
+            attrs = member["attributes"]
+            print("  ", end="")
+            for attr in attrs:
+                attrname = attr["name"]
+                print(f"{attrname}", end=" ")
+            print(name)
+        return
 
 
 def doBrowse():
