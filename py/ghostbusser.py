@@ -663,7 +663,6 @@ class GhostBusser(VParser):
         self.memory_map = None
         self._ghostbusses = []
         self.memory_maps = {}
-        self._ext_dict = {}
 
     def digestModInsts(self, mod_dict, mod_hash, module_name=None, top_mod=None):
         # Check for instantiated modules
@@ -801,6 +800,20 @@ class GhostBusser(VParser):
         self.associateStrobes(associated_strobes)
         return
 
+    def associateStrobes(self, associated_strobes):
+        for busname, mr in self.mrs.items():
+            for strobe_name, reg_type in associated_strobes.items():
+                associated_reg, _read = reg_type
+                # find the "GBRegister" named 'associated_reg'
+                # Add the strobe as an associated strobe by net name
+                for start, end, register in mr.get_entries():
+                    if register.name == associated_reg:
+                        if _read:
+                            register.read_strobes.append(strobe_name)
+                        else:
+                            register.write_strobes.append(strobe_name)
+        return
+
     def digestMems(self, mod_dict, mod_hash, module_name=None, top_mod=None):
         # Check for RAMs
         memories = mod_dict.get("memories")
@@ -855,20 +868,6 @@ class GhostBusser(VParser):
                         self.mrs[busname].add(width=aw, ref=mem, addr=addr)
         return
 
-    def associateStrobes(self, associated_strobes):
-        for busname, mr in self.mrs.items():
-            for strobe_name, reg_type in associated_strobes.items():
-                associated_reg, _read = reg_type
-                # find the "GBRegister" named 'associated_reg'
-                # Add the strobe as an associated strobe by net name
-                for start, end, register in mr.get_entries():
-                    if register.name == associated_reg:
-                        if _read:
-                            register.read_strobes.append(strobe_name)
-                        else:
-                            register.write_strobes.append(strobe_name)
-        return
-
     def assembleBusses(self, mod_hash):
         generates = self._resolveGenerates()
         for ref in generates:
@@ -884,7 +883,7 @@ class GhostBusser(VParser):
             mr = self.mrs[passenger.domain]
             mr.add(width=passenger.aw, ref=passenger, addr=passenger.base)
         self.module_info[mod_hash]["memory"] = self.mrs
-        self._newResolveBusses()
+        self._resolveBusses()
         return
 
     def digest(self):
@@ -922,13 +921,15 @@ class GhostBusser(VParser):
         memtree = self.build_memory_tree()
         self.memory_maps = memtree.resolve(verbose=False)
         print(f"Number of independent memory maps: {len(self.memory_maps)}")
+        return memtree
+
+    def get_ghostmods(self):
         ghostmods = {}
         for key, _info in self.module_info.items():
             mr = _info.get("memory", None)
             if mr is not None:
                 ghostmods[key] = mr
-        self.ghostmods = ghostmods
-        return memtree
+        return ghostmods
 
     def trim_hierarchy(self):
         for mem_map in self.memory_maps:
@@ -940,7 +941,7 @@ class GhostBusser(VParser):
         self._bus_passengers = []
         return
 
-    def _newResolveBusses(self):
+    def _resolveBusses(self):
         drivers = self._resolveDrivers()
         self._ghostbusses.extend(drivers)
         return
