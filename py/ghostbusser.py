@@ -665,13 +665,234 @@ class GhostBusser(VParser):
         self.memory_maps = {}
         self._ext_dict = {}
 
+    def digestModInsts(self, mod_dict, mod_hash, module_name=None, top_mod=None):
+        # Check for instantiated modules
+        self.modtree[mod_hash] = {}
+        self.module_info[mod_hash]["insts"] = {}
+        cells = mod_dict.get("cells")
+        if cells is not None:
+            for inst_name, inst_dict in cells.items():
+                gen_block, inst, gen_index = block_inst(inst_name)
+                generate = None
+                if gen_block is not None:
+                    attr_dict = inst_dict["attributes"]
+                    source = attr_dict.get('src', None)
+                    if autogenblk(gen_block):
+                        feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                    if gen_index is None:
+                        feature_print(f"Found instance {inst} inside a generate-if block {gen_block}")
+                        generate = GenerateIf(gen_block)
+                        inst_name = inst
+                    else:
+                        feature_print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
+                        generate = parseForLoop(gen_block, source)
+                        generate._loop_index = gen_index
+                        if generate is None:
+                            # UNPARSED_FOR_LOOP
+                            raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
+                    feature_print(generate)
+                if ismodule(inst_name):
+                    attr_dict = inst_dict["attributes"]
+                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                    busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+                    toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
+                    self.module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
+                    self.modtree[mod_hash][inst_name] = inst_dict["type"]
+        return
+
+    def digestRegs(self, mod_dict, mod_hash, module_name=None, top_mod=None):
+        # Check for regs
+        netnames = mod_dict.get("netnames")
+        bustop = False
+        associated_strobes = {}
+        busnames_explicit = []
+        busname_to_subname_map = {}
+        if netnames is not None:
+            for netname, net_dict in netnames.items():
+                attr_dict = net_dict["attributes"]
+                token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                if not isGhostbus(token_dict):
+                    continue
+                # for token, val in token_dict.items():
+                #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
+                source = attr_dict.get('src', None)
+                gen_block, gen_netname, gen_index = block_inst(netname)
+                generate = None
+                if gen_block is not None:
+                    if gen_index is None:
+                        feature_print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
+                        generate = GenerateIf(gen_block)
+                        if autogenblk(gen_block):
+                            feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                        netname = gen_netname
+                    else:
+                        feature_print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
+                        generate = parseForLoop(gen_block, source)
+                        generate._loop_index = gen_index
+                        #if generate is None:
+                        #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
+                signed = net_dict.get("signed", None)
+                hit = False
+                access = token_dict.get(GhostbusInterface.tokens.HA, None)
+                addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
+                write_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
+                read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
+                exts = token_dict.get(GhostbusInterface.tokens.PASSENGER, None)
+                alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
+                busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+                subname = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
+                docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
+                if write_strobe is not None:
+                    # print("                            write_strobe: {} => {}".format(netname, write_strobe))
+                    # Add this to the to-do list to associate when the module is done parsing
+                    associated_strobes[netname] = (write_strobe, False)
+                elif read_strobe is not None:
+                    # print("                            read_strobe: {} => {}".format(netname, read_strobe))
+                    associated_strobes[netname] = (read_strobe, True)
+                elif access is not None:
+                    dw = len(net_dict['bits'])
+                    initval = get_value(net_dict['bits'])
+                    reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
+                    reg.initval = initval
+                    reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
+                    reg.alias = alias
+                    reg.signed = signed
+                    reg.domain = busname
+                    reg.genblock = generate
+                    reg.manual_addr = addr
+                    if gen_block is not None and gen_index is not None:
+                        # Only handling generate-for's.  generate-if's are easier
+                        self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
+                    else:
+                        # This may not be the best place for this step, but at least it gets done.
+                        reg._readRangeDepth()
+                        if self.mrs.get(busname, None) is None:
+                            self.mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                            printd("0: created mr label {} {} ({})".format(busname, self.mrs[busname].label, mod_hash))
+                        self.mrs[busname].add(width=0, ref=reg, addr=addr)
+                elif exts is not None:
+                    if generate is not None:
+                        branch = generate.branch
+                        if generate.isIf():
+                            gen_index_str = ""
+                        else:
+                            gen_index_str = f"at index {gen_index} "
+                        feature_print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
+                    dw = len(net_dict['bits'])
+                    self._handleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
+                                    association=subname, generate=generate, driver=False, signed=signed, desc=docstr)
+                if subname is not None:
+                    busname_to_subname_map[busname] = subname
+                ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
+                if ports is not None:
+                    bustop = True
+                    dw = len(net_dict['bits'])
+                    # printd(f"     About to _handleBus for {mod_hash}")
+                    self._handleBus(netname, ports, dw, source, domain=busname, alias=alias,
+                                    association=subname, generate=generate, driver=True, desc=docstr)
+                    if busname not in busnames_explicit:
+                        busnames_explicit.append(busname)
+        for busname, mr in self.mrs.items():
+            subname = busname_to_subname_map.get(busname, None)
+            if subname is not None:
+                mr.pseudo_domain = subname
+            mr.bustop = bustop
+        self.module_info[mod_hash]["explicit_busses"] = busnames_explicit
+        self.associateStrobes(associated_strobes)
+        return
+
+    def digestMems(self, mod_dict, mod_hash, module_name=None, top_mod=None):
+        # Check for RAMs
+        memories = mod_dict.get("memories")
+        if memories is not None:
+            for memname, mem_dict in memories.items():
+                gen_block, gen_netname, gen_index = block_inst(memname)
+                generate = None
+                attr_dict = mem_dict["attributes"]
+                token_dict = GhostbusInterface.decode_attrs(attr_dict)
+                if not isGhostbus(token_dict):
+                    continue
+                source = mem_dict['attributes']['src']
+                if gen_block is not None:
+                    if autogenblk(gen_block):
+                        feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                    if gen_index is None:
+                        feature_print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
+                        generate = GenerateIf(gen_block)
+                        memname = gen_netname
+                    else:
+                        feature_print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
+                        generate = parseForLoop(gen_block, source)
+                        generate._loop_index = gen_index
+                        #if generate is None:
+                        #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
+                signed = mem_dict.get("signed", None)
+                # for token, val in token_dict.items():
+                #     printd("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
+                access = token_dict.get(GhostbusInterface.tokens.HA, None)
+                addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
+                busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+                docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
+                if access is not None:
+                    dw = int(mem_dict["width"])
+                    size = int(mem_dict["size"])
+                    aw = math.ceil(math.log2(size))
+                    mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source, desc=docstr)
+                    mem.signed = signed
+                    mem.domain = busname
+                    mem.genblock = generate
+                    mem.manual_addr = addr
+                    if gen_block is not None and gen_index is not None:
+                        # Only handling generate-for's.  generate-if's are easier
+                        self._handleGenerates(self._REFTYPE_RAM, mem, source, module_name)
+                    else:
+                        if self.mrs.get(busname, None) is None:
+                            module_name = get_modname(mod_hash)
+                            self.mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
+                            printd("2: created mr label {} ({})".format(self.mrs[busname].label, mod_hash))
+                        # This may not be the best place for this step, but at least it gets done.
+                        mem._readRangeDepth()
+                        self.mrs[busname].add(width=aw, ref=mem, addr=addr)
+        return
+
+    def associateStrobes(self, associated_strobes):
+        for busname, mr in self.mrs.items():
+            for strobe_name, reg_type in associated_strobes.items():
+                associated_reg, _read = reg_type
+                # find the "GBRegister" named 'associated_reg'
+                # Add the strobe as an associated strobe by net name
+                for start, end, register in mr.get_entries():
+                    if register.name == associated_reg:
+                        if _read:
+                            register.read_strobes.append(strobe_name)
+                        else:
+                            register.write_strobes.append(strobe_name)
+        return
+
+    def assembleBusses(self, mod_hash):
+        generates = self._resolveGenerates()
+        for ref in generates:
+            if self.mrs.get(ref.domain, None) is None:
+                self.mrs[ref.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=ref.domain)
+                printd("1: created mr label {} {} ({})".format(ref.domain, self.mrs[ref.domain].label, mod_hash))
+            self.mrs[ref.domain].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
+        passengers = self._resolvePassengers()
+        for passenger in passengers:
+            added = False
+            if self.mrs.get(passenger.domain, None) is None:
+                self.mrs[passenger.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=passenger.domain)
+            mr = self.mrs[passenger.domain]
+            mr.add(width=passenger.aw, ref=passenger, addr=passenger.base)
+        self.module_info[mod_hash]["memory"] = self.mrs
+        self._newResolveBusses()
+        return
+
     def digest(self):
-        modtree = {}
+        self.modtree = {}
         top_mod = None
         top_dict = self._dict["modules"]
-        module_info = {}
+        self.module_info = {}
         for mod_hash, mod_dict in top_dict.items():
-            associated_strobes = {}
             module_name = get_modname(mod_hash)
             if not hasattr(mod_dict, "items"):
                 raise Exception(f"mod_dict has no 'items' attr: {mod_hash}, {mod_dict}")
@@ -679,220 +900,15 @@ class GhostBusser(VParser):
             for attr in mod_dict["attributes"]:
                 if attr == "top":
                     top_mod = mod_hash
-            # Check for instantiated modules
-            modtree[mod_hash] = {}
-            module_info[mod_hash] = {"insts": {}}
-            cells = mod_dict.get("cells")
-            if cells is not None:
-                for inst_name, inst_dict in cells.items():
-                    gen_block, inst, gen_index = block_inst(inst_name)
-                    generate = None
-                    if gen_block is not None:
-                        attr_dict = inst_dict["attributes"]
-                        source = attr_dict.get('src', None)
-                        if autogenblk(gen_block):
-                            feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
-                        if gen_index is None:
-                            feature_print(f"Found instance {inst} inside a generate-if block {gen_block}")
-                            generate = GenerateIf(gen_block)
-                            inst_name = inst
-                        else:
-                            feature_print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
-                            generate = parseForLoop(gen_block, source)
-                            generate._loop_index = gen_index
-                            if generate is None:
-                                # UNPARSED_FOR_LOOP
-                                raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
-                        feature_print(generate)
-                    if ismodule(inst_name):
-                        attr_dict = inst_dict["attributes"]
-                        token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                        busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
-                        toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
-                        module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
-                        modtree[mod_hash][inst_name] = inst_dict["type"]
-            mrs = {}
+            self.module_info[mod_hash] = {}
+            self.digestModInsts(mod_dict, mod_hash, module_name=module_name, top_mod=top_mod)
+            self.mrs = {} # per-module
             self._resetBusses()
             self._resetGenerates()
-            # Check for regs
-            netnames = mod_dict.get("netnames")
-            entries = []
-            bustop = False
-            busnames_explicit = []
-            busnames_implicit = []
-            busname_to_subname_map = {}
-            if netnames is not None:
-                for netname, net_dict in netnames.items():
-                    attr_dict = net_dict["attributes"]
-                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                    if not isGhostbus(token_dict):
-                        continue
-                    # for token, val in token_dict.items():
-                    #     print("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
-                    source = attr_dict.get('src', None)
-                    gen_block, gen_netname, gen_index = block_inst(netname)
-                    generate = None
-                    if gen_block is not None:
-                        if gen_index is None:
-                            feature_print(f"Found CSR {gen_netname} inside a generate-if block {gen_block}")
-                            generate = GenerateIf(gen_block)
-                            if autogenblk(gen_block):
-                                feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
-                            netname = gen_netname
-                        else:
-                            feature_print(f"Found CSR {gen_netname} inside a generate-for block {gen_block}, index {gen_index} and we'll handle it later")
-                            generate = parseForLoop(gen_block, source)
-                            generate._loop_index = gen_index
-                            #if generate is None:
-                            #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
-                    signed = net_dict.get("signed", None)
-                    hit = False
-                    access = token_dict.get(GhostbusInterface.tokens.HA, None)
-                    addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
-                    write_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
-                    read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
-                    exts = token_dict.get(GhostbusInterface.tokens.PASSENGER, None)
-                    alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
-                    busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
-                    subname = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
-                    docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
-                    if write_strobe is not None:
-                        # print("                            write_strobe: {} => {}".format(netname, write_strobe))
-                        # Add this to the to-do list to associate when the module is done parsing
-                        associated_strobes[netname] = (write_strobe, False)
-                    elif read_strobe is not None:
-                        # print("                            read_strobe: {} => {}".format(netname, read_strobe))
-                        associated_strobes[netname] = (read_strobe, True)
-                    elif access is not None:
-                        dw = len(net_dict['bits'])
-                        initval = get_value(net_dict['bits']) # TODO - is get_value correct or bit-reversed?
-                        #print(f"New CSR: {netname}")
-                        reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
-                        reg.initval = initval
-                        reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
-                        reg.alias = alias
-                        reg.signed = signed
-                        reg.domain = busname
-                        reg.genblock = generate
-                        reg.manual_addr = addr
-                        if gen_block is not None and gen_index is not None:
-                            # Only handling generate-for's.  generate-if's are easier
-                            self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
-                        else:
-                            # This may not be the best place for this step, but at least it gets done.
-                            reg._readRangeDepth()
-                            if mrs.get(busname, None) is None:
-                                mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                                printd("0: created mr label {} {} ({})".format(busname, mrs[busname].label, mod_hash))
-                            mrs[busname].add(width=0, ref=reg, addr=addr)
-                    elif exts is not None:
-                        if generate is not None:
-                            branch = generate.branch
-                            if generate.isIf():
-                                gen_index_str = ""
-                            else:
-                                gen_index_str = f"at index {gen_index} "
-                            feature_print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
-                        dw = len(net_dict['bits'])
-                        self._handleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
-                                        association=subname, generate=generate, driver=False, signed=signed, desc=docstr)
-                    ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
-                    if subname is not None:
-                        busname_to_subname_map[busname] = subname
-                    if ports is not None:
-                        bustop = True
-                        dw = len(net_dict['bits'])
-                        # printd(f"     About to _handleBus for {mod_hash}")
-                        self._handleBus(netname, ports, dw, source, domain=busname, alias=alias,
-                                        association=subname, generate=generate, driver=True, desc=docstr)
-                        if busname not in busnames_explicit:
-                            busnames_explicit.append(busname)
-            # Check for RAMs
-            memories = mod_dict.get("memories")
-            if memories is not None:
-                for memname, mem_dict in memories.items():
-                    gen_block, gen_netname, gen_index = block_inst(memname)
-                    generate = None
-                    attr_dict = mem_dict["attributes"]
-                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                    if not isGhostbus(token_dict):
-                        continue
-                    source = mem_dict['attributes']['src']
-                    if gen_block is not None:
-                        if autogenblk(gen_block):
-                            feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
-                        if gen_index is None:
-                            feature_print(f"Found RAM {gen_netname} inside a generate-if block {gen_block}")
-                            generate = GenerateIf(gen_block)
-                            memname = gen_netname
-                        else:
-                            feature_print(f"Found RAM {gen_netname} inside a generate-for block {gen_block}, index {gen_index} which we'll handle later")
-                            generate = parseForLoop(gen_block, source)
-                            generate._loop_index = gen_index
-                            #if generate is None:
-                            #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
-                    signed = net_dict.get("signed", None)
-                    # for token, val in token_dict.items():
-                    #     printd("{}: Decoded {}: {}".format(netname, GhostbusInterface.tokenstr(token), val))
-                    access = token_dict.get(GhostbusInterface.tokens.HA, None)
-                    addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
-                    busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
-                    docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
-                    if access is not None:
-                        dw = int(mem_dict["width"])
-                        size = int(mem_dict["size"])
-                        aw = math.ceil(math.log2(size))
-                        mem = GBMemory(name=memname, dw=dw, aw=aw, meta=source, desc=docstr)
-                        mem.signed = signed
-                        mem.domain = busname
-                        mem.genblock = generate
-                        mem.manual_addr = addr
-                        if gen_block is not None and gen_index is not None:
-                            # Only handling generate-for's.  generate-if's are easier
-                            self._handleGenerates(self._REFTYPE_RAM, mem, source, module_name)
-                        else:
-                            if mrs.get(busname, None) is None:
-                                module_name = get_modname(mod_hash)
-                                mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                                printd("2: created mr label {} ({})".format(mrs[busname].label, mod_hash))
-                            # This may not be the best place for this step, but at least it gets done.
-                            mem._readRangeDepth()
-                            mrs[busname].add(width=aw, ref=mem, addr=addr)
-            for busname, mr in mrs.items():
-                for strobe_name, reg_type in associated_strobes.items():
-                    associated_reg, _read = reg_type
-                    # find the "GBRegister" named 'associated_reg'
-                    # Add the strobe as an associated strobe by net name
-                    for start, end, register in mr.get_entries():
-                        if register.name == associated_reg:
-                            if _read:
-                                register.read_strobes.append(strobe_name)
-                            else:
-                                register.write_strobes.append(strobe_name)
-                subname = busname_to_subname_map.get(busname, None)
-                if subname is not None:
-                    mr.pseudo_domain = subname
-                mr.bustop = bustop
-                # Any ghostmod has an implied ghostbus coming in
-                if None not in busnames_implicit:
-                    busnames_implicit.append(None)
-            generates = self._resolveGenerates()
-            for ref in generates:
-                if mrs.get(ref.domain, None) is None:
-                    mrs[ref.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=ref.domain)
-                    printd("1: created mr label {} {} ({})".format(ref.domain, mrs[ref.domain].label, mod_hash))
-                mrs[ref.domain].add(width=ref.aw, ref=ref, addr=ref.manual_addr)
-            passengers = self._resolvePassengers()
-            for passenger in passengers:
-                added = False
-                if mrs.get(passenger.domain, None) is None:
-                    mrs[passenger.domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=passenger.domain)
-                mr = mrs[passenger.domain]
-                mr.add(width=passenger.aw, ref=passenger, addr=passenger.base)
-            module_info[mod_hash]["memory"] = mrs
-            module_info[mod_hash]["explicit_busses"] = busnames_explicit
-            module_info[mod_hash]["implicit_busses"] = busnames_implicit
-            self._newResolveBusses()
+            self.digestRegs(mod_dict, mod_hash, module_name=module_name, top_mod=top_mod)
+            self.digestMems(mod_dict, mod_hash, module_name=module_name, top_mod=top_mod)
+            self.assembleBusses(mod_hash)
+
         self._busValid = True
         for bus in self._ghostbusses:
             valid, msg = bus.validate()
@@ -902,18 +918,12 @@ class GhostBusser(VParser):
             # NO_GHOSTBUS
             raise GhostbusException("No ghostbus found in codebase.")
         self._top = top_mod
-        #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
-        #print_dict(modtree, dohash=True)
-        #print("+++++++++++++++++++++++++++++++++++++++++++++++++")
-        modtree = self.build_modtree(modtree)
-        #print("=================================================")
-        #print_dict(modtree, dohash=True)
-        #print("=================================================")
-        memtree = self.build_memory_tree(modtree, module_info)
+        self.build_modtree()
+        memtree = self.build_memory_tree()
         self.memory_maps = memtree.resolve(verbose=False)
         print(f"Number of independent memory maps: {len(self.memory_maps)}")
         ghostmods = {}
-        for key, _info in module_info.items():
+        for key, _info in self.module_info.items():
             mr = _info.get("memory", None)
             if mr is not None:
                 ghostmods[key] = mr
@@ -1187,22 +1197,22 @@ class GhostBusser(VParser):
     def getBusDicts(self):
         return self._ghostbusses
 
-    def build_modtree(self, dd):
+    def build_modtree(self):
         top = self._top
         if top is None:
             # NO_TOP_SPECIFIED
             raise GhostbusException("I don't know how to do this without top specified")
         modtree = {}
-        for module, mod_dict in dd.items():
+        for module, mod_dict in self.modtree.items():
             if module == top:
                 modtree[module] = {}
         if len(modtree) == 0:
             # NO_TOP_SPECIFIED
             raise GhostbusException("Could not find top: {}".format(top))
         nested = False
-        dd_keys = [key for key in dd.keys()]
+        dd_keys = [key for key in self.modtree.keys()]
         for module in dd_keys:
-            instances_dict = dd[module]
+            instances_dict = self.modtree[module]
             #print(f"    Processing: {module}")
             instance_keys = [key for key in instances_dict.keys()]
             #if len(instances_dict) == 0:
@@ -1210,20 +1220,19 @@ class GhostBusser(VParser):
             for inst_name in instance_keys:
                 inst_key = instances_dict[inst_name]
                 dict_key = (inst_name, inst_key)
-                inst = dd.get(inst_key, None)
-                #print(f"      Instance key: {dict_key}; dd[inst_key] = {inst}")
+                inst = self.modtree.get(inst_key, None)
+                #print(f"      Instance key: {dict_key}; self.modtree[inst_key] = {inst}")
                 del instances_dict[inst_name]
                 if inst is None:
                     print(f"WARNING: Unknown module {inst_key}. Treating as black box.")
                 else:
                     # Update memory in-place
-                    #cp = deep_copy(inst)
-                    #print(f"        Adding dict entry {dict_key}: {cp}")
-                    #dd[module][dict_key] = cp
-                    dd[module][dict_key] = inst
-        return deep_copy(dd[top])
+                    self.modtree[module][dict_key] = inst
+        # Clobber modtree rooted at the top
+        self.modtree = deep_copy(self.modtree[top])
+        return
 
-    def build_memory_tree(self, modtree, module_info):
+    def build_memory_tree(self):
         """First build a MemoryTree() as a dict of MemoryRegions.
         @params:
             dict modtree:
@@ -1238,15 +1247,15 @@ class GhostBusser(VParser):
                 }
         """
         # Start from leaf,
-        memtree = MemoryTree(modtree, key=(self._top, self._top), hierarchy=(self._top,))
-        #print_dict(module_info)
+        memtree = MemoryTree(self.modtree, key=(self._top, self._top), hierarchy=(self._top,))
+        #print_dict(self.module_info)
         nodes_visited = 0
         for key, memtree_node in memtree.walk():
             nodes_visited += 1
             if key is None:
                 break
             inst_name, inst_hash = key
-            instdict = module_info.get(inst_hash, None)
+            instdict = self.module_info.get(inst_hash, None)
             if instdict is None:
                 #print("instdict is None!")
                 continue
