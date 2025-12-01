@@ -40,6 +40,13 @@ class GBRegister(Register):
                 default = default.copy()
             setattr(self, name, default)
 
+    def configFromTokens(self, strobe=None, alias=None, domain=None, addr=None):
+        self.strobe = strobe
+        self.alias = alias
+        self.domain = domain
+        self.manual_addr = addr
+        return
+
     @property
     def base_list(self):
         ll = []

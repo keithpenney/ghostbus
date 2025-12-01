@@ -664,6 +664,31 @@ class GhostBusser(VParser):
         self._ghostbusses = []
         self.memory_maps = {}
 
+    def GBRegister_Helper(self, netname, module_name, token_dict, source, generate, genfor=False, dw=1, initval=0, signed=None):
+        access      = token_dict.get(GhostbusInterface.tokens.HA, None)
+        addr        = token_dict.get(GhostbusInterface.tokens.ADDR, None)
+        domain      = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+        docstr      = token_dict.get(GhostbusInterface.tokens.DOC, None)
+        strobe      = token_dict.get(GhostbusInterface.tokens.STROBE, False)
+        alias       = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
+        if access is not None:
+            reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
+            reg.configFromTokens(strobe=strobe, alias=alias, domain=domain, addr=addr)
+            reg.initval = initval
+            reg.signed = signed
+            reg.genblock = generate
+            if genfor:
+                # Only handling generate-for's.  generate-if's are easier
+                self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
+            else:
+                # This may not be the best place for this step, but at least it gets done.
+                reg._readRangeDepth()
+                if self.mrs.get(domain, None) is None:
+                    self.mrs[domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=domain)
+                self.mrs[domain].add(width=0, ref=reg, addr=addr)
+        bustop = self._handleBus(netname, dw, source, generate=generate, signed=signed, token_dict=token_dict)
+        return bustop
+
     def digestModInsts(self, mod_dict, mod_hash, module_name=None, top_mod=None):
         # Check for instantiated modules
         self.modtree[mod_hash] = {}
@@ -704,8 +729,8 @@ class GhostBusser(VParser):
         netnames = mod_dict.get("netnames")
         bustop = False
         associated_strobes = {}
-        busnames_explicit = []
-        busname_to_subname_map = {}
+        self.busnames_explicit = []
+        self.busname_to_subname_map = {}
         if netnames is not None:
             for netname, net_dict in netnames.items():
                 attr_dict = net_dict["attributes"]
@@ -731,72 +756,26 @@ class GhostBusser(VParser):
                         #if generate is None:
                         #    raise GhostbusException(f"Failed to find for-loop for {gen_netname}")
                 signed = net_dict.get("signed", None)
-                hit = False
-                access = token_dict.get(GhostbusInterface.tokens.HA, None)
-                addr = token_dict.get(GhostbusInterface.tokens.ADDR, None)
-                write_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
+                dw = len(net_dict['bits'])
+                initval = get_value(net_dict['bits'])
+                genfor = False
+                if gen_block is not None and gen_index is not None:
+                    genfor = True
+                bustop = self.GBRegister_Helper(netname, module_name, token_dict, source, generate,
+                                                genfor=genfor, dw=dw, initval=initval, signed=signed)
+                write_strobe= token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
                 read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
-                exts = token_dict.get(GhostbusInterface.tokens.PASSENGER, None)
-                alias = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
-                busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
-                subname = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
-                docstr = token_dict.get(GhostbusInterface.tokens.DOC, None)
                 if write_strobe is not None:
-                    # print("                            write_strobe: {} => {}".format(netname, write_strobe))
                     # Add this to the to-do list to associate when the module is done parsing
                     associated_strobes[netname] = (write_strobe, False)
                 elif read_strobe is not None:
-                    # print("                            read_strobe: {} => {}".format(netname, read_strobe))
                     associated_strobes[netname] = (read_strobe, True)
-                elif access is not None:
-                    dw = len(net_dict['bits'])
-                    initval = get_value(net_dict['bits'])
-                    reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
-                    reg.initval = initval
-                    reg.strobe = token_dict.get(GhostbusInterface.tokens.STROBE, False)
-                    reg.alias = alias
-                    reg.signed = signed
-                    reg.domain = busname
-                    reg.genblock = generate
-                    reg.manual_addr = addr
-                    if gen_block is not None and gen_index is not None:
-                        # Only handling generate-for's.  generate-if's are easier
-                        self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
-                    else:
-                        # This may not be the best place for this step, but at least it gets done.
-                        reg._readRangeDepth()
-                        if self.mrs.get(busname, None) is None:
-                            self.mrs[busname] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=busname)
-                            printd("0: created mr label {} {} ({})".format(busname, self.mrs[busname].label, mod_hash))
-                        self.mrs[busname].add(width=0, ref=reg, addr=addr)
-                elif exts is not None:
-                    if generate is not None:
-                        branch = generate.branch
-                        if generate.isIf():
-                            gen_index_str = ""
-                        else:
-                            gen_index_str = f"at index {gen_index} "
-                        feature_print(f"  Boy howdy! I found extmod {exts} {gen_index_str}inside generate block {branch}")
-                    dw = len(net_dict['bits'])
-                    self._handleBus(netname, exts, dw, source, addr=addr, domain=busname, alias=alias,
-                                    association=subname, generate=generate, driver=False, signed=signed, desc=docstr)
-                if subname is not None:
-                    busname_to_subname_map[busname] = subname
-                ports = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
-                if ports is not None:
-                    bustop = True
-                    dw = len(net_dict['bits'])
-                    # printd(f"     About to _handleBus for {mod_hash}")
-                    self._handleBus(netname, ports, dw, source, domain=busname, alias=alias,
-                                    association=subname, generate=generate, driver=True, desc=docstr)
-                    if busname not in busnames_explicit:
-                        busnames_explicit.append(busname)
         for busname, mr in self.mrs.items():
-            subname = busname_to_subname_map.get(busname, None)
+            subname = self.busname_to_subname_map.get(busname, None)
             if subname is not None:
                 mr.pseudo_domain = subname
             mr.bustop = bustop
-        self.module_info[mod_hash]["explicit_busses"] = busnames_explicit
+        self.module_info[mod_hash]["explicit_busses"] = self.busnames_explicit
         self.associateStrobes(associated_strobes)
         return
 
@@ -1068,12 +1047,28 @@ class GhostBusser(VParser):
             passengers.append(ref)
         return passengers
 
-    def _handleBus(self, netname, vals, dw, source, addr=None, domain=None, alias=None,
-                   association=None, generate=None, driver=False, signed=None, desc=None):
+    def _handleBus(self, netname, dw, source, generate=None, signed=None, token_dict={}):
         """This method will handle both bus drivers and passengers"""
         # Collect bus nets in separate buckets - drivers and passengers
         # Don't actually create BusLB objects until the "resolve" method
         # TODO - stash the 'desc' string somewhere
+        addr        = token_dict.get(GhostbusInterface.tokens.ADDR, None)
+        alias       = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
+        domain      = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+        association = token_dict.get(GhostbusInterface.tokens.BRANCH, None)
+        desc        = token_dict.get(GhostbusInterface.tokens.DOC, None)
+        drivers     = token_dict.get(GhostbusInterface.tokens.DRIVER, None)
+        passengers  = token_dict.get(GhostbusInterface.tokens.PASSENGER, None)
+        if drivers is None and passengers is None:
+            return False
+        if association is not None:
+            self.busname_to_subname_map[domain] = association
+        if drivers is not None:
+            bustop = True
+            vals = drivers
+        else:
+            bustop = False
+            vals = passengers
         block_name, _netname, loop_index = block_inst(netname)
         if block_name is not None:
             feature_print(f"Bus {netname} is instantiated within a Generate Block!")
@@ -1095,7 +1090,7 @@ class GhostBusser(VParser):
                 # Assume it's a domain name for drivers, instance name for passengers
                 if val not in instnames:
                     instnames.append(val)
-        if driver:
+        if bustop:
             if domain is not None:
                 if len(instnames) > 0 and domain != instnames[0]:
                     # BUS_DOMAIN_AMBIGUOUS
@@ -1106,10 +1101,12 @@ class GhostBusser(VParser):
                 if len(instnames) > 0:
                     domain = instnames[0]
             self._bus_drivers.append((netname, dw, portnames, domain, source, association, generate))
+            if domain not in self.busnames_explicit:
+                self.busnames_explicit.append(domain)
         else: # passenger
             # print(f"netname = {netname}, dw = {dw}, portnames = {portnames}, instnames = {instnames}")
             self._bus_passengers.append((netname, dw, portnames, instnames, domain, source, addr, association, generate, signed))
-        return
+        return bustop
 
     def _resetGenerates(self):
         """Get ready to handle a new module with potentitally more generate blocks."""
