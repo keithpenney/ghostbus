@@ -10,6 +10,7 @@ GHOSTBUS_TOP=top
 .PHONY: all
 all: test rule_check
 
+GHOSTBUS_FLAGS=--live --slang
 include $(GHOSTBUS_DIR)/rules.mk
 
 .PHONY: json
@@ -46,6 +47,19 @@ top_tb: top_tb.v $(GHOSTBUS_SOURCES) gb_testbench.vh
 
 %.vcd: %_tb
 	$(VERILOG_CHECK) +vcd
+
+%_slang.json: %.v
+	slang -DSLANG $^ --top $* --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json - > $@
+
+%_yosys.json: %.v
+	yosys -q -p "verilog_defines -DYOSYS; read_verilog $^; proc" -p write_json > $@
+
+top_slang.json: top.v submod_foo.v
+top_yosys.json: top.v submod_foo.v
+
+alt_top_slang.json: top.v
+	slang -DSLANG $^ --top top --ast-json-scope top --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json - > $@
+
 
 .PHONY: test
 test: top_check

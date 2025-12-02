@@ -5,7 +5,7 @@
 import math
 import re
 
-from yoparse import VParser, ismodule, get_modname, get_value, \
+from yoparse import ismodule, get_modname, get_value, \
                     getUnparsedWidthRange, getUnparsedDepthRange, \
                     getUnparsedWidthAndDepthRange, getUnparsedWidth, \
                     YosysParsingError, getUnparsedWidthRangeType, NetTypes, \
@@ -654,12 +654,23 @@ class MemoryTree(WalkDict):
         return domain_memories
 
 
-class GhostBusser(VParser):
+class GhostBusser():
+    BACKEND_YOSYS = 0
+    BACKEND_SLANG = 1
     _REFTYPE_CSR = 1
     _REFTYPE_RAM = 2
     _REFTYPE_EXT = 3
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args, backend=None, **kwargs):
+        if backend is None:
+            backend = self.BACKEND_YOSYS
+        if backend == self.BACKEND_YOSYS:
+            from yoparse import VParser
+        elif backend == self.BACKEND_SLANG:
+            from slangparse import VParser
+        else:
+            options = (f"BACKEND_YOSYS={self.BACKEND_YOSYS}", f"BACKEND_SLANG={self.BACKEND_SLANG}")
+            raise GhostbusException(f"Unsupported backend {backend}. Must be one of {options}")
+        self.parser = VParser(*args, **kwargs)
         self.memory_map = None
         self._ghostbusses = []
         self.memory_maps = {}
@@ -689,18 +700,18 @@ class GhostBusser(VParser):
         bustop = self._handleBus(netname, dw, source, generate=generate, signed=signed, token_dict=token_dict)
         return bustop
 
-    def digestModInsts(self, mod_dict, mod_hash, module_name=None, top_mod=None):
+    def digestModInsts(self, mod_dict, mod_hash, module_name=None):
         # Check for instantiated modules
         self.modtree[mod_hash] = {}
         self.module_info[mod_hash]["insts"] = {}
-        cells = mod_dict.get("cells")
+        cells = mod_dict.get("cells") # FIXME slangify
         if cells is not None:
-            for inst_name, inst_dict in cells.items():
-                gen_block, inst, gen_index = block_inst(inst_name)
+            for inst_name, inst_dict in cells.items():# FIXME slangify
+                gen_block, inst, gen_index = block_inst(inst_name)# FIXME slangify
                 generate = None
                 if gen_block is not None:
-                    attr_dict = inst_dict["attributes"]
-                    source = attr_dict.get('src', None)
+                    attr_dict = inst_dict["attributes"]# FIXME slangify?
+                    source = attr_dict.get('src', None)# FIXME slangify
                     if autogenblk(gen_block):
                         feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
                     if gen_index is None:
@@ -724,7 +735,7 @@ class GhostBusser(VParser):
                     self.modtree[mod_hash][inst_name] = inst_dict["type"]
         return
 
-    def digestRegs(self, mod_dict, mod_hash, module_name=None, top_mod=None):
+    def digestRegs(self, mod_dict, mod_hash, module_name=None):
         # Check for regs
         netnames = mod_dict.get("netnames")
         bustop = False
@@ -793,7 +804,7 @@ class GhostBusser(VParser):
                             register.write_strobes.append(strobe_name)
         return
 
-    def digestMems(self, mod_dict, mod_hash, module_name=None, top_mod=None):
+    def digestMems(self, mod_dict, mod_hash, module_name=None):
         # Check for RAMs
         memories = mod_dict.get("memories")
         if memories is not None:
@@ -868,25 +879,26 @@ class GhostBusser(VParser):
     def digest(self):
         self.modtree = {}
         top_mod = None
-        top_dict = self._dict["modules"]
+        top_dict = self.parser.getTopDict()
         self.module_info = {}
         for mod_hash, mod_dict in top_dict.items():
-            module_name = get_modname(mod_hash)
+            module_name = get_modname(mod_hash) # FIXME slangify
             if not hasattr(mod_dict, "items"):
                 raise Exception(f"mod_dict has no 'items' attr: {mod_hash}, {mod_dict}")
                 continue
-            for attr in mod_dict["attributes"]:
-                if attr == "top":
+            if self.parser._top is None:
+                if (self.parser.isTop(mod_hash)):
                     top_mod = mod_hash
             self.module_info[mod_hash] = {}
-            self.digestModInsts(mod_dict, mod_hash, module_name=module_name, top_mod=top_mod)
+            self.digestModInsts(mod_dict, mod_hash, module_name=module_name)
             self.mrs = {} # per-module
             self._resetBusses()
             self._resetGenerates()
-            self.digestRegs(mod_dict, mod_hash, module_name=module_name, top_mod=top_mod)
-            self.digestMems(mod_dict, mod_hash, module_name=module_name, top_mod=top_mod)
+            self.digestRegs(mod_dict, mod_hash, module_name=module_name)
+            self.digestMems(mod_dict, mod_hash, module_name=module_name)
             self.assembleBusses(mod_hash)
-
+        if self.parser._top is not None:
+            top_mod = self.parser._top
         self._busValid = True
         for bus in self._ghostbusses:
             valid, msg = bus.validate()
@@ -895,7 +907,9 @@ class GhostBusser(VParser):
         if len(self._ghostbusses) == 0:
             # NO_GHOSTBUS
             raise GhostbusException("No ghostbus found in codebase.")
+        # TODO - can this be made less redundant?
         self._top = top_mod
+        self.parser._top = top_mod
         self.build_modtree()
         memtree = self.build_memory_tree()
         self.memory_maps = memtree.resolve(verbose=False)
@@ -1310,7 +1324,11 @@ def isGhostbus(token_dict):
 
 def handleGhostbus(args):
     try:
-        gb = GhostBusser(args.files[0], top=args.top, include_dirs=args.include) # Why does this end up as a double-wrapped list?
+        if args.slang:
+            backend = GhostBusser.BACKEND_SLANG
+        else:
+            backend = GhostBusser.BACKEND_YOSYS
+        gb = GhostBusser(args.files, top=args.top, include_dirs=args.include, backend=backend)
     except YosysParsingError as err:
         print("ERROR: (Yosys Parsing Error; message follows)")
         print(err)
@@ -1379,8 +1397,9 @@ def doGhostbus():
     parser.add_argument("--mangle", default=False, action="store_true", help="Names are hierarchically qualified and joined by '_'.")
     parser.add_argument("--short",  default=False, action="store_true", help="Names are maximally shortened (remaining unique).")
     parser.add_argument("--debug",  default=False, action="store_true", help="Append debug trace comments to generated code.")
+    parser.add_argument("--slang",  default=False, action="store_true", help="[experimental] Use slang as backend instead of yosys.")
     parser.add_argument("--ignore", default=[], action="append", help="Register names to drop from the JSON.")
-    parser.add_argument("files",    default=[], action="append", nargs="+", help="Source files.")
+    parser.add_argument("files",    default=[], nargs="+", help="Source files.")
     args = parser.parse_args()
     return handleGhostbus(args)
 

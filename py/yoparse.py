@@ -463,6 +463,18 @@ class VParser():
             self.ports = {}
         return True
 
+    def getTopDict(self):
+        return self._dict["modules"]
+
+    def isTop(self, mod_hash):
+        top_dict = self.getTopDict()
+        mod_dict = top_dict.get(mod_hash, None)
+        if mod_dict is not None:
+            for attr in mod_dict["attributes"]:
+                if attr == "top":
+                    return True
+        return False
+
     def elaboratePorts(self):
         """Capture the unparsed range string for all ports of all modules"""
         mod = self._dict.get("modules", None)
@@ -555,7 +567,7 @@ class VParser():
 
     def __str__(self):
         if self._dict == None:
-            return "BDParser(Uninitialized)"
+            return "VParser(Uninitialized)"
         return self.strToDepth(3)
 
     def __repr__(self):

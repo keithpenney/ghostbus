@@ -404,6 +404,7 @@ class VParser():
         self._top = top
         self._include_dirs = include_dirs
         self._sv = sv
+        self._resolved = False
         self.valid = self.parse()
 
     def parse(self):
@@ -413,12 +414,13 @@ class VParser():
                 raise Exception(f"File {filename} not found")
                 return False
         filestr = " ".join(self._filelist)
+        scopestr = ""
         if self._top is not None:
             topstr = f" --top {self._top}"
-            scopestr = f" --ast-json-scope {self._top}"
+            # FIXME this basically just does what self.getTopDict() does with the normal JSON. Use it?
+            #scopestr = f" --ast-json-scope {self._top}"
         else:
             topstr = ""
-            scopestr = ""
         if self._include_dirs is not None and len(self._include_dirs) > 0:
             incstr = " ".join([f"-I {inc}" for inc in self._include_dirs])
         else:
@@ -436,13 +438,29 @@ class VParser():
         #print(jsfile)
         if SLANG_JSON_BUG_WORKAROUND:
             ix = jsfile.index('{')
+            preamble = jsfile[:ix]
+            if self._top is None:
+                _top = self._extract_top(preamble)
+                if _top is not None:
+                    self._top = _top
             jsfile = jsfile[ix:]
         self._dict = json.loads(jsfile)
         self.find_top_module()
         self.sort_nets()
         return
 
+    @staticmethod
+    def _extract_top(preamble):
+        restr = r"^Top level design units:" + "\n" + r"\s+(\w+)"
+        _match = re.search(restr, preamble)
+        if _match:
+            topname = _match.groups()[0]
+            return topname
+        return None
+
     def find_top_module(self):
+        if self._resolved:
+            return
         if self._top is None:
             # Just get whatever slang says is first
             defdict = self._dict["definitions"][0]
@@ -460,9 +478,29 @@ class VParser():
                 break
         if ddict is not None:
             self._dict = ddict["body"]
+            self._resolved = True
         else:
             raise SlangParsingError(f"Could not find {topname} in design.")
         return
+
+    def getTopDict(self):
+        if self._resolved:
+            return self._dict
+        design_dict = self._dict["design"]
+        members_list = design_dict["members"]
+        for mod_dict in members_list:
+            if mod_dict["name"] == self._top:
+                return mod_dict
+        return None
+
+    def isTop(self, mod_hash):
+        top_dict = self.getTopDict()
+        mod_dict = top_dict.get(mod_hash, None)
+        if mod_dict is not None:
+            for attr in mod_dict["attributes"]:
+                if attr == "top":
+                    return True
+        return False
 
     def sort_nets(self):
         # FIXME - move this ghostbus stuff out of this generic file
@@ -571,7 +609,7 @@ class VParser():
 
     def __str__(self):
         if self._dict == None:
-            return "BDParser(Uninitialized)"
+            return "VParser(Uninitialized)"
         return self.strToDepth(3)
 
     def __repr__(self):
@@ -608,9 +646,6 @@ class VParser():
             if hasattr(val, 'get'):
                 valbits = val.get('bits', None)
                 if valbits is not None:
-                    # FIXME
-                    # trstr = '.'.join(trace)
-                    # print(f"{trstr} : {valbits}")
                     for n in range(len(bitlist)):
                         net, hitlist = bitlist[n]
                         if not isinstance(net, int):
