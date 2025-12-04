@@ -670,6 +670,7 @@ class GhostBusser():
         else:
             options = (f"BACKEND_YOSYS={self.BACKEND_YOSYS}", f"BACKEND_SLANG={self.BACKEND_SLANG}")
             raise GhostbusException(f"Unsupported backend {backend}. Must be one of {options}")
+        self.backend = backend
         self.parser = VParser(*args, **kwargs)
         self.memory_map = None
         self._ghostbusses = []
@@ -704,9 +705,9 @@ class GhostBusser():
         # Check for instantiated modules
         self.modtree[mod_hash] = {}
         self.module_info[mod_hash]["insts"] = {}
-        cells = mod_dict.get("cells") # FIXME slangify
-        if cells is not None:
-            for inst_name, inst_dict in cells.items():# FIXME slangify
+        generator = self.parser.getInstGenerator(mod_dict)
+        if generator is not None:
+            for inst_name, inst_dict in generator:
                 gen_block, inst, gen_index = block_inst(inst_name)# FIXME slangify
                 generate = None
                 if gen_block is not None:
@@ -881,8 +882,13 @@ class GhostBusser():
         top_mod = None
         top_dict = self.parser.getTopDict()
         self.module_info = {}
-        for mod_hash, mod_dict in top_dict.items():
-            module_name = get_modname(mod_hash) # FIXME slangify
+        generator = self.parser.getTopGenerator()
+        for mod_hash, mod_dict in generator:#top_dict.items():
+            if self.backend == self.BACKEND_YOSYS:
+                module_name = get_modname(mod_hash)
+            else:
+                # FIXME is this ok?
+                module_name = mod_hash
             if not hasattr(mod_dict, "items"):
                 raise Exception(f"mod_dict has no 'items' attr: {mod_hash}, {mod_dict}")
                 continue
@@ -890,6 +896,9 @@ class GhostBusser():
                 if (self.parser.isTop(mod_hash)):
                     top_mod = mod_hash
             self.module_info[mod_hash] = {}
+            # Damn it all; slang was the right choice from jump, but I've built a labyrinth to
+            # transform what yosys gives me into a hierarchical tree, which is what slang spits
+            # out by default.  So what do I do from here???
             self.digestModInsts(mod_dict, mod_hash, module_name=module_name)
             self.mrs = {} # per-module
             self._resetBusses()

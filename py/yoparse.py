@@ -466,6 +466,17 @@ class VParser():
     def getTopDict(self):
         return self._dict["modules"]
 
+    def getTopGenerator(self):
+        top_dict = self.getTopDict()
+        for mod_hash, mod_dict in top_dict.items():
+            yield (mod_hash, mod_dict)
+
+    def getInstGenerator(self, mod_dict):
+        cells = mod_dict.get("cells")
+        if cells is not None:
+            for inst_name, inst_dict in cells.items():
+                yield (inst_name, inst_dict)
+
     def isTop(self, mod_hash):
         top_dict = self.getTopDict()
         mod_dict = top_dict.get(mod_hash, None)

@@ -6,7 +6,7 @@ import os
 import subprocess
 import json
 import re
-from util import enum
+from util import enum, strDict
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
@@ -383,6 +383,18 @@ def findForLoop(yosrc):
     return _matchForLoop(snippet)
 
 
+def _split_body(bodystr):
+    restr = r"(\d+)\s+"
+    _match = re.search(restr, bodystr)
+    if _match:
+        addr = _match.groups()[0]
+        remainder = bodystr[_match.end():]
+        print(f"{addr}, {remainder}")
+        return addr, remainder
+    raise Exception(f"Missed {bodystr}")
+    return None, None
+
+
 class SlangParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
@@ -418,7 +430,7 @@ class VParser():
         if self._top is not None:
             topstr = f" --top {self._top}"
             # FIXME this basically just does what self.getTopDict() does with the normal JSON. Use it?
-            #scopestr = f" --ast-json-scope {self._top}"
+            scopestr = f" --ast-json-scope {self._top}"
         else:
             topstr = ""
         if self._include_dirs is not None and len(self._include_dirs) > 0:
@@ -492,6 +504,60 @@ class VParser():
             if mod_dict["name"] == self._top:
                 return mod_dict
         return None
+
+    def getTopGenerator(self):
+        top_dict = self.getTopDict()
+        #print(strDict(top_dict, depth=1))
+        members_list = top_dict["members"]
+        for mod_dict in members_list:
+            kind = mod_dict["kind"]
+            if kind == "Instance":
+                body = mod_dict["body"]
+                if hasattr(body, "items"): # body is a dict, phew
+                    # mod_hash in yosys is just the (sometimes mangled) module name
+                    mod_hash = body["name"]
+                    yield (mod_hash, mod_dict)
+                else: # dammit; body is a string - gotta find the dict
+                    addr, module_name = _split_body(body)
+                    md = None
+                    mod_hash = None
+                    for md in members_list:
+                        _kind = md["kind"]
+                        if _kind == "Instance":
+                            _body = md["body"]
+                            if not hasattr(_body, "items"):
+                                continue
+                            if _body["addr"] == addr:
+                                mod_hash = _body["name"]
+                                break
+                    yield (mod_hash, md)
+
+    def getInstGenerator(self, mod_dict):
+        top_dict = self.getTopDict()
+        #print(strDict(top_dict, depth=1))
+        members_list = top_dict["members"]
+        for mod_dict in members_list:
+            kind = mod_dict["kind"]
+            if kind == "Instance":
+                body = mod_dict["body"]
+                if hasattr(body, "items"): # body is a dict, phew
+                    # mod_hash in yosys is just the (sometimes mangled) module name
+                    mod_hash = body["name"]
+                    yield (mod_hash, mod_dict)
+                else: # dammit; body is a string - gotta find the dict
+                    addr, module_name = _split_body(body)
+                    md = None
+                    mod_hash = None
+                    for md in members_list:
+                        _kind = md["kind"]
+                        if _kind == "Instance":
+                            _body = md["body"]
+                            if not hasattr(_body, "items"):
+                                continue
+                            if _body["addr"] == addr:
+                                mod_hash = _body["name"]
+                                break
+                    yield (mod_hash, md)
 
     def isTop(self, mod_hash):
         top_dict = self.getTopDict()
@@ -668,44 +734,6 @@ class VParser():
                 print(f"{n} : {hitlist}")
         return
 
-    def getSigNames(self, indices, directions=("output", "input", None), selftrace=[]):
-        """Get the signal name (source) associated with index 'index' (a number that Yosys
-        assigns to every net)."""
-        raise Broken()
-        #sigdict = self.selectPart(partselect)
-        #selftrace = [s.strip() for s in partselect.split('.')]
-        bitlist = []
-        for index in indices:
-            bitlist.append([index, []])
-        # Now walk the whole top-level dict and look connected nets by index
-        def _do(trace, val):
-            if trace == selftrace:
-                return # Don't count yourself
-            if hasattr(val, 'get'):
-                _dir = val.get('direction', None)
-                if _dir in directions:
-                    valbits = val.get('bits', None)
-                    valattr = val.get('attributes', None)
-                    if valattr is not None:
-                        valsrc = valattr.get('src', None)
-                    else:
-                        valsrc = None
-                    if valbits is not None:
-                        for n in range(len(bitlist)):
-                            net, hitlist = bitlist[n]
-                            if not isinstance(net, int):
-                                # Skip special nets '0' and '1'
-                                continue
-                            if net in valbits:
-                                valbitIndex = valbits.index(net)
-                                trstr = '.'.join(trace)
-                                if len(valbits) > 1:
-                                    trstr += f'[{valbitIndex}]'
-                                hitlist.append((trstr, _dir, valsrc))
-                                bitlist[n][1] = hitlist
-        self.walk(_do)
-        return bitlist
-
     def search(self, target_key):
         """Search the dict structure for all keys that match 'target_key' and return as a nested dict."""
         hitlist = []
@@ -717,18 +745,31 @@ class VParser():
         return hitlist
 
     def walk(self, do = lambda trace, val : None):
-        return self._walk(self._dict, [], do)
+        # I have to do this dumb thing where I actually
+        # walk the generator and discard everything or
+        # else the function exits early and doesn't walk?
+        _iter = self._walk(self._struct, [], do)
+        for x in _iter:
+            pass
+        return True
+
+    def iter_walk(self, do = lambda trace, val : False):
+        return self._walk(self._struct, [], do)
 
     @classmethod
-    def _walk(cls, td, trace = [], do = lambda trace, val : None):
+    def _walk(cls, td, trace = [], do = lambda trace, val : False):
         """RECURSIVE"""
-        if not hasattr(td, 'items'):
-            return False
-        for key, val in td.items():
+        if hasattr(td, "items"):
+            _iter = td.items()
+        else:
+            _iter = enumerate(td)
+        for key, val in _iter:
             trace.append(key)   # Add key
-            do(trace, val)
-            if hasattr(val, 'items'):
-                cls._walk(val, trace, do)   # When this returns, we are done with this dict
+            rval = do(trace, val)
+            if rval:
+                yield val
+            if hasattr(val, 'items') or (hasattr(val, "__len__") and not hasattr(val, "lower")):
+                yield from cls._walk(val, trace, do) # When this returns, we are done with this dict/list
             trace.pop() # So we can pop the key from the trace and continue the loop
         return True
 

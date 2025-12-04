@@ -10,7 +10,12 @@ GHOSTBUS_TOP=top
 .PHONY: all
 all: test rule_check
 
+SLANG?=
+ifeq ($(strip $(SLANG)),)
+GHOSTBUS_FLAGS=--live
+else
 GHOSTBUS_FLAGS=--live --slang
+endif
 include $(GHOSTBUS_DIR)/rules.mk
 
 .PHONY: json
@@ -60,6 +65,8 @@ top_yosys.json: top.v submod_foo.v
 alt_top_slang.json: top.v
 	slang -DSLANG $^ --top top --ast-json-scope top --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json - > $@
 
+complete_slang.json: $(GHOSTBUS_SOURCES)
+	slang -DSLANG $^ --top top --ast-json-scope top --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json - > $@
 
 .PHONY: test
 test: top_check
