@@ -16,36 +16,36 @@ def _split_body(bodystr):
 def WalkAllModules(filename):
     jb = JSONBrowser(filename)
     def print_instance(trace, val):
-        if hasattr(val, "get"):
-            #print(strStruct(val, depth=1))
-            kind = val.get("kind", None)
-            if kind == "Instance":
-                instname = val.get("name", None)
-                body = val.get("body", None)
-                if hasattr(body, "items"):
-                    modname = body["name"]
-                else:
-                    addr, modname = _split_body(body)
-                print(f"{instname} -> {modname}")
-                return True
+        if len(trace) > 1:
+            if trace[-2] == "modules":
+                module_name = trace[-1]
+                print(f"? -> {module_name}")
+            elif trace[-2] == "cells":
+                hide_name = val.get("hide_name", None)
+                if hide_name == 0:
+                    inst_name = trace[-1]
+                    module_name = val.get("type", None)
+                    print(f"{inst_name} -> {module_name}")
         return False
     jb.walk(do=print_instance)
     return
 
 
 def get_instances(trace, val):
-    if hasattr(val, "get"):
-        kind = val.get("kind", None)
-        if kind == "Instance":
-            return True
+    if len(trace) > 1:
+        if trace[-2] == "cells":
+            hide_name = val.get("hide_name", None)
+            if hide_name == 0:
+                inst_name = trace[-1]
+                module_name = val.get("type", None)
+                print(f"{inst_name} -> {module_name}")
     return False
 
 
 def get_modules(trace, val):
-    if hasattr(val, "get"):
-        kind = val.get("kind", None)
-        body = val.get("body", None)
-        if kind == "Instance" and hasattr(body, "items"):
+    if len(trace) > 1:
+        if trace[-2] == "modules":
+            module_name = trace[-1]
             return True
     return False
 
@@ -53,14 +53,8 @@ def get_modules(trace, val):
 def ModuleIterator(filename, show_wires=False, show_regs=False):
     jb = JSONBrowser(filename)
     _iter = jb.iter_walk(do=get_modules)
-    modules = []
     for key, val in _iter:
-        instname = val.get("name", None)
-        body = val.get("body", None)
-        module_name = body["name"]
-        if module_name in modules:
-            continue
-        modules.append(module_name)
+        module_name = key
         print(f"== Module: {module_name} ==")
         print("  :: Ghostbus ::")
         GBIterator(val, indent=" "*4)
@@ -119,7 +113,7 @@ def StructIterator(dd, do = lambda trace, val : False, indent=""):
 def WireIterator(dd, indent=""):
     jb = StructWalker(dd)
     _iter = jb.iter_walk(do=get_wires)
-    for key, val in _iter:
+    for val in _iter:
         if val is None:
             continue
         netname = val.get("name", None)
@@ -131,7 +125,7 @@ def WireIterator(dd, indent=""):
 def RegIterator(dd, indent=""):
     jb = StructWalker(dd)
     _iter = jb.iter_walk(do=get_regs)
-    for key, val in _iter:
+    for val in _iter:
         if val is None:
             continue
         netname = val.get("name", None)
@@ -144,28 +138,25 @@ def GBIterator(dd, indent=""):
     jb = StructWalker(dd)
     def get_gbnets(trace, val):
         if hasattr(val, "get"):
-            kind = val.get("kind", None)
-            if kind in ("Net", "Variable"):
+            if len(trace) < 2:
+                return False
+            kind = trace[-2]
+            if kind in ("netnames", "ports", "memories"):
                 attrs = val.get("attributes")
                 if attrs is not None:
-                    for attr in attrs:
-                        attrname = attr.get("name")
+                    for attrname in attrs.keys():
                         if attrname.startswith("ghostbus"):
                             return True
         return False
     _iter = jb.iter_walk(do=get_gbnets, depth=4)
     for key, val in _iter:
-        if val is None:
-            continue
         gbattrs = []
         attrs = val.get("attributes")
-        for attr in attrs:
-            attrname = attr.get("name")
+        for attrname, attrval in attrs.items():
             if attrname.startswith("ghostbus"):
                 gbattrs.append(attrname)
         gbstr = ", ".join(gbattrs)
-        netname = val.get("name", None)
-        nettype = val.get("type", None)
+        netname = key
         print(f"{indent}(* {gbstr} *) {netname}")
     return
 

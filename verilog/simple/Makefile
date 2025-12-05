@@ -68,6 +68,9 @@ alt_top_slang.json: top.v
 complete_slang.json: $(GHOSTBUS_SOURCES)
 	slang -DSLANG $^ --top top --ast-json-scope top --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json - > $@
 
+complete_yosys.json: $(GHOSTBUS_SOURCES)
+	yosys -q -p "verilog_defines -DYOSYS; read_verilog $^; proc" -p write_json > $@
+
 .PHONY: test
 test: top_check
 
