@@ -1,5 +1,13 @@
 import re
 from struct_walker import JSONBrowser, StructWalker, strStruct
+from slangparse import VParser, parse_typestr
+
+#I need these JSON queries:
+#  1 get each module definition (global)
+#  2 get each GB reg/mem (per-module)
+#    - with attributes
+#  3 get each module instance (per-module)
+#    - with attributes
 
 
 def _split_body(bodystr):
@@ -33,19 +41,44 @@ def WalkAllModules(filename):
     return
 
 
-def get_instances(trace, val):
-    if hasattr(val, "get"):
-        kind = val.get("kind", None)
-        if kind == "Instance":
-            return True
-    return False
-
-
+#=======================
+#========== 1 ==========
+#=======================
 def get_modules(trace, val):
+    """slang"""
     if hasattr(val, "get"):
         kind = val.get("kind", None)
         body = val.get("body", None)
         if kind == "Instance" and hasattr(body, "items"):
+            return True
+    return False
+
+
+#=======================
+#========== 2 ==========
+#=======================
+def get_gbnets(trace, val):
+    """slang"""
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind in ("Net", "Variable"): # ports show up in both "Port" and "Net"
+            attrs = val.get("attributes")
+            if attrs is not None:
+                for attr in attrs:
+                    attrname = attr.get("name")
+                    if attrname.startswith("ghostbus"):
+                        return True
+    return False
+
+
+#=======================
+#========== 3 ==========
+#=======================
+def get_instances(trace, val):
+    """slang"""
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind == "Instance":
             return True
     return False
 
@@ -62,8 +95,11 @@ def ModuleIterator(filename, show_wires=False, show_regs=False):
             continue
         modules.append(module_name)
         print(f"== Module: {module_name} ==")
-        print("  :: Ghostbus ::")
-        GBIterator(val, indent=" "*4)
+        #print("  :: Ghostbus ::")
+        #GBIterator(val, indent=" "*4)
+        _subIter = VParser.gbnetsIterator(val)
+        for dd in _subIter:
+            print(strStruct(dd))
         continue
         if show_wires:
             print("  :: Wires ::")
@@ -142,28 +178,18 @@ def RegIterator(dd, indent=""):
 
 def GBIterator(dd, indent=""):
     jb = StructWalker(dd)
-    def get_gbnets(trace, val):
-        if hasattr(val, "get"):
-            kind = val.get("kind", None)
-            if kind in ("Net", "Variable"):
-                attrs = val.get("attributes")
-                if attrs is not None:
-                    for attr in attrs:
-                        attrname = attr.get("name")
-                        if attrname.startswith("ghostbus"):
-                            return True
-        return False
     _iter = jb.iter_walk(do=get_gbnets, depth=4)
     for key, val in _iter:
         if val is None:
             continue
-        gbattrs = []
+        gbattrs = {}
         attrs = val.get("attributes")
         for attr in attrs:
             attrname = attr.get("name")
+            attrval  = attr.get("value")
             if attrname.startswith("ghostbus"):
-                gbattrs.append(attrname)
-        gbstr = ", ".join(gbattrs)
+                gbattrs[attrname] = attrval
+        gbstr = ", ".join([key for key in gbattrs.keys()])
         netname = val.get("name", None)
         nettype = val.get("type", None)
         print(f"{indent}(* {gbstr} *) {netname}")

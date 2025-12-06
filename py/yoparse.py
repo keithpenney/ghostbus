@@ -7,6 +7,7 @@ import subprocess
 import json
 import re
 from util import enum
+from struct_walker import StructWalker
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
@@ -387,8 +388,55 @@ class YosysParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
 
+#==============================================================================
+# Finder Functions
+#==============================================================================
+#=======================
+#========== 1 ==========
+#=======================
+def get_modules(trace, val):
+    """yosys"""
+    if len(trace) > 1:
+        if trace[-2] == "modules":
+            module_name = trace[-1]
+            return True
+    return False
 
-class VParser():
+
+#=======================
+#========== 2 ==========
+#=======================
+def get_gbnets(trace, mod_dict):
+    """yosys"""
+    if hasattr(mod_dict, "get"):
+        if len(trace) < 2:
+            return False
+        kind = trace[-2]
+        if kind in ("netnames", "ports", "memories"):
+            attrs = mod_dict.get("attributes")
+            if attrs is not None:
+                for attrname in attrs.keys():
+                    if attrname.startswith("ghostbus"):
+                        return True
+    return False
+
+
+#=======================
+#========== 3 ==========
+#=======================
+def get_instances(trace, mod_dict):
+    """yosys"""
+    if len(trace) > 1:
+        if trace[-2] == "cells":
+            hide_name = mod_dict.get("hide_name", None)
+            if hide_name == 0:
+                inst_name = trace[-1]
+                module_name = mod_dict.get("type", None)
+                return True
+    return False
+
+
+class VParser(StructWalker):
     # Helper values
     LINETYPE_PARAM = 0
     LINETYPE_PORT  = 0
@@ -401,8 +449,11 @@ class VParser():
         self._sv = sv
         self.valid = self.parse()
 
+    def _get_class_string(self):
+        return "VParser()"
+
     def parse(self):
-        self._dict = None
+        self._struct = None
         for filename in self._filelist:
             if not os.path.exists(filename):
                 raise Exception(f"File {filename} not found")
@@ -435,9 +486,9 @@ class VParser():
         if SLANG_JSON_BUG_WORKAROUND:
             ix = jsfile.index('{')
             jsfile = jsfile[ix:]
-        self._dict = json.loads(jsfile)
+        self._struct = json.loads(jsfile)
         # Separate attributes for this module
-        mod = self._dict.get("modules", None)
+        mod = self._struct.get("modules", None)
         self.params = {}
         if mod is not None:
             # Get first (should be only) module
@@ -463,8 +514,68 @@ class VParser():
             self.ports = {}
         return True
 
+    def get_modules(self):
+        return self.iter_walk(do=get_modules)
+
+    @staticmethod
+    def gbnetsIterator(mod_dict):
+        jb = StructWalker(mod_dict)
+        _iter = jb.iter_walk(do=get_gbnets, depth=4)
+        for key, val in _iter:
+            gbattrs = {}
+            elem_lo, elem_hi = (None, None)
+            attrs = val.get("attributes")
+            bits = val.get("bits") # registers
+            width = val.get("width") # arrays
+            size = val.get("size") # arrays
+            elem_lo = val.get("start_offset") # arrays
+            src = None
+            for attrname, attrval in attrs.items():
+                if attrname.startswith("ghostbus"):
+                    gbattrs[attrname] = attrval
+                if attrname == "src":
+                    src = attrval
+            if bits is not None:
+                index_hi = len(bits)-1
+            elif width is not None:
+                index_hi = width-1
+            else:
+                raise YosysParsingError("Expected either 'bits' or 'width'. Found neither.")
+            if width is not None:
+                if elem_lo is None:
+                    raise YosysParsingError("Key 'width' has a value, but key 'start_offset' somehow doesn't")
+                elem_hi = elem_lo + size - 1
+            index_lo = 0
+            index_hi_str = str(index_hi)
+            index_lo_str = str(index_lo)
+            netdict = {
+                "name": key,
+                "type": None, # TODO nettype
+                "range": (index_hi, index_lo),
+                "rangestr": (index_hi_str, index_lo_str), # TODO range str
+                "attributes": gbattrs,
+                "src" : src,
+                "array": (elem_lo, elem_hi),
+            }
+            yield netdict
+        return
+
+    @staticmethod
+    def get_instances(mod_dict):
+        jb = StructWalker(dd)
+        _iter = jb.iter_walk(do=get_instances, depth=4)
+        for key, val in _iter:
+            attrs = val.get("attributes", {})
+            inst_dict = {
+                "inst_name": key,
+                "mod_name": val.get("type"),
+                "attributes": attrs,
+            }
+            yield inst_dict
+        return
+
     def getTopDict(self):
-        return self._dict["modules"]
+        return self._struct["modules"]
 
     def getTopGenerator(self):
         top_dict = self.getTopDict()
@@ -488,7 +599,7 @@ class VParser():
 
     def elaboratePorts(self):
         """Capture the unparsed range string for all ports of all modules"""
-        mod = self._dict.get("modules", None)
+        mod = self._struct.get("modules", None)
         if mod is not None:
             for name, mdict in mod.items():
                 ports = mdict.get("ports", None)
@@ -551,33 +662,13 @@ class VParser():
         return mdict
 
     def getDict(self):
-        return self._dict
+        return self._struct
 
     def getTopName(self):
         return self.modname
 
-    def _strToDepth(self, _dict, depth=0, indent=0):
-        """RECURSIVE"""
-        if depth == 0:
-            return []
-        l = []
-        sindent = " "*indent
-        for key, val in _dict.items():
-            if hasattr(val, 'keys'):
-                l.append(f"{sindent}{key} : dict size {len(val)}")
-                l.extend(self._strToDepth(val, depth-1, indent+2))
-            else:
-                l.append(f"{sindent}{key} : {val}")
-        return l
-
-    def strToDepth(self, depth=0, partSelect = None):
-        _d = self.selectPart(partSelect)
-        l = ["VParser()"]
-        l.extend(self._strToDepth(_d, depth, indent=2))
-        return '\n'.join(l)
-
     def __str__(self):
-        if self._dict == None:
+        if self._struct == None:
             return "VParser(Uninitialized)"
         return self.strToDepth(3)
 
@@ -585,7 +676,7 @@ class VParser():
         return self.__str__()
 
     def selectPart(self, partSelect = None):
-        _d = self._dict
+        _d = self._struct
         if partSelect is not None:
             parts = partSelect.split('.')
             for nselect in range(len(parts)):
@@ -594,7 +685,7 @@ class VParser():
                     if key == select:
                         _d = val
         if not isinstance(_d, dict):
-            _d = self._dict
+            _d = self._struct
         return _d
 
     def getTrace(self, partselect):
@@ -676,32 +767,6 @@ class VParser():
                                 bitlist[n][1] = hitlist
         self.walk(_do)
         return bitlist
-
-    def search(self, target_key):
-        """Search the dict structure for all keys that match 'target_key' and return as a nested dict."""
-        hitlist = []
-        def _do(trace, val):
-            if trace[-1] == target_key:
-                tstr = '.'.join(trace)
-                hitlist.append((tstr, val))
-        self.walk(_do)
-        return hitlist
-
-    def walk(self, do = lambda trace, val : None):
-        return self._walk(self._dict, [], do)
-
-    @classmethod
-    def _walk(cls, td, trace = [], do = lambda trace, val : None):
-        """RECURSIVE"""
-        if not hasattr(td, 'items'):
-            return False
-        for key, val in td.items():
-            trace.append(key)   # Add key
-            do(trace, val)
-            if hasattr(val, 'items'):
-                cls._walk(val, trace, do)   # When this returns, we are done with this dict
-            trace.pop() # So we can pop the key from the trace and continue the loop
-        return True
 
 
 def doBrowse():

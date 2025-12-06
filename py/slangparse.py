@@ -7,6 +7,7 @@ import subprocess
 import json
 import re
 from util import enum, strDict
+from struct_walker import StructWalker
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
@@ -395,6 +396,36 @@ def _split_body(bodystr):
     return None, None
 
 
+def parse_typestr(typestr):
+    # E.g.:
+    #   logic
+    #   reg signed[7:0]
+    #   reg[3:0]$[0:7]
+    signed = False
+    nettype = "reg"
+    index_hi = None
+    index_lo = None
+    elem_lo = None
+    elem_hi = None
+    restr = r"(reg|wire|bit|logic)( signed)?(\[\d+:\d+\])?(\$\[\d+:\d+\])?"
+    restr_range = r"\$?\[(\d+):(\d+)\]"
+    _match = re.match(restr, typestr)
+    if _match:
+        groups = _match.groups()
+        nettype = groups[0]
+        if groups[1] is not None:
+            signed = True
+        if groups[2] is not None:
+            _rangematch = re.match(restr_range, groups[2])
+            if _rangematch:
+                index_hi, index_lo = _rangematch.groups()[:2]
+        if groups[3] is not None:
+            _rangematch = re.match(restr_range, groups[3])
+            if _rangematch:
+                elem_lo, elem_hi = _rangematch.groups()[:2]
+    return nettype, index_hi, index_lo, signed, elem_lo, elem_hi
+
+
 class SlangParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
@@ -405,6 +436,54 @@ class Broken(Exception):
         super().__init__(msg)
 
 
+#==============================================================================
+# Finder Functions
+#==============================================================================
+#=======================
+#========== 1 ==========
+#=======================
+def get_modules(trace, val):
+    """slang"""
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        body = val.get("body", None)
+        if kind == "Instance" and hasattr(body, "items"):
+            return True
+    return False
+
+
+#=======================
+#========== 2 ==========
+#=======================
+def get_gbnets(trace, val):
+    """slang"""
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind in ("Net", "Variable"): # ports show up in both "Port" and "Net"
+            attrs = val.get("attributes")
+            if attrs is not None:
+                for attr in attrs:
+                    attrname = attr.get("name")
+                    if attrname.startswith("ghostbus"):
+                        return True
+    return False
+
+
+#=======================
+#========== 3 ==========
+#=======================
+def get_instances(trace, val):
+    """slang"""
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind == "Instance":
+            return True
+    return False
+
+
+#==============================================================================
+# Parser
+#==============================================================================
 class VParser():
     # Helper values
     LINETYPE_PARAM = 0
@@ -459,6 +538,57 @@ class VParser():
         self._dict = json.loads(jsfile)
         self.find_top_module()
         self.sort_nets()
+        return
+
+    def get_modules(self):
+        return self.iter_walk(do=get_modules)
+
+    @staticmethod
+    def gbnetsIterator(mod_dict):
+        jb = StructWalker(mod_dict)
+        _iter = jb.iter_walk(do=get_gbnets, depth=4)
+        for key, val in _iter:
+            gbattrs = {}
+            attrs = val.get("attributes")
+            for attr in attrs:
+                attrname = attr.get("name")
+                attrval  = attr.get("value")
+                if attrname.startswith("ghostbus"):
+                    gbattrs[attrname] = attrval
+            gbstr = ", ".join([key for key in gbattrs.keys()])
+            netname = val.get("name", None)
+            typestr = val.get("type", None)
+            nettype, index_hi, index_lo, signed, elem_lo, elem_hi = parse_typestr(typestr)
+            index_hi = int(index_hi) if index_hi is not None else None
+            index_lo = int(index_lo) if index_lo is not None else None
+            index_hi_str = str(index_hi)
+            index_lo_str = str(index_lo)
+            elem_lo = int(elem_lo) if elem_lo is not None else None
+            elem_hi = int(elem_hi) if elem_hi is not None else None
+            netdict = {
+                "name": netname,
+                "type": nettype,
+                "range": (index_hi, index_lo),
+                "rangestr": (index_hi_str, index_lo_str), # TODO range str
+                "attributes": gbattrs,
+                "src" : None,
+                "array": (elem_lo, elem_hi),
+            }
+            yield netdict
+        return
+
+    @staticmethod
+    def get_instances(mod_dict):
+        jb = StructWalker(dd)
+        _iter = jb.iter_walk(do=get_instances, depth=4)
+        for key, val in _iter:
+            attrs = val.get("attributes", {})
+            inst_dict = {
+                "inst_name": key,
+                "mod_name": val.get("type"),
+                "attributes": attrs,
+            }
+            yield inst_dict
         return
 
     @staticmethod
@@ -778,7 +908,6 @@ class VParser():
         self._printParams()
         self._printPorts()
         self._printModinsts()
-        self._printGBStuff()
         print("="*80)
         return
 
@@ -809,18 +938,6 @@ class VParser():
         for modinst in self.modinsts:
             name = modinst["name"]
             print("  " + name)
-        return
-
-    def _printGBStuff(self):
-        print("== Ghostbus Stuff")
-        for member in self.gbstuff:
-            name = member["name"]
-            attrs = member["attributes"]
-            print("  ", end="")
-            for attr in attrs:
-                attrname = attr["name"]
-                print(f"{attrname}", end=" ")
-            print(name)
         return
 
 

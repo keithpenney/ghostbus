@@ -1,5 +1,6 @@
 
 from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment, _matchKw
+from slangparse import parse_typestr
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict
 from jsonmap import JSONMaker
@@ -353,6 +354,31 @@ def test__matchKw():
     return fails
 
 
+def test_parse_typestr():
+    tests = (
+        #======== Regs ==========
+        #(input_str, (nettype, index_hi, index_lo, signed, elem_lo, elem_hi)),
+        ("reg signed[7:0]",     ("reg",    "7",  "0", True,  None, None)),
+        ("logic signed[31:0]",  ("logic", "31",  "0", True,  None, None)),
+        ("reg[3:0]",            ("reg",    "3",  "0", False, None, None)),
+        ("reg",                 ("reg",   None, None, False, None, None)),
+        ("logic",               ("logic", None, None, False, None, None)),
+        ("reg[5:0]",            ("reg",    "5",  "0", False, None, None)),
+        ("bit[5:0]",            ("bit",    "5",  "0", False, None, None)),
+        ("bit[0:0]",            ("bit",    "0",  "0", False, None, None)),
+        #========= Mems =========
+        ("reg[3:0]$[0:7]",      ("reg",    "3",  "0", False,  "0",  "7")),
+        ("reg[7:0]$[0:63]",     ("reg",    "7",  "0", False,  "0", "63")),
+    )
+    fails = 0
+    for arg, expected in tests:
+        result = parse_typestr(arg)
+        if result != expected:
+            print(f"FAIL: parse_typestr({arg}) expected {expected}, got {result}")
+            fails += 1
+    return fails
+
+
 def doStaticTests():
     tests = (
         test_get_modname,
@@ -368,6 +394,7 @@ def doStaticTests():
         test_decomment,
         test_identical_or_none,
         test__matchKw,
+        test_parse_typestr,
     )
     rval = 0
     fails = []
@@ -389,4 +416,5 @@ def doStaticTests():
 
 if __name__ == "__main__":
     import sys
-    sys.exit(doStaticTests())
+    #sys.exit(doStaticTests())
+    test_parse_typestr()
