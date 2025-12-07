@@ -1,6 +1,6 @@
 
 from yoparse import get_modname, block_inst, autogenblk, _matchForLoop, decomment, _matchKw
-from slangparse import parse_typestr
+from slangparse import parse_typestr, slang_attrval_int_to_string, slang_attrval_int_to_int
 from memory_map import bits
 from ghostbusser import MemoryTree, WalkDict
 from jsonmap import JSONMaker
@@ -379,6 +379,35 @@ def test_parse_typestr():
     return fails
 
 
+def test_slang_attrval_int_to_string():
+    tests = (
+        ("80'h6578745f692c20636c6b", "ext_i, clk"),
+        ("88'h6578745f692c2061646472", "ext_i, addr"),
+        ("24'd6515819", "clk"),
+    )
+    fails = 0
+    for arg, expected in tests:
+        result = slang_attrval_int_to_string(arg)
+        if result != expected:
+            print(f"FAIL: slang_attrval_int_to_string({arg}) expected {expected}, got {result}")
+            fails += 1
+    return fails
+
+
+def test_slang_attrval_int_to_int():
+    tests = (
+        ("32'd64", 64),
+        ("32'd256", 256),
+    )
+    fails = 0
+    for arg, expected in tests:
+        result = slang_attrval_int_to_int(arg)
+        if result != expected:
+            print(f"FAIL: slang_attrval_int_to_int({arg}) expected {expected}, got {result}")
+            fails += 1
+    return fails
+
+
 def doStaticTests():
     tests = (
         test_get_modname,
@@ -395,6 +424,8 @@ def doStaticTests():
         test_identical_or_none,
         test__matchKw,
         test_parse_typestr,
+        test_slang_attrval_int_to_string,
+        test_slang_attrval_int_to_int,
     )
     rval = 0
     fails = []
@@ -416,5 +447,5 @@ def doStaticTests():
 
 if __name__ == "__main__":
     import sys
-    #sys.exit(doStaticTests())
-    test_parse_typestr()
+    sys.exit(doStaticTests())
+

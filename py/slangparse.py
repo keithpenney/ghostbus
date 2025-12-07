@@ -11,7 +11,10 @@ from struct_walker import StructWalker
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
-SLANG_JSON_BUG_WORKAROUND = True
+# TODO - hopefully I don't need this anymore
+SLANG_JSON_BUG_WORKAROUND = False
+# slang can output type as a simple string or as a verbose dict
+SLANG_TYPE_IS_STRING = True
 
 def srcParse(s):
     # FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
@@ -396,6 +399,15 @@ def _split_body(bodystr):
     return None, None
 
 
+def parse_rangestr(rangestr):
+    restr = r"\$?\[(\d+):(\d+)\]"
+    _match = re.match(restr, rangestr)
+    if _match:
+        first, second = _match.groups()[:2]
+        return (first, second)
+    return None, None
+
+
 def parse_typestr(typestr):
     # E.g.:
     #   logic
@@ -408,7 +420,6 @@ def parse_typestr(typestr):
     elem_lo = None
     elem_hi = None
     restr = r"(reg|wire|bit|logic)( signed)?(\[\d+:\d+\])?(\$\[\d+:\d+\])?"
-    restr_range = r"\$?\[(\d+):(\d+)\]"
     _match = re.match(restr, typestr)
     if _match:
         groups = _match.groups()
@@ -416,14 +427,59 @@ def parse_typestr(typestr):
         if groups[1] is not None:
             signed = True
         if groups[2] is not None:
-            _rangematch = re.match(restr_range, groups[2])
-            if _rangematch:
-                index_hi, index_lo = _rangematch.groups()[:2]
+            index_hi, index_lo = parse_rangestr(groups[2])
         if groups[3] is not None:
-            _rangematch = re.match(restr_range, groups[3])
-            if _rangematch:
-                elem_lo, elem_hi = _rangematch.groups()[:2]
+            elem_lo, elem_hi = parse_rangestr(groups[3])
     return nettype, index_hi, index_lo, signed, elem_lo, elem_hi
+
+
+def format_source_yosys_style(source_file, source_line, source_column):
+    #e.g. "verilog/simple/extmod.v:15.14-15.17"
+    return f"{source_file}:{source_line}.{source_column}-{source_line}.{source_column}"
+
+
+def _hex_string_to_ascii(hexstr):
+    _bytes = len(hexstr)//2 + len(hexstr)%2 # ceil
+    if len(hexstr) < 2*_bytes:
+        # pad to 2 chars per byte
+        hexstr = "0" + hexstr
+    ss = []
+    for n in range(_bytes):
+        ss.append(chr(int(hexstr[2*n:2*(n+1)], 16)))
+    return "".join(ss)
+
+
+def slang_attrval_int_to_string(intstr):
+    # "80'h6578745f692c20636c6b" -> "ext_i, clk"
+    # "88'h6578745f692c2061646472" -> "ext_i, addr"
+    # "24'd6515819" -> "clk"
+    restr = r"^(\d+')(h|d|b)?([0-9a-fA-F]+)"
+    _match = re.match(restr, intstr)
+    bases = {'h': 16, 'd': 10, 'b': 2}
+    if _match:
+        groups = _match.groups()
+        base = bases.get(groups[1], 10)
+        val = groups[2]
+        # slang will use base 10 (or maaaaybe 2) if the string is short, but
+        # I'd rather keep it as a hex string so I don't need to do math with
+        # ridiculously big integers
+        if (base == 10) or (base == 2):
+            val = "{:x}".format(int(val, base))
+        return _hex_string_to_ascii(val)
+    return None
+
+
+def slang_attrval_int_to_int(intstr):
+    # "32'd64" -> 64
+    restr = r"^(\d+')(h|d|b)?([0-9a-fA-F]+)"
+    _match = re.match(restr, intstr)
+    bases = {'h': 16, 'd': 10, 'b': 2}
+    if _match:
+        groups = _match.groups()
+        base = bases.get(groups[1], 10)
+        val = groups[2]
+        return int(val, base)
+    return None
 
 
 class SlangParsingError(Exception):
@@ -516,9 +572,12 @@ class VParser():
             incstr = " ".join([f"-I {inc}" for inc in self._include_dirs])
         else:
             incstr = ""
-        # TODO figure out why --cst-json isn't available in v9.1
+        # NOTE --cst-json isn't included in a release yet (as of v9.1), but was introduced in commit 805e160fac on 8/8/25
         # TODO experiment with pyslang (much more of a pain to install but could be a lot better than walking the JSON manually)
-        scmd = f'slang -DSLANG {incstr}{filestr}{topstr}{scopestr} --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json -'
+        slang_args="-q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json-source-info"
+        if not SLANG_TYPE_IS_STRING:
+            slang_args += " --ast-json-detailed-types"
+        scmd = f'slang -DSLANG {incstr}{filestr}{topstr}{scopestr} {slang_args} --ast-json -'
         err = None
         try:
             jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
@@ -554,11 +613,42 @@ class VParser():
                 attrname = attr.get("name")
                 attrval  = attr.get("value")
                 if attrname.startswith("ghostbus"):
+                    # TODO put this in a different layer (it's violating encapsulation)
+                    if attrname == "ghostbus_addr":
+                        attrval = slang_attrval_int_to_int(attrval)
+                    else:
+                        attrval = slang_attrval_int_to_string(attrval)
                     gbattrs[attrname] = attrval
             gbstr = ", ".join([key for key in gbattrs.keys()])
             netname = val.get("name", None)
-            typestr = val.get("type", None)
-            nettype, index_hi, index_lo, signed, elem_lo, elem_hi = parse_typestr(typestr)
+            _type = val.get("type", None)
+            index_hi, index_lo = None, None
+            elem_hi, elem_lo = None, None
+            signed = False
+            #if SLANG_TYPE_IS_STRING:
+            if not hasattr(_type, "items"):
+                nettype, index_hi, index_lo, signed, elem_lo, elem_hi = parse_typestr(_type)
+            else:
+                nettype = _type.get("name")
+                _range = _type.get("range", None)
+                elementType = _type.get("elementType", None)
+                if elementType is not None:
+                    elementRange = elementType.get("range", None)
+                    if elementRange is not None:
+                        index_hi, index_lo = parse_rangestr(elementRange)
+                        if _range is not None:
+                            elem_lo, elem_hi = parse_rangestr(_range)
+                    else:
+                        index_hi, index_lo = parse_rangestr(_range)
+            source_file = val.get("source_file")
+            source_line = val.get("source_line")
+            source_column = val.get("source_column")
+            src = format_source_yosys_style(source_file, source_line, source_column)
+            _nettype = val.get("netType", None)
+            # Weird; imperically, it seems slang includes a "netType" member only when
+            # a vector is of type 'wire', so I'm going to use that for the default access mode
+            if _nettype is not None:
+                nettype = _nettype.get("name", "wire")
             index_hi = int(index_hi) if index_hi is not None else None
             index_lo = int(index_lo) if index_lo is not None else None
             index_hi_str = str(index_hi)
@@ -571,7 +661,7 @@ class VParser():
                 "range": (index_hi, index_lo),
                 "rangestr": (index_hi_str, index_lo_str), # TODO range str
                 "attributes": gbattrs,
-                "src" : None,
+                "src" : src,
                 "array": (elem_lo, elem_hi),
             }
             yield netdict
