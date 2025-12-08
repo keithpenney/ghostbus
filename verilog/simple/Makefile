@@ -72,8 +72,13 @@ complete_slang.json: $(GHOSTBUS_SOURCES)
 complete_yosys.json: $(GHOSTBUS_SOURCES)
 	yosys -q -p "verilog_defines -DYOSYS; read_verilog $^; proc" -p write_json > $@
 
+# --cst-json-mode
+#   full
+#   simple-trivia
+#   no-trivia
+#   simple-tokens
 cst_slang.json: $(GHOSTBUS_SOURCES)
-	slang -DSLANG $^ --top top -q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --cst-json-mode simple-tokens --cst-json $@
+	slang -DSLANG $^ --top top -q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --cst-json-mode full --cst-json $@
 
 .PHONY: test
 test: top_check
