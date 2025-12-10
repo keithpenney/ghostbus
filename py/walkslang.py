@@ -83,8 +83,30 @@ def get_instances(trace, val):
     return False
 
 
-def ModuleIterator(filename, show_wires=False, show_regs=False):
-    jb = JSONBrowser(filename)
+def get_CST_module_dict(filepath, module_name):
+    jb = JSONBrowser(filepath)
+    def find_module(trace, val):
+        #"kind": "ModuleDeclaration"
+        if not hasattr(val, "get"):
+            return False
+        kind = val.get("kind")
+        if kind != "ModuleDeclaration":
+            return False
+        header = val.get("header")
+        header_name = header.get("name")
+        #"header"->"name"->"kind": "Identifier"
+        #"header"->"name"->"text": module_name
+        if (header_name.get("kind") == "Identifier") and (header_name.get("text") == module_name):
+            return True
+        return False
+    _iter = jb.iter_walk(do=find_module)
+    for key, val in _iter:
+        return val
+    return None
+
+
+def ModuleIterator(ast_filepath, cst_filepath, show_wires=False, show_regs=False):
+    jb = JSONBrowser(ast_filepath)
     _iter = jb.iter_walk(do=get_modules)
     modules = []
     for key, val in _iter:
@@ -97,8 +119,10 @@ def ModuleIterator(filename, show_wires=False, show_regs=False):
         print(f"== Module: {module_name} ==")
         #print("  :: Ghostbus ::")
         #GBIterator(val, indent=" "*4)
-        _subIter = VParser.gbnetsIterator(val)
-        for dd in _subIter:
+        sub_cst = get_CST_module_dict(cst_filepath, module_name)
+        reg_iter = VParser._gbnetsIterator(val, sub_cst)
+
+        for dd in reg_iter:
             print(strStruct(dd))
         continue
         if show_wires:
@@ -198,6 +222,7 @@ def GBIterator(dd, indent=""):
 
 if __name__ == "__main__":
     import sys
-    filename = sys.argv[1]
+    ast_filename = sys.argv[1]
+    cst_filename = sys.argv[2]
     #WalkAllModules(filename)
-    ModuleIterator(filename)
+    ModuleIterator(ast_filename, cst_filename)

@@ -11,8 +11,6 @@ from struct_walker import StructWalker
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
-# TODO - hopefully I don't need this anymore
-SLANG_JSON_BUG_WORKAROUND = False
 # slang can output type as a simple string or as a verbose dict
 SLANG_TYPE_IS_STRING = True
 
@@ -482,6 +480,71 @@ def slang_attrval_int_to_int(intstr):
     return None
 
 
+def collectText(dd):
+    text = []
+    def collect(trace, val):
+        if len(trace) == 0:
+            return False
+        if trace[-1] == "text":
+            text.append(val)
+        return True
+    sw = StructWalker(dd)
+    sw.walk(do=collect)
+    return "".join(text)
+
+
+def extract_range(dd, netname):
+    """
+    Extracting the range from the CST:
+      0. Find the net in question
+         trace[-1] (key) == "text", val == net name
+         trace[-2] == "name"
+         trace[-3] == some int index // ignore this one
+         trace[-4] == "declarators"
+      1. Back up to same level as "declarators", and get val associated with key "type"
+         dimensions = val.get("dimensions")
+         specifier = dimensions.get("specifier")
+         selector = specifier.get("selector")
+         left  = selector.get("left")
+         range = selector.get("range")
+         right = selector.get("right")
+      2. Confirm range.get("kind") == "Colon"
+         Assemble text in "left" and "right"
+    """
+    traces = []
+    def get_subtrace(trace, val):
+        if len(trace) < 4:
+            return False
+        if (val == netname) and (trace[-1] == "text") and (trace[-2] == "name") and (trace[-4] == "declarators"):
+            traces.append(trace.copy())
+        return False
+    sw = StructWalker(dd)
+    sw.walk(do=get_subtrace)
+    if len(traces) == 0:
+        print(f"Found no range for: {netname}")
+        return None, None
+    trace = traces[0]
+    print(trace)
+    _dd = dd
+    _l = len(trace)
+    for key in trace[:-4]:
+        _dd = _dd[key]
+    _type = _dd.get("type")
+    dimensions = _type.get("dimensions")
+    specifier = dimensions[0].get("specifier")
+    selector = specifier.get("selector")
+    left  = selector.get("left")
+    _range = selector.get("range")
+    if _range.get("kind") != "Colon":
+        raise Exception("This don't look right")
+    right = selector.get("right")
+    index_left = collectText(left)
+    index_right = collectText(right)
+    #print(index_left)
+    #print(index_right)
+    return index_left, index_right
+
+
 class SlangParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
@@ -552,20 +615,26 @@ class VParser():
         self._include_dirs = include_dirs
         self._sv = sv
         self._resolved = False
+        self.ast = None
+        self.ast_walker = None
+        self.cst = None
+        self.cst_walker = None
+        self.cst_dict = {}
         self.valid = self.parse()
 
-    def parse(self):
+    @staticmethod
+    def _slang_cmd(ast=True):
         self._dict = None
         for filename in self._filelist:
             if not os.path.exists(filename):
                 raise Exception(f"File {filename} not found")
-                return False
+                return None
         filestr = " ".join(self._filelist)
         scopestr = ""
         if self._top is not None:
             topstr = f" --top {self._top}"
-            # FIXME this basically just does what self.getTopDict() does with the normal JSON. Use it?
-            scopestr = f" --ast-json-scope {self._top}"
+            if ast:
+                scopestr = f" --ast-json-scope {self._top}"
         else:
             topstr = ""
         if self._include_dirs is not None and len(self._include_dirs) > 0:
@@ -574,27 +643,50 @@ class VParser():
             incstr = ""
         # NOTE --cst-json isn't included in a release yet (as of v9.1), but was introduced in commit 805e160fac on 8/8/25
         # TODO experiment with pyslang (much more of a pain to install but could be a lot better than walking the JSON manually)
-        slang_args="-q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json-source-info"
-        if not SLANG_TYPE_IS_STRING:
-            slang_args += " --ast-json-detailed-types"
-        scmd = f'slang -DSLANG {incstr}{filestr}{topstr}{scopestr} {slang_args} --ast-json -'
+        slang_args="-q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports"
+        if ast:
+            slang_args += " --ast-json-source-info"
+            if not SLANG_TYPE_IS_STRING:
+                slang_args += " --ast-json-detailed-types"
+        if ast:
+            jscmd = "--ast-json"
+        else:
+            jscmd = "--cst-json"
+        scmd = f'slang -DSLANG {incstr}{filestr}{topstr}{scopestr} {slang_args} {jscmd} -'
+        return scmd
+
+    def create_ast(self):
         err = None
+        scmd = _slang_cmd(ast=True)
         try:
             jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
         except subprocess.CalledProcessError as e:
             err = str(e)
         if err is not None:
             raise SlangParsingError(err)
-        #print(jsfile)
-        if SLANG_JSON_BUG_WORKAROUND:
-            ix = jsfile.index('{')
-            preamble = jsfile[:ix]
-            if self._top is None:
-                _top = self._extract_top(preamble)
-                if _top is not None:
-                    self._top = _top
-            jsfile = jsfile[ix:]
-        self._dict = json.loads(jsfile)
+        dd = json.loads(jsfile)
+        self._dict = dd # FIXME DELETE ME
+        self.ast = dd
+        self.ast_walker = StructWalker(dd)
+        return
+
+    def create_cst(self):
+        err = None
+        scmd = _slang_cmd(cst=True)
+        try:
+            jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
+        except subprocess.CalledProcessError as e:
+            err = str(e)
+        if err is not None:
+            raise SlangParsingError(err)
+        dd = json.loads(jsfile)
+        self.cst = dd
+        self.cst_walker = StructWalker(dd)
+        return
+
+    def parse(self):
+        self.create_ast()
+        self.create_cst()
         self.find_top_module()
         self.sort_nets()
         return
@@ -602,10 +694,17 @@ class VParser():
     def get_modules(self):
         return self.iter_walk(do=get_modules)
 
+    def gbnetsIterator(sub_ast):
+        module_name = sub_ast.get("name")
+        sub_cst = self.get_CST_module_dict(module_name)
+        return self._gbnetsIterator(sub_ast, sub_cst)
+
     @staticmethod
-    def gbnetsIterator(mod_dict):
-        jb = StructWalker(mod_dict)
-        _iter = jb.iter_walk(do=get_gbnets, depth=4)
+    def _gbnetsIterator(sub_ast, sub_cst):
+        module_name = sub_ast.get("name")
+        #sub_cst_walker = StructWalker(sub_cst)
+        sub_ast_walker = StructWalker(sub_ast)
+        _iter = sub_ast_walker.iter_walk(do=get_gbnets, depth=4)
         for key, val in _iter:
             gbattrs = {}
             attrs = val.get("attributes")
@@ -614,18 +713,17 @@ class VParser():
                 attrval  = attr.get("value")
                 if attrname.startswith("ghostbus"):
                     # TODO put this in a different layer (it's violating encapsulation)
+                    # Why not just include all attributes?
                     if attrname == "ghostbus_addr":
                         attrval = slang_attrval_int_to_int(attrval)
                     else:
                         attrval = slang_attrval_int_to_string(attrval)
                     gbattrs[attrname] = attrval
-            gbstr = ", ".join([key for key in gbattrs.keys()])
             netname = val.get("name", None)
             _type = val.get("type", None)
             index_hi, index_lo = None, None
             elem_hi, elem_lo = None, None
             signed = False
-            #if SLANG_TYPE_IS_STRING:
             if not hasattr(_type, "items"):
                 nettype, index_hi, index_lo, signed, elem_lo, elem_hi = parse_typestr(_type)
             else:
@@ -651,8 +749,12 @@ class VParser():
                 nettype = _nettype.get("name", "wire")
             index_hi = int(index_hi) if index_hi is not None else None
             index_lo = int(index_lo) if index_lo is not None else None
-            index_hi_str = str(index_hi)
-            index_lo_str = str(index_lo)
+            if index_hi is not None and index_lo is not None:
+                index_hi_str, index_lo_str = extract_range(sub_cst, netname)
+            else:
+                index_hi_str, index_lo_str = (None, None)
+            #index_hi_str = str(index_hi)
+            #index_lo_str = str(index_lo)
             elem_lo = int(elem_lo) if elem_lo is not None else None
             elem_hi = int(elem_hi) if elem_hi is not None else None
             netdict = {
@@ -689,6 +791,31 @@ class VParser():
             topname = _match.groups()[0]
             return topname
         return None
+
+    def _get_CST_module_dict(self, module_name):
+        def find_module(trace, val):
+            if not hasattr(val, "get"):
+                return False
+            kind = val.get("kind")
+            if kind != "ModuleDeclaration":
+                return False
+            header = val.get("header")
+            header_name = header.get("name")
+            if (header_name.get("kind") == "Identifier") and (header_name.get("text") == module_name):
+                return True
+            return False
+        _iter = self._cst_walker.iter_walk(do=find_module)
+        for key, val in _iter:
+            return val
+        return None
+
+    def get_CST_module_dict(self, module_name):
+        if module_name in self.cst_dict.keys():
+            return self.cst_dict[module_name]
+        mod_dict = self._get_CST_module_dict(module_name)
+        if mod_dict is not None:
+            self.cst_dict[module_name] = mod_dict
+        return mod_dict
 
     def find_top_module(self):
         if self._resolved:
