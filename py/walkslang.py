@@ -124,7 +124,6 @@ def ModuleIterator(ast_filepath, cst_filepath, show_wires=False, show_regs=False
 
         for dd in reg_iter:
             print(strStruct(dd))
-        continue
         if show_wires:
             print("  :: Wires ::")
             WireIterator(val, indent=" "*4)

@@ -613,7 +613,6 @@ class VParser():
         self._filelist = filelist
         self._top = top
         self._include_dirs = include_dirs
-        self._sv = sv
         self._resolved = False
         self.ast = None
         self.ast_walker = None
@@ -692,7 +691,15 @@ class VParser():
         return
 
     def get_modules(self):
-        return self.iter_walk(do=get_modules)
+        """Returns iterator.
+        Usage example:
+            for mod_name, mod_dict in parser.get_module():
+                for net_dict in parser.gbnetsIterator(mod_dict):
+                    netname = net_dict.get("name")
+                    # etc
+                for inst_dict in parser.get_instances(mod_dict):
+        """
+        return self.ast_walker.iter_walk(do=get_modules)
 
     def gbnetsIterator(sub_ast):
         module_name = sub_ast.get("name")
@@ -987,12 +994,14 @@ class VParser():
         mdict = self.params[module]
         return mdict
 
+    # TODO DELETEME
     def getDict(self):
         return self._dict
 
     def getTopName(self):
         return self.modname
 
+    # TODO DELETEME
     def _strToDepth(self, _entry, depth=0, indent=0):
         """RECURSIVE"""
         if depth == 0:
@@ -1014,6 +1023,7 @@ class VParser():
                 l.append(f"{sindent}{key} : {val}")
         return l
 
+    # TODO DELETEME
     def strToDepth(self, depth=0, partSelect = None):
         _d = self.selectPart(partSelect)
         l = ["VParser()"]
@@ -1028,6 +1038,7 @@ class VParser():
     def __repr__(self):
         return self.__str__()
 
+    # TODO DELETEME
     def selectPart(self, partSelect = None):
         _d = self._dict
         if partSelect is not None:
@@ -1041,6 +1052,7 @@ class VParser():
             _d = self._dict
         return _d
 
+    # TODO DELETEME
     def getTrace(self, partselect):
         sigdict = self.selectPart(partselect)
         selftrace = [s.strip() for s in partselect.split('.')]
@@ -1081,6 +1093,7 @@ class VParser():
                 print(f"{n} : {hitlist}")
         return
 
+    # TODO DELETEME
     def search(self, target_key):
         """Search the dict structure for all keys that match 'target_key' and return as a nested dict."""
         hitlist = []
@@ -1091,6 +1104,7 @@ class VParser():
         self.walk(_do)
         return hitlist
 
+    # TODO DELETEME
     def walk(self, do = lambda trace, val : None):
         # I have to do this dumb thing where I actually
         # walk the generator and discard everything or
@@ -1100,9 +1114,11 @@ class VParser():
             pass
         return True
 
+    # TODO DELETEME
     def iter_walk(self, do = lambda trace, val : False):
         return self._walk(self._struct, [], do)
 
+    # TODO DELETEME
     @classmethod
     def _walk(cls, td, trace = [], do = lambda trace, val : False):
         """RECURSIVE"""
@@ -1164,7 +1180,6 @@ def doBrowse():
     parser.add_argument("-d", "--depth", default=4, help="Depth to browse from the partselect.")
     parser.add_argument("-s", "--select", default=None, help="Partselect string.")
     parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
-    parser.add_argument("--sv", default=False, action="store_true", help="[EXPERIMENTAL] Enable SystemVerilog parsing (requires yosys-slang).")
     parser.add_argument("files", default=None, action="append", nargs="+", help="Source files.")
     args = parser.parse_args()
     vp = VParser(args.files[0], top=args.top, sv=args.sv)
