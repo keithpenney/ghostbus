@@ -96,15 +96,17 @@ class StructWalker():
             pass
         return True
 
-    def iter_walk(self, do = lambda trace, val : False, depth=-1):
-        return self._walk(self._struct, [], do, depth=depth)
+    def iter_walk(self, do = lambda trace, val : False, depth=-1, debug=False):
+        return self._walk(self._struct, [], do, depth=depth, debug=debug)
 
     @classmethod
-    def _walk(cls, td, trace = [], do = lambda trace, val : False, depth=-1):
+    def _walk(cls, td, trace = [], do = lambda trace, val : False, depth=-1, debug=False):
         """Depth-first recursive walk"""
         if depth == 0:
             return True
         rval = do(trace, td)
+        if debug:
+            print(f"  ---> rval = {rval}. trace = {trace}. len(td) = {len(td)}")
         key = None if len(trace) == 0 else trace[-1]
         if rval:
             yield (key, td)

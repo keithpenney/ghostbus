@@ -65,9 +65,14 @@ top_yosys.json: top.v submod_foo.v
 alt_top_slang.json: top.v
 	slang -DSLANG $^ --top top --ast-json-scope top --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json $@
 
-SLANG_ARGS=-q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports --ast-json-source-info --ast-json-detailed-types
-complete_slang.json: $(GHOSTBUS_SOURCES)
-	slang -DSLANG $^ --top top --ast-json-scope top $(SLANG_ARGS) --ast-json $@
+SLANG_ARGS=-q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports
+AST_SLANG_ARGS=$(SLANG_ARGS) --ast-json-source-info --ast-json-detailed-types
+CST_SLANG_ARGS=$(SLANG_ARGS)
+complete_slang_ast.json: $(GHOSTBUS_SOURCES)
+	slang -DSLANG $^ --top top --ast-json-scope top $(AST_SLANG_ARGS) --ast-json $@
+
+complete_slang_cst.json: $(GHOSTBUS_SOURCES)
+	slang -DSLANG $^ --top top --ast-json-scope top $(CST_SLANG_ARGS) --cst-json $@
 
 complete_yosys.json: $(GHOSTBUS_SOURCES)
 	yosys -q -p "verilog_defines -DYOSYS; read_verilog $^; proc" -p write_json > $@

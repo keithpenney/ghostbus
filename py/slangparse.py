@@ -6,8 +6,8 @@ import os
 import subprocess
 import json
 import re
-from util import enum, strDict
-from struct_walker import StructWalker
+from util import enum
+from struct_walker import StructWalker, strStruct
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
@@ -391,7 +391,7 @@ def _split_body(bodystr):
     if _match:
         addr = _match.groups()[0]
         remainder = bodystr[_match.end():]
-        print(f"{addr}, {remainder}")
+        #print(f"{addr}, {remainder}")
         return addr, remainder
     raise Exception(f"Missed {bodystr}")
     return None, None
@@ -516,32 +516,41 @@ def extract_range(dd, netname):
         if len(trace) < 4:
             return False
         if (val == netname) and (trace[-1] == "text") and (trace[-2] == "name") and (trace[-4] == "declarators"):
-            traces.append(trace.copy())
+            # Normal nets
+            traces.append((0, trace.copy()))
+        elif (val == netname) and (trace[-1] == "text") and (trace[-2] == "name"):
+            # Ports
+            traces.append((1, trace.copy()))
         return False
     sw = StructWalker(dd)
     sw.walk(do=get_subtrace)
     if len(traces) == 0:
-        print(f"Found no range for: {netname}")
+        print(f"    WARNING: Found no range for: {netname}")
         return None, None
-    trace = traces[0]
-    print(trace)
+    matchtype, trace = traces[0]
+    #print(trace)
     _dd = dd
-    _l = len(trace)
-    for key in trace[:-4]:
+    if matchtype == 0:
+        offset = -4
+    elif matchtype == 1:
+        offset = -3
+    for key in trace[:offset]:
         _dd = _dd[key]
-    _type = _dd.get("type")
-    dimensions = _type.get("dimensions")
-    specifier = dimensions[0].get("specifier")
-    selector = specifier.get("selector")
-    left  = selector.get("left")
-    _range = selector.get("range")
+    if matchtype == 0:
+        # Normal nets
+        newdd = _dd["type"]["dimensions"][0]["specifier"]["selector"]
+    elif matchtype == 1:
+        # Ports
+        newdd = _dd["header"]["dataType"]["dimensions"][0]["specifier"]["selector"]
+    else:
+        return None, None
+    left = newdd.get("left")
+    _range = newdd.get("range")
     if _range.get("kind") != "Colon":
         raise Exception("This don't look right")
-    right = selector.get("right")
+    right = newdd.get("right")
     index_left = collectText(left)
     index_right = collectText(right)
-    #print(index_left)
-    #print(index_right)
     return index_left, index_right
 
 
@@ -610,6 +619,10 @@ class VParser():
     LINETYPE_MACRO = 1
 
     def __init__(self, filelist, top=None, include_dirs=None, sv=False):
+        for filename in filelist:
+            if not os.path.exists(filename):
+                raise Exception(f"File {filename} not found")
+                return None
         self._filelist = filelist
         self._top = top
         self._include_dirs = include_dirs
@@ -621,13 +634,7 @@ class VParser():
         self.cst_dict = {}
         self.valid = self.parse()
 
-    @staticmethod
-    def _slang_cmd(ast=True):
-        self._dict = None
-        for filename in self._filelist:
-            if not os.path.exists(filename):
-                raise Exception(f"File {filename} not found")
-                return None
+    def _slang_cmd(self, ast=True):
         filestr = " ".join(self._filelist)
         scopestr = ""
         if self._top is not None:
@@ -656,7 +663,7 @@ class VParser():
 
     def create_ast(self):
         err = None
-        scmd = _slang_cmd(ast=True)
+        scmd = self._slang_cmd(ast=True)
         try:
             jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
         except subprocess.CalledProcessError as e:
@@ -664,14 +671,13 @@ class VParser():
         if err is not None:
             raise SlangParsingError(err)
         dd = json.loads(jsfile)
-        self._dict = dd # FIXME DELETE ME
         self.ast = dd
         self.ast_walker = StructWalker(dd)
         return
 
     def create_cst(self):
         err = None
-        scmd = _slang_cmd(cst=True)
+        scmd = self._slang_cmd(ast=False)
         try:
             jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
         except subprocess.CalledProcessError as e:
@@ -686,14 +692,15 @@ class VParser():
     def parse(self):
         self.create_ast()
         self.create_cst()
-        self.find_top_module()
-        self.sort_nets()
+        self._resolved = True
+        #self.find_top_module()
+        #self.sort_nets()
         return
 
     def get_modules(self):
         """Returns iterator.
         Usage example:
-            for mod_name, mod_dict in parser.get_module():
+            for mod_name, mod_dict in parser.get_modules():
                 for net_dict in parser.gbnetsIterator(mod_dict):
                     netname = net_dict.get("name")
                     # etc
@@ -701,7 +708,7 @@ class VParser():
         """
         return self.ast_walker.iter_walk(do=get_modules)
 
-    def gbnetsIterator(sub_ast):
+    def gbnetsIterator(self, sub_ast):
         module_name = sub_ast.get("name")
         sub_cst = self.get_CST_module_dict(module_name)
         return self._gbnetsIterator(sub_ast, sub_cst)
@@ -778,13 +785,17 @@ class VParser():
 
     @staticmethod
     def get_instances(mod_dict):
-        jb = StructWalker(dd)
-        _iter = jb.iter_walk(do=get_instances, depth=4)
+        jb = StructWalker(mod_dict)
+        _iter = jb.iter_walk(do=get_instances, depth=4, debug=True)
         for key, val in _iter:
+            print(f"1234: key = {key};\n *val = {strStruct(val, depth=1)}.\n *body = {strStruct(val['body'], depth=1)}")
+            inst_name = val.get("name")
+            body = val.get("body")
+            mod_name = body.get("name")
             attrs = val.get("attributes", {})
             inst_dict = {
-                "inst_name": key,
-                "mod_name": val.get("type"),
+                "inst_name": inst_name,
+                "mod_name": mod_name,
                 "attributes": attrs,
             }
             yield inst_dict
@@ -811,7 +822,7 @@ class VParser():
             if (header_name.get("kind") == "Identifier") and (header_name.get("text") == module_name):
                 return True
             return False
-        _iter = self._cst_walker.iter_walk(do=find_module)
+        _iter = self.cst_walker.iter_walk(do=find_module)
         for key, val in _iter:
             return val
         return None
@@ -850,9 +861,10 @@ class VParser():
         return
 
     def getTopDict(self):
+        _dict = self.ast_walker.selectPart()
         if self._resolved:
-            return self._dict
-        design_dict = self._dict["design"]
+            return _dict
+        design_dict = _dict["design"]
         members_list = design_dict["members"]
         for mod_dict in members_list:
             if mod_dict["name"] == self._top:
@@ -861,7 +873,7 @@ class VParser():
 
     def getTopGenerator(self):
         top_dict = self.getTopDict()
-        #print(strDict(top_dict, depth=1))
+        #print(strStruct(top_dict, depth=1))
         members_list = top_dict["members"]
         for mod_dict in members_list:
             kind = mod_dict["kind"]
@@ -888,8 +900,9 @@ class VParser():
 
     def getInstGenerator(self, mod_dict):
         top_dict = self.getTopDict()
-        #print(strDict(top_dict, depth=1))
-        members_list = top_dict["members"]
+        #print("================================")
+        #print(strStruct(top_dict, depth=2))
+        members_list = top_dict["body"]["members"]
         for mod_dict in members_list:
             kind = mod_dict["kind"]
             if kind == "Instance":
@@ -921,33 +934,6 @@ class VParser():
                 if attr == "top":
                     return True
         return False
-
-    def sort_nets(self):
-        # FIXME - move this ghostbus stuff out of this generic file
-        params = []
-        ports = []
-        modinsts = []
-        gbstuff = []
-        members = self._dict["members"]
-        for member in members:
-            kind = member["kind"]
-            if kind == "Parameter":
-                params.append(member)
-            elif kind == "Port":
-                ports.append(member)
-            elif kind in ("UninstantiatedDef", "Instance"):
-                modinsts.append(member)
-            elif kind == "Net":
-                attrs = member.get("attributes", [])
-                for attr in attrs:
-                    attrname = attr["name"]
-                    if attrname.startswith("ghostbus"):
-                        gbstuff.append(member)
-        self.params = params
-        self.ports = ports
-        self.modinsts = modinsts
-        self.gbstuff = gbstuff
-        return True
 
     def getPorts(self, parsed=True):
         """Return list of (0, name, dirstr, rangeStart, rangeEnd), one for
@@ -994,147 +980,14 @@ class VParser():
         mdict = self.params[module]
         return mdict
 
-    # TODO DELETEME
-    def getDict(self):
-        return self._dict
-
     def getTopName(self):
         return self.modname
 
-    # TODO DELETEME
-    def _strToDepth(self, _entry, depth=0, indent=0):
-        """RECURSIVE"""
-        if depth == 0:
-            return []
-        l = []
-        sindent = " "*indent
-        if hasattr(_entry, 'items'):
-            _iter = _entry.items()
-        else:
-            _iter = enumerate(_entry)
-        for key, val in _iter:
-            if hasattr(val, 'keys'):
-                l.append(f"{sindent}{key} : dict size {len(val)}")
-                l.extend(self._strToDepth(val, depth-1, indent+2))
-            elif hasattr(val, '__len__') and not hasattr(val, 'lower'):
-                l.append(f"{sindent}{key} : list size {len(val)}")
-                l.extend(self._strToDepth(val, depth-1, indent+2))
-            else:
-                l.append(f"{sindent}{key} : {val}")
-        return l
-
-    # TODO DELETEME
-    def strToDepth(self, depth=0, partSelect = None):
-        _d = self.selectPart(partSelect)
-        l = ["VParser()"]
-        l.extend(self._strToDepth(_d, depth, indent=2))
-        return '\n'.join(l)
-
     def __str__(self):
-        if self._dict == None:
-            return "VParser(Uninitialized)"
-        return self.strToDepth(3)
+        return "VParser(Uninitialized)"
 
     def __repr__(self):
         return self.__str__()
-
-    # TODO DELETEME
-    def selectPart(self, partSelect = None):
-        _d = self._dict
-        if partSelect is not None:
-            parts = partSelect.split('.')
-            for nselect in range(len(parts)):
-                select = parts[nselect]
-                for key, val in _d.items():
-                    if key == select:
-                        _d = val
-        if not isinstance(_d, dict):
-            _d = self._dict
-        return _d
-
-    # TODO DELETEME
-    def getTrace(self, partselect):
-        sigdict = self.selectPart(partselect)
-        selftrace = [s.strip() for s in partselect.split('.')]
-        # The resulting dict needs to have a 'bits' key
-        bits = sigdict.get('bits', None)
-        if bits is None:
-            print(f"Partselect {partselect} does not refer to a valid net dict (key of 'netnames' dict)")
-            return None
-        bitlist = []
-        for net in bits:
-            bitlist.append([net, []])
-        # Now walk the whole top-level dict and look connected nets by index
-        def _do(trace, val):
-            if trace == selftrace:
-                return # Don't count yourself
-            if hasattr(val, 'get'):
-                valbits = val.get('bits', None)
-                if valbits is not None:
-                    for n in range(len(bitlist)):
-                        net, hitlist = bitlist[n]
-                        if not isinstance(net, int):
-                            # Skip special nets '0' and '1'
-                            continue
-                        if net in valbits:
-                            valbitIndex = valbits.index(net)
-                            trstr = '.'.join(trace)
-                            if len(valbits) > 1:
-                                trstr += f'[{valbitIndex}]'
-                            hitlist.append(trstr)
-                        bitlist[n] = hitlist
-        self.walk(_do)
-        # print the bit dict
-        for n in range(len(bitlist)):
-            net, hitlist = bitlist[n]
-            if not isinstance(net, int):
-                print(f"{n} : 1'b{net}")
-            else:
-                print(f"{n} : {hitlist}")
-        return
-
-    # TODO DELETEME
-    def search(self, target_key):
-        """Search the dict structure for all keys that match 'target_key' and return as a nested dict."""
-        hitlist = []
-        def _do(trace, val):
-            if trace[-1] == target_key:
-                tstr = '.'.join(trace)
-                hitlist.append((tstr, val))
-        self.walk(_do)
-        return hitlist
-
-    # TODO DELETEME
-    def walk(self, do = lambda trace, val : None):
-        # I have to do this dumb thing where I actually
-        # walk the generator and discard everything or
-        # else the function exits early and doesn't walk?
-        _iter = self._walk(self._struct, [], do)
-        for x in _iter:
-            pass
-        return True
-
-    # TODO DELETEME
-    def iter_walk(self, do = lambda trace, val : False):
-        return self._walk(self._struct, [], do)
-
-    # TODO DELETEME
-    @classmethod
-    def _walk(cls, td, trace = [], do = lambda trace, val : False):
-        """RECURSIVE"""
-        if hasattr(td, "items"):
-            _iter = td.items()
-        else:
-            _iter = enumerate(td)
-        for key, val in _iter:
-            trace.append(key)   # Add key
-            rval = do(trace, val)
-            if rval:
-                yield val
-            if hasattr(val, 'items') or (hasattr(val, "__len__") and not hasattr(val, "lower")):
-                yield from cls._walk(val, trace, do) # When this returns, we are done with this dict/list
-            trace.pop() # So we can pop the key from the trace and continue the loop
-        return True
 
     def printSummary(self):
         print("{:=^80s}".format(" " + self.modname + " "))
@@ -1176,16 +1029,28 @@ class VParser():
 
 def doBrowse():
     import argparse
-    parser = argparse.ArgumentParser("Browse a JSON AST from a verilog codebase")
+    parser = argparse.ArgumentParser("Parse a Verilog/SystemVerilog Design")
     parser.add_argument("-d", "--depth", default=4, help="Depth to browse from the partselect.")
     parser.add_argument("-s", "--select", default=None, help="Partselect string.")
     parser.add_argument("-t", "--top", default=None, help="Explicitly specify top module for hierarchy.")
     parser.add_argument("files", default=None, action="append", nargs="+", help="Source files.")
     args = parser.parse_args()
-    vp = VParser(args.files[0], top=args.top, sv=args.sv)
-    if not vp.valid:
-        return False
-    print(vp.strToDepth(int(args.depth), args.select))
+    vp = VParser(args.files[0], top=args.top, sv=True)
+    #print(vp.strToDepth(int(args.depth), args.select))
+    for key, mod_dict in vp.get_modules():
+        name = mod_dict["name"]
+        body = mod_dict["body"]
+        print(f"key = {key}; name = {name}")
+        #print([key for key in mod_dict["body"].keys()])
+        for net_dict in vp.gbnetsIterator(body):
+            netname = net_dict.get("name")
+            print(f"  netname = {netname}")
+            # etc
+        #for inst_dict in vp.get_instances(mod_dict):
+        for inst_dict in vp.getInstGenerator(mod_dict):
+            inst_name = inst_dict["inst_name"]
+            mod_name = inst_dict["mod_name"]
+            print(f"  {inst_name} of {mod_name}")
     return True
 
 
