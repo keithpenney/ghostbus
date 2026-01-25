@@ -6,9 +6,8 @@ import math
 import re
 
 from yoparse import ismodule, get_modname, get_value, \
-                    getUnparsedWidthRange, getUnparsedDepthRange, \
-                    getUnparsedWidthAndDepthRange, getUnparsedWidth, \
-                    YosysParsingError, getUnparsedWidthRangeType, NetTypes, \
+                    getUnparsedWidthRange, \
+                    YosysParsingError, \
                     block_inst, autogenblk, findForLoop
 from memory_map import MemoryRegionStager, MemoryRegion, Register, Memory, bits
 from gbmemory_map import GBMemoryRegionStager, GBRegister, GBMemory, ExternalModule, GenerateFor, GenerateIf, \

@@ -7,11 +7,10 @@ import subprocess
 import json
 import re
 from util import enum
-from struct_walker import StructWalker
+from struct_walker import StructWalker, strStruct
 
 _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
-SLANG_JSON_BUG_WORKAROUND = True
 
 def srcParse(s):
     # FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
@@ -179,6 +178,8 @@ def _getUnparsedDepthRange(snippet, offset):
     _depth = None
     if snippet is not None:
         _depthStr = _findDepthStr(snippet, offset)
+        if _depthStr is None:
+            return None
         split = _depthStr.split(':')
         if len(split) > 1:
             _depth = (split[0], split[1])
@@ -442,11 +443,10 @@ class VParser(StructWalker):
     LINETYPE_PORT  = 0
     LINETYPE_MACRO = 1
 
-    def __init__(self, filelist, top=None, include_dirs=None, sv=False):
+    def __init__(self, filelist, top=None, include_dirs=None):
         self._filelist = filelist
         self._top = top
         self._include_dirs = include_dirs
-        self._sv = sv
         self.valid = self.parse()
 
     def _get_class_string(self):
@@ -469,12 +469,8 @@ class VParser(StructWalker):
             incstr = " ".join([f"-I {inc}" for inc in self._include_dirs])
         else:
             incstr = ""
-        if self._sv:
-            yosys = "yosys -m slang"
-            read_cmd = "read_slang"
-        else:
-            yosys = "yosys"
-            read_cmd = "read_verilog"
+        yosys = "yosys"
+        read_cmd = "read_verilog"
         ycmd = f'{yosys} -q -p "verilog_defines -DYOSYS\n{read_cmd} {incstr}{filestr}{topstr}\nproc" -p write_json'
         err = None
         try:
@@ -483,9 +479,6 @@ class VParser(StructWalker):
             err = str(e)
         if err is not None:
             raise YosysParsingError(err)
-        if SLANG_JSON_BUG_WORKAROUND:
-            ix = jsfile.index('{')
-            jsfile = jsfile[ix:]
         self._struct = json.loads(jsfile)
         # Separate attributes for this module
         mod = self._struct.get("modules", None)
@@ -517,6 +510,14 @@ class VParser(StructWalker):
     def get_modules(self):
         return self.iter_walk(do=get_modules)
 
+    @classmethod
+    def get_module_name(cls, mod_dict, mod_hash=None):
+        attributes = mod_dict["attributes"]
+        mod_name = attributes.get("hdlname")
+        if mod_name is None:
+            return mod_hash
+        return mod_name
+
     @staticmethod
     def gbnetsIterator(mod_dict):
         jb = StructWalker(mod_dict)
@@ -525,6 +526,7 @@ class VParser(StructWalker):
             gbattrs = {}
             elem_lo, elem_hi = (None, None)
             attrs = val.get("attributes")
+            source = attrs.get("src")
             bits = val.get("bits") # registers
             width = val.get("width") # arrays
             size = val.get("size") # arrays
@@ -545,14 +547,15 @@ class VParser(StructWalker):
                 if elem_lo is None:
                     raise YosysParsingError("Key 'width' has a value, but key 'start_offset' somehow doesn't")
                 elem_hi = elem_lo + size - 1
+            _ww, _dd = getUnparsedWidthAndDepthRange(source)
             index_lo = 0
-            index_hi_str = str(index_hi)
-            index_lo_str = str(index_lo)
+            #index_hi_str = str(index_hi)
+            #index_lo_str = str(index_lo)
             netdict = {
                 "name": key,
                 "type": None, # TODO nettype
                 "range": (index_hi, index_lo),
-                "rangestr": (index_hi_str, index_lo_str), # TODO range str
+                "rangestr": _ww,
                 "attributes": gbattrs,
                 "src" : src,
                 "array": (elem_lo, elem_hi),
@@ -562,17 +565,26 @@ class VParser(StructWalker):
 
     @staticmethod
     def get_instances(mod_dict):
-        jb = StructWalker(dd)
+        jb = StructWalker(mod_dict)
         _iter = jb.iter_walk(do=get_instances, depth=4)
         for key, val in _iter:
             attrs = val.get("attributes", {})
             inst_dict = {
                 "inst_name": key,
-                "mod_name": val.get("type"),
+                "mod_name": get_modname(val.get("type")),
                 "attributes": attrs,
             }
             yield inst_dict
         return
+
+    @staticmethod
+    def get_instance_name(inst_dict):
+        inst_name = inst_dict["inst_name"]
+        return inst_name
+
+    @staticmethod
+    def get_instance_module_name(inst_dict):
+        return inst_dict["mod_name"]
 
     def getTopDict(self):
         return self._struct["modules"]

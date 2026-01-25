@@ -708,8 +708,15 @@ class VParser():
         """
         return self.ast_walker.iter_walk(do=get_modules)
 
+    @classmethod
+    def get_module_name(cls, mod_dict, mod_hash=None):
+        """Note: mod_hash is not used but is needed to preserve a unifiied API with the yosys version"""
+        body = mod_dict["body"]
+        mod_name = body["name"]
+        return mod_name
+
     def gbnetsIterator(self, sub_ast):
-        module_name = sub_ast.get("name")
+        module_name = self.get_module_name(sub_ast)
         sub_cst = self.get_CST_module_dict(module_name)
         return self._gbnetsIterator(sub_ast, sub_cst)
 
@@ -786,12 +793,16 @@ class VParser():
     @staticmethod
     def get_instances(mod_dict):
         jb = StructWalker(mod_dict)
-        _iter = jb.iter_walk(do=get_instances, depth=4, debug=True)
-        for key, val in _iter:
-            print(f"1234: key = {key};\n *val = {strStruct(val, depth=1)}.\n *body = {strStruct(val['body'], depth=1)}")
+        _iter = jb.iter_walk(do=get_instances, depth=4)
+        for trace, val in _iter:
+            #print(f"1234: trace = {trace};\n *val = {strStruct(val, depth=1)}")
             inst_name = val.get("name")
             body = val.get("body")
-            mod_name = body.get("name")
+            if hasattr(body, "items"): # body is a dict, phew
+                # mod_hash in yosys is just the (sometimes mangled) module name
+                mod_name = body["name"]
+            else: # dammit; body is a string - gotta find the dict
+                addr, mod_name = _split_body(body)
             attrs = val.get("attributes", {})
             inst_dict = {
                 "inst_name": inst_name,
@@ -800,6 +811,15 @@ class VParser():
             }
             yield inst_dict
         return
+
+    @staticmethod
+    def get_instance_name(inst_dict):
+        inst_name = inst_dict["inst_name"]
+        return inst_name
+
+    @staticmethod
+    def get_instance_module_name(inst_dict):
+        return inst_dict["mod_name"]
 
     @staticmethod
     def _extract_top(preamble):
@@ -899,6 +919,7 @@ class VParser():
                     yield (mod_hash, md)
 
     def getInstGenerator(self, mod_dict):
+        # TODO deprecate/delete this in favor of 'get_instances'
         top_dict = self.getTopDict()
         #print("================================")
         #print(strStruct(top_dict, depth=2))
