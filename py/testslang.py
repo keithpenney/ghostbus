@@ -8,7 +8,6 @@ verilog_dir = os.path.join(file_dir, "../verilog")
 verilog_simple_dir = os.path.join(verilog_dir, "simple")
 
 SLANG=False
-# TODO follow this example for complete codebase parsing with slang
 def testVParser():
     files = os.listdir(verilog_simple_dir)
     vfiles = []
@@ -22,10 +21,10 @@ def testVParser():
     else:
         VParser = yosysVParser
     vp = VParser(vfiles, top="top")
-    for key, mod_dict in vp.get_modules():
+    for mod_hash, mod_dict in vp.get_modules():
         #print("==============================")
         #print(strStruct(mod_dict, 2))
-        mod_name = vp.get_module_name(mod_dict, mod_hash=key)
+        mod_name = vp.get_module_name(mod_dict, mod_hash=mod_hash)
         print(f"==== Module {mod_name} ====")
         for net_dict in vp.gbnetsIterator(mod_dict):
             netname = net_dict.get("name")

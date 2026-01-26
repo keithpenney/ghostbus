@@ -495,7 +495,6 @@ class MemoryTree(WalkDict):
                     toptag = node._parent.toptag_map[node.label]
                     genblock = node._parent.genblock_map[node.label]
                 node.genblock = genblock
-                #print(f"7220 node.label = {node.label}; genblock = {node.genblock}")
                 if hasattr(node, "memories"):
                     # =========================================================
                     # At this point, a module with a declared bus but no implied bus will have
@@ -704,35 +703,35 @@ class GhostBusser():
         # Check for instantiated modules
         self.modtree[mod_hash] = {}
         self.module_info[mod_hash]["insts"] = {}
-        generator = self.parser.getInstGenerator(mod_dict)
-        if generator is not None:
-            for inst_name, inst_dict in generator:
-                gen_block, inst, gen_index = block_inst(inst_name)# FIXME slangify
-                generate = None
-                if gen_block is not None:
-                    attr_dict = inst_dict["attributes"]# FIXME slangify?
-                    source = attr_dict.get('src', None)# FIXME slangify
-                    if autogenblk(gen_block):
-                        feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
-                    if gen_index is None:
-                        feature_print(f"Found instance {inst} inside a generate-if block {gen_block}")
-                        generate = GenerateIf(gen_block)
-                        inst_name = inst
-                    else:
-                        feature_print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
-                        generate = parseForLoop(gen_block, source)
-                        generate._loop_index = gen_index
-                        if generate is None:
-                            # UNPARSED_FOR_LOOP
-                            raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
-                    feature_print(generate)
-                if ismodule(inst_name):
-                    attr_dict = inst_dict["attributes"]
-                    token_dict = GhostbusInterface.decode_attrs(attr_dict)
-                    busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
-                    toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
-                    self.module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
-                    self.modtree[mod_hash][inst_name] = inst_dict["type"]
+        #generator = self.parser.getInstGenerator(mod_dict) # TODO DEPRECATE
+        #if generator is not None:
+        #    for inst_name, inst_dict in generator:
+        for inst_dict in vp.get_instances(mod_dict):
+            gen_block, inst, gen_index = block_inst(inst_name)# FIXME SLANGIFY
+            generate = None
+            attr_dict = inst_dict["attributes"]
+            if gen_block is not None:
+                source = attr_dict.get("source", None)# FIXME slangify
+                if autogenblk(gen_block): # FIXME SLANGIFY
+                    feature_print(f"WARNING: Found potentially anonymous generate block in module {module_name}.")
+                if gen_index is None:
+                    feature_print(f"Found instance {inst} inside a generate-if block {gen_block}")
+                    generate = GenerateIf(gen_block)
+                    inst_name = inst
+                else:
+                    feature_print(f"Found instance {inst} inside a generate-for block {gen_block}, index {gen_index}")
+                    generate = parseForLoop(gen_block, source)
+                    generate._loop_index = gen_index
+                    if generate is None:
+                        # UNPARSED_FOR_LOOP
+                        raise GhostbusException(f"Failed to find for-loop for {inst} from source {source}")
+                feature_print(generate)
+            #if ismodule(inst_name):
+            token_dict = GhostbusInterface.decode_attrs(attr_dict)
+            busname = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
+            toptag  = token_dict.get(GhostbusInterface.tokens.TOP, False)
+            self.module_info[mod_hash]["insts"][inst_name] = {"busname": busname, "toptag": toptag, "generate": generate}
+            self.modtree[mod_hash][inst_name] = inst_dict["inst_hash"]
         return
 
     def digestRegs(self, mod_dict, mod_hash, module_name=None):
@@ -879,15 +878,11 @@ class GhostBusser():
     def digest(self):
         self.modtree = {}
         top_mod = None
-        top_dict = self.parser.getTopDict()
         self.module_info = {}
-        generator = self.parser.getTopGenerator()
-        for mod_hash, mod_dict in generator:#top_dict.items():
-            if self.backend == self.BACKEND_YOSYS:
-                module_name = get_modname(mod_hash)
-            else:
-                # FIXME is this ok?
-                module_name = mod_hash
+        #generator = self.parser.getTopGenerator() # TODO DEPRECATE
+        #for mod_hash, mod_dict in generator:#top_dict.items(): # TODO DEPRECATE
+        for mod_hash, mod_dict in self.parser.get_modules():
+            module_name = self.parser.get_module_name(mod_dict, mod_hash=mod_hash)
             if not hasattr(mod_dict, "items"):
                 raise Exception(f"mod_dict has no 'items' attr: {mod_hash}, {mod_dict}")
                 continue
@@ -895,9 +890,6 @@ class GhostBusser():
                 if (self.parser.isTop(mod_hash)):
                     top_mod = mod_hash
             self.module_info[mod_hash] = {}
-            # Damn it all; slang was the right choice from jump, but I've built a labyrinth to
-            # transform what yosys gives me into a hierarchical tree, which is what slang spits
-            # out by default.  So what do I do from here???
             self.digestModInsts(mod_dict, mod_hash, module_name=module_name)
             self.mrs = {} # per-module
             self._resetBusses()
@@ -1222,21 +1214,18 @@ class GhostBusser():
         if top is None:
             # NO_TOP_SPECIFIED
             raise GhostbusException("I don't know how to do this without top specified")
-        modtree = {}
+        top_found = False
         for module, mod_dict in self.modtree.items():
             if module == top:
-                modtree[module] = {}
-        if len(modtree) == 0:
+                top_found = True
+        if not top_found:
             # NO_TOP_SPECIFIED
             raise GhostbusException("Could not find top: {}".format(top))
         nested = False
         dd_keys = [key for key in self.modtree.keys()]
         for module in dd_keys:
             instances_dict = self.modtree[module]
-            #print(f"    Processing: {module}")
             instance_keys = [key for key in instances_dict.keys()]
-            #if len(instances_dict) == 0:
-            #    print("      Empty instances_dict!")
             for inst_name in instance_keys:
                 inst_key = instances_dict[inst_name]
                 dict_key = (inst_name, inst_key)

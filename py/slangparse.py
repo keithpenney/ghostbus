@@ -46,6 +46,7 @@ def isgenerate(inst_name):
     return True
 
 
+# TODO SLANGIFY
 def block_inst(inst_name):
     """
     If inst_name matches "gen_block[index].instance",
@@ -71,6 +72,7 @@ def block_inst(inst_name):
     return gen_block, inst, index
 
 
+# TODO SLANGIFY
 def autogenblk(gen_block):
     """Yosys lazily gives names to anonymous generate blocks and doesn't detect collisions if you happen
     to name a block with the same auto-generated internal names assigned by Yosys.
@@ -774,15 +776,13 @@ class VParser():
                 index_hi_str, index_lo_str = extract_range(sub_cst, netname)
             else:
                 index_hi_str, index_lo_str = (None, None)
-            #index_hi_str = str(index_hi)
-            #index_lo_str = str(index_lo)
             elem_lo = int(elem_lo) if elem_lo is not None else None
             elem_hi = int(elem_hi) if elem_hi is not None else None
             netdict = {
                 "name": netname,
                 "type": nettype,
                 "range": (index_hi, index_lo),
-                "rangestr": (index_hi_str, index_lo_str), # TODO range str
+                "rangestr": (index_hi_str, index_lo_str),
                 "attributes": gbattrs,
                 "src" : src,
                 "array": (elem_lo, elem_hi),
@@ -790,8 +790,9 @@ class VParser():
             yield netdict
         return
 
-    @staticmethod
-    def get_instances(mod_dict):
+    @classmethod
+    def get_instances(cls, mod_dict):
+        this_mod_name = cls.get_module_name(mod_dict)
         jb = StructWalker(mod_dict)
         _iter = jb.iter_walk(do=get_instances, depth=4)
         for trace, val in _iter:
@@ -803,11 +804,16 @@ class VParser():
                 mod_name = body["name"]
             else: # dammit; body is a string - gotta find the dict
                 addr, mod_name = _split_body(body)
+            if mod_name == this_mod_name:
+                # skip this weird little slang thing where it returns its own instance
+                continue
             attrs = val.get("attributes", {})
             inst_dict = {
                 "inst_name": inst_name,
+                "inst_hash": addr,
                 "mod_name": mod_name,
                 "attributes": attrs,
+                "source": None,
             }
             yield inst_dict
         return

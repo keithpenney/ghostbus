@@ -571,8 +571,10 @@ class VParser(StructWalker):
             attrs = val.get("attributes", {})
             inst_dict = {
                 "inst_name": key,
+                "inst_hash": val.get("type"),
                 "mod_name": get_modname(val.get("type")),
                 "attributes": attrs,
+                "source": None,
             }
             yield inst_dict
         return
