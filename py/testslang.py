@@ -7,7 +7,7 @@ file_dir = os.path.split(__file__)[0]
 verilog_dir = os.path.join(file_dir, "../verilog")
 verilog_simple_dir = os.path.join(verilog_dir, "simple")
 
-SLANG=False
+SLANG=True
 def testVParser():
     files = os.listdir(verilog_simple_dir)
     vfiles = []
@@ -36,6 +36,9 @@ def testVParser():
             else:
                 rs = f"[{rs_l}:{rs_r}] "
             print(f"  Net: {rs}{netname}")
+            attrs = net_dict.get("attributes")
+            for attrname, attrval in attrs.items():
+                print(f"    {attrname}: {attrval}")
         for inst_dict in vp.get_instances(mod_dict):
             #print("==============================")
             #print(strStruct(inst_dict, 3))

@@ -13,6 +13,8 @@ _net_keywords = ('reg', 'wire', 'input', 'output', 'inout')
 NetTypes = enum(_net_keywords, base=0)
 
 def srcParse(s):
+    if s is None:
+        return None
     # FILEPATH:LINESTART.CHARSTART-LINEEND.CHAREND
     reYoSrc = r"\A([^:]+):(\d+).(\d+)-(\d+).(\d+)"
     _match = re.match(reYoSrc, s)
@@ -96,6 +98,8 @@ def get_modname(s):
 
 
 def get_value(bitlist):
+    if bitlist is None:
+        return 0
     val = 0
     for n in range(len(bitlist)):
         if bitlist[n] == '1':
@@ -522,7 +526,7 @@ class VParser(StructWalker):
     def gbnetsIterator(mod_dict):
         jb = StructWalker(mod_dict)
         _iter = jb.iter_walk(do=get_gbnets, depth=4)
-        for key, val in _iter:
+        for netname, val in _iter:
             gbattrs = {}
             elem_lo, elem_hi = (None, None)
             attrs = val.get("attributes")
@@ -534,6 +538,8 @@ class VParser(StructWalker):
             src = None
             for attrname, attrval in attrs.items():
                 if attrname.startswith("ghostbus"):
+                    if attrname == "ghostbus_addr":
+                        attrval =int(attrval, 2)
                     gbattrs[attrname] = attrval
                 if attrname == "src":
                     src = attrval
@@ -552,13 +558,15 @@ class VParser(StructWalker):
             #index_hi_str = str(index_hi)
             #index_lo_str = str(index_lo)
             netdict = {
-                "name": key,
+                "name": netname,
                 "type": None, # TODO nettype
                 "range": (index_hi, index_lo),
                 "rangestr": _ww,
                 "attributes": gbattrs,
                 "src" : src,
                 "array": (elem_lo, elem_hi),
+                "initval": get_value(val.get('bits')),
+                "signed": False, # TODO
             }
             yield netdict
         return

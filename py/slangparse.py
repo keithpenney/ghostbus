@@ -62,7 +62,7 @@ def block_inst(inst_name):
     inst = None
     index = None
     _match = re.match(restr, inst_name)
-    if _match:
+    if False: # _match
         groups = _match.groups()
         gen_block, inst = groups[:2]
         imatch = re.match(reindex, gen_block)
@@ -620,6 +620,9 @@ class VParser():
     LINETYPE_PORT  = 0
     LINETYPE_MACRO = 1
 
+    # Default value for attributes without one
+    default_attrval = 1
+
     def __init__(self, filelist, top=None, include_dirs=None, sv=False):
         for filename in filelist:
             if not os.path.exists(filename):
@@ -708,6 +711,11 @@ class VParser():
                     # etc
                 for inst_dict in parser.get_instances(mod_dict):
         """
+        for key, mod_dict in self._get_modules_iter():
+            mod_hash = int(mod_dict["body"]["addr"])
+            yield (mod_hash, mod_dict)
+
+    def _get_modules_iter(self):
         return self.ast_walker.iter_walk(do=get_modules)
 
     @classmethod
@@ -716,6 +724,36 @@ class VParser():
         body = mod_dict["body"]
         mod_name = body["name"]
         return mod_name
+
+    @classmethod
+    def get_instances(cls, mod_dict):
+        this_mod_name = cls.get_module_name(mod_dict)
+        jb = StructWalker(mod_dict)
+        _iter = jb.iter_walk(do=get_instances, depth=4)
+        for trace, val in _iter:
+            #print(f"1234: trace = {trace};\n *val = {strStruct(val, depth=1)}")
+            inst_name = val.get("name")
+            body = val.get("body")
+            if hasattr(body, "items"): # body is a dict, phew
+                # mod_hash in yosys is just the (sometimes mangled) module name
+                mod_name = body["name"]
+                addr = int(body["addr"])
+            else: # dammit; body is a string - gotta find the dict
+                addr, mod_name = _split_body(body)
+                addr = int(addr)
+            if mod_name == this_mod_name:
+                # skip this weird little slang thing where it returns its own instance
+                continue
+            attrs = val.get("attributes", {})
+            inst_dict = {
+                "inst_name": inst_name,
+                "inst_hash": addr,
+                "mod_name": mod_name,
+                "attributes": attrs,
+                "source": None,
+            }
+            yield inst_dict
+        return
 
     def gbnetsIterator(self, sub_ast):
         module_name = self.get_module_name(sub_ast)
@@ -741,6 +779,8 @@ class VParser():
                         attrval = slang_attrval_int_to_int(attrval)
                     else:
                         attrval = slang_attrval_int_to_string(attrval)
+                    if attrval is None:
+                        attrval = self.default_attrval
                     gbattrs[attrname] = attrval
             netname = val.get("name", None)
             _type = val.get("type", None)
@@ -786,36 +826,10 @@ class VParser():
                 "attributes": gbattrs,
                 "src" : src,
                 "array": (elem_lo, elem_hi),
+                "initval": 0, # TODO
+                "signed": False, # TODO
             }
             yield netdict
-        return
-
-    @classmethod
-    def get_instances(cls, mod_dict):
-        this_mod_name = cls.get_module_name(mod_dict)
-        jb = StructWalker(mod_dict)
-        _iter = jb.iter_walk(do=get_instances, depth=4)
-        for trace, val in _iter:
-            #print(f"1234: trace = {trace};\n *val = {strStruct(val, depth=1)}")
-            inst_name = val.get("name")
-            body = val.get("body")
-            if hasattr(body, "items"): # body is a dict, phew
-                # mod_hash in yosys is just the (sometimes mangled) module name
-                mod_name = body["name"]
-            else: # dammit; body is a string - gotta find the dict
-                addr, mod_name = _split_body(body)
-            if mod_name == this_mod_name:
-                # skip this weird little slang thing where it returns its own instance
-                continue
-            attrs = val.get("attributes", {})
-            inst_dict = {
-                "inst_name": inst_name,
-                "inst_hash": addr,
-                "mod_name": mod_name,
-                "attributes": attrs,
-                "source": None,
-            }
-            yield inst_dict
         return
 
     @staticmethod
