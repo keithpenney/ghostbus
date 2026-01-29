@@ -453,6 +453,10 @@ class VParser(StructWalker):
         self._include_dirs = include_dirs
         self.valid = self.parse()
 
+    @property
+    def _top_hash(self):
+        return self._top
+
     def _get_class_string(self):
         return "VParser()"
 
@@ -539,7 +543,7 @@ class VParser(StructWalker):
             for attrname, attrval in attrs.items():
                 if attrname.startswith("ghostbus"):
                     if attrname == "ghostbus_addr":
-                        attrval =int(attrval, 2)
+                        attrval = int(attrval, 2)
                     gbattrs[attrname] = attrval
                 if attrname == "src":
                     src = attrval
@@ -562,6 +566,7 @@ class VParser(StructWalker):
                 "type": None, # TODO nettype
                 "range": (index_hi, index_lo),
                 "rangestr": _ww,
+                # TODO include depth and depthstr
                 "attributes": gbattrs,
                 "src" : src,
                 "array": (elem_lo, elem_hi),
@@ -618,6 +623,14 @@ class VParser(StructWalker):
                 if attr == "top":
                     return True
         return False
+
+    def _getTopHash(self):
+        if self._top_hash is None:
+            top_dict = self.getTopDict()
+            mod_dict = top_dict.get(self._top, None)
+            raise Exception(strStruct(mod_dict, 2))
+            self._top_hash = mod_dict["type"]
+        return self._top_hash
 
     def elaboratePorts(self):
         """Capture the unparsed range string for all ports of all modules"""

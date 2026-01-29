@@ -1060,7 +1060,7 @@ class MemoryRegionStager(MemoryRegion):
             if ref is not None:
                 name = ref.name
             if resolved != self.RESOLVED:
-                #print(f"{self.label}: Adding {name} to addr 0x{base:x}")
+                print(f"8888888888888888 {self.label}: Adding {name} to addr 0x{base:x}")
                 super().add(aw, ref=ref, addr=base)
                 self._explicits[n] = (ref, base, aw, _type, self.RESOLVED)
         return

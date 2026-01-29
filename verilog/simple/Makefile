@@ -13,13 +13,21 @@ all: test rule_check
 SLANG?=
 ifeq ($(strip $(SLANG)),)
 GHOSTBUS_FLAGS=--live
+JUST_JSON=
 else
 GHOSTBUS_FLAGS=--live --slang
+JUST_JSON=--slang
 endif
 include $(GHOSTBUS_DIR)/rules.mk
 
 .PHONY: json
 json: $(AUTOGEN_DIR)/regmap.json
+
+.PHONY: justjson
+justjson: $(GHOSTBUS_SOURCES)
+	mkdir -p $(AUTOGEN_DIR)
+	$(PYTHON) $(PY_DIR)/ghostbusser.py $(JUST_JSON) --json regmap.json --dest $(AUTOGEN_DIR) -t $(GHOSTBUS_TOP) $(gb_includes) $(ignore_args) $^
+
 
 .PHONY: gold
 gold: $(AUTOGEN_DIR)/regmap.json

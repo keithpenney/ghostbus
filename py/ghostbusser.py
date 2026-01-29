@@ -306,7 +306,7 @@ class MemoryTree(WalkDict):
             #    self._dd[key] = self.__class__(val, parent=self, key=key)
         self._mark = False
         if inst_hash is not None:
-            module_name = get_modname(inst_hash)
+            module_name = get_modname(inst_hash[0])
         else:
             module_name = None
         self._module_name = module_name
@@ -477,7 +477,7 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
-        verbose = False
+        verbose = True
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
@@ -544,6 +544,7 @@ class MemoryTree(WalkDict):
                                         ref.sub_mr = node.memories[mem_index]
                                         del extmod_map[ref.name]
                         if hasattr(node.memories[n], "resolve"):
+                            print(node.memories[n])
                             node.memories[n].resolve()
                         node.memories[n].shrink()
                         printv(f"Shrunk {node.memories[n].label}.{node.memories[n].domain} to {node.memories[n].aw} bits")
@@ -854,6 +855,7 @@ class GhostBusser():
                     mem.domain = busname
                     mem.genblock = generate
                     mem.manual_addr = addr
+                    raise Exception(f"mem.manual_addr = {addr}")
                     if gen_block is not None and gen_index is not None:
                         # Only handling generate-for's.  generate-if's are easier
                         self._handleGenerates(self._REFTYPE_RAM, mem, source, module_name)
@@ -889,15 +891,13 @@ class GhostBusser():
         self.modtree = {}
         top_mod = None
         self.module_info = {}
-        #generator = self.parser.getTopGenerator() # TODO DEPRECATE
-        #for mod_hash, mod_dict in generator:#top_dict.items(): # TODO DEPRECATE
         for mod_hash, mod_dict in self.parser.get_modules():
             module_name = self.parser.get_module_name(mod_dict, mod_hash=mod_hash)
             if not hasattr(mod_dict, "items"):
                 raise Exception(f"mod_dict has no 'items' attr: {mod_hash}, {mod_dict}")
                 continue
             if self.parser._top is None:
-                if (self.parser.isTop(mod_hash)):
+                if (self.parser.isTop(module_name)):
                     top_mod = mod_hash
             self.module_info[mod_hash] = {}
             self.digestModInsts(mod_dict, mod_hash, module_name=module_name)
@@ -905,7 +905,9 @@ class GhostBusser():
             self._resetBusses()
             self._resetGenerates()
             self.digestRegs(mod_dict, mod_hash, module_name=module_name)
-            self.digestMems(mod_dict, mod_hash, module_name=module_name)
+            # TODO either create a separate gbnetsIterator for memories, or better yet, include memories in that one
+            #      and modify digestRegs to detect and handle those separately
+            #self.digestMems(mod_dict, mod_hash, module_name=module_name)
             self.assembleBusses(mod_hash)
         if self.parser._top is not None:
             top_mod = self.parser._top
@@ -917,7 +919,6 @@ class GhostBusser():
         if len(self._ghostbusses) == 0:
             # NO_GHOSTBUS
             raise GhostbusException("No ghostbus found in codebase.")
-        # TODO - can this be made less redundant?
         self._top = top_mod
         self.parser._top = top_mod
         self.build_modtree()
@@ -1268,18 +1269,20 @@ class GhostBusser():
                 }
         """
         # Start from leaf,
-        memtree = MemoryTree(self.modtree, key=(self._top, self._top), hierarchy=(self._top,))
-        #print_dict(self.module_info)
+        # TODO - this silly structure of the key is required but probably shouldn't be
+        key = (self._top, (self._top, self.parser._top_hash))
+        memtree = MemoryTree(self.modtree, key=key, hierarchy=(self._top,))
         nodes_visited = 0
         for key, memtree_node in memtree.walk():
             nodes_visited += 1
             if key is None:
                 break
-            inst_name, inst_hash = key
+            inst_name, inst_tuple = key
+            module_name, inst_hash = inst_tuple
             instdict = self.module_info.get(inst_hash, None)
             if instdict is None:
+                raise Exception(f"{inst_hash}")
                 continue
-            module_name = get_modname(inst_hash)
             hier = (inst_name,)
             insts = instdict.get("insts")
             printd(f"{module_name} declares insts: {[key for key in insts.keys()]}")
@@ -1291,7 +1294,6 @@ class GhostBusser():
             # NOTE: Redundant 'declared_busses' is currently stored and used in both the node and each of its
             #       memory instances.  I'd like to store it only at the node.
             memtree_node.declared_busses = busses_explicit
-            import pdb; breakpoint()
             if len(mrs) > 0:
                 #if mr is not None and hasattr(memtree_node, "memory"):
                 for busname, mr in mrs.items():

@@ -630,6 +630,7 @@ class VParser():
                 return None
         self._filelist = filelist
         self._top = top
+        self._top_hash = None
         self._include_dirs = include_dirs
         self._resolved = False
         self.ast = None
@@ -638,6 +639,7 @@ class VParser():
         self.cst_walker = None
         self.cst_dict = {}
         self.valid = self.parse()
+        self._getTopHash()
 
     def _slang_cmd(self, ast=True):
         filestr = " ".join(self._filelist)
@@ -823,6 +825,7 @@ class VParser():
                 "type": nettype,
                 "range": (index_hi, index_lo),
                 "rangestr": (index_hi_str, index_lo_str),
+                # TODO include depth and depthstr
                 "attributes": gbattrs,
                 "src" : src,
                 "array": (elem_lo, elem_hi),
@@ -967,14 +970,20 @@ class VParser():
                                 break
                     yield (mod_hash, md)
 
-    def isTop(self, mod_hash):
+    def isTop(self, module_name):
         top_dict = self.getTopDict()
-        mod_dict = top_dict.get(mod_hash, None)
+        mod_dict = top_dict.get(module_name, None)
         if mod_dict is not None:
             for attr in mod_dict["attributes"]:
                 if attr == "top":
                     return True
         return False
+
+    def _getTopHash(self):
+        if self._top_hash is None:
+            top_dict = self.getTopDict()
+            self._top_hash = int(top_dict["body"]["addr"])
+        return self._top_hash
 
     def getPorts(self, parsed=True):
         """Return list of (0, name, dirstr, rangeStart, rangeEnd), one for
