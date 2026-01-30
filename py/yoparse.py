@@ -559,8 +559,10 @@ class VParser(StructWalker):
                 elem_hi = elem_lo + size - 1
             _ww, _dd = getUnparsedWidthAndDepthRange(source)
             index_lo = 0
-            #index_hi_str = str(index_hi)
-            #index_lo_str = str(index_lo)
+            if None in (elem_hi, elem_lo):
+                array = None
+            else:
+                array = (elem_hi, elem_lo)
             netdict = {
                 "name": netname,
                 "type": None, # TODO nettype
@@ -569,7 +571,7 @@ class VParser(StructWalker):
                 # TODO include depth and depthstr
                 "attributes": gbattrs,
                 "src" : src,
-                "array": (elem_lo, elem_hi),
+                "array": array,
                 "initval": get_value(val.get('bits')),
                 "signed": False, # TODO
             }

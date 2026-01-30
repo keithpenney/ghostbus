@@ -477,7 +477,7 @@ class MemoryTree(WalkDict):
         assigned to it that is required by its associated pseudo-bus.  This is the logic that needs to
         take place here before fully resolving the memory map.
         """
-        verbose = True
+        verbose = False
         def printv(*args, **kwargs):
             if verbose:
                 print(*args, **kwargs)
@@ -676,29 +676,41 @@ class GhostBusser():
         self._ghostbusses = []
         self.memory_maps = {}
 
-    def GBRegister_Helper(self, netname, module_name, token_dict, source, generate, genfor=False, dw=1, initval=0, signed=None):
+    def GBRegister_Helper(self, netname, module_name, token_dict, source, generate,
+                          genfor=False, dw=1, initval=0, signed=None, array=(None, None)):
         access      = token_dict.get(GhostbusInterface.tokens.HA, None)
         addr        = token_dict.get(GhostbusInterface.tokens.ADDR, None)
         domain      = token_dict.get(GhostbusInterface.tokens.DOMAIN, None)
         docstr      = token_dict.get(GhostbusInterface.tokens.DOC, None)
         strobe      = token_dict.get(GhostbusInterface.tokens.STROBE, False)
         alias       = token_dict.get(GhostbusInterface.tokens.ALIAS, None)
+        reftype = self._REFTYPE_CSR
+        aw = 0
         if access is not None:
-            reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
+            if array is None:
+                reg = GBRegister(name=netname, dw=dw, meta=source, access=access, desc=docstr)
+            else:
+                elem_hi, elem_lo = array
+                aw = bits(1 + elem_hi - elem_lo)
+                reg = GBMemory(name=netname, dw=dw, aw=aw, access=access, meta=source, desc=docstr)
+                reftype = self._REFTYPE_RAM
             reg.configFromTokens(strobe=strobe, alias=alias, domain=domain, addr=addr)
             reg.initval = initval
             reg.signed = signed
             reg.genblock = generate
             if genfor:
                 # Only handling generate-for's.  generate-if's are easier
-                self._handleGenerates(self._REFTYPE_CSR, reg, source, module_name)
+                self._handleGenerates(reftype, reg, source, module_name)
             else:
-                # This may not be the best place for this step, but at least it gets done.
-                reg._readRangeDepth()
+                if self.backend == self.BACKEND_YOSYS:
+                    # This may not be the best place for this step, but at least it gets done.
+                    reg._readRangeDepth()
                 if self.mrs.get(domain, None) is None:
                     self.mrs[domain] = GBMemoryRegionStager(label=module_name, hierarchy=(module_name,), domain=domain)
-                self.mrs[domain].add(width=0, ref=reg, addr=addr)
-        bustop = self._handleBus(netname, dw, source, generate=generate, signed=signed, token_dict=token_dict)
+                self.mrs[domain].add(width=aw, ref=reg, addr=addr)
+        bustop = False
+        if reftype == self._REFTYPE_CSR:
+            bustop = self._handleBus(netname, dw, source, generate=generate, signed=signed, token_dict=token_dict)
         return bustop
 
     def digestModInsts(self, mod_dict, mod_hash, module_name=None):
@@ -778,11 +790,13 @@ class GhostBusser():
                 index_hi = 0
             dw = index_hi + 1
             initval = net_dict['initval']
+            array = net_dict.get("array", None)
             genfor = False
             if gen_block is not None and gen_index is not None:
                 genfor = True
             bustop = self.GBRegister_Helper(netname, module_name, token_dict, source, generate,
-                                            genfor=genfor, dw=dw, initval=initval, signed=signed)
+                                            genfor=genfor, dw=dw, initval=initval, signed=signed,
+                                            array=array)
             write_strobe= token_dict.get(GhostbusInterface.tokens.STROBE_W, None)
             read_strobe = token_dict.get(GhostbusInterface.tokens.STROBE_R, None)
             if write_strobe is not None:
@@ -797,7 +811,6 @@ class GhostBusser():
             mr.bustop = bustop
         self.module_info[mod_hash]["explicit_busses"] = self.busnames_explicit
         self.associateStrobes(associated_strobes)
-        #import pdb; pdb.set_trace()
         return
 
     def associateStrobes(self, associated_strobes):
@@ -1024,7 +1037,6 @@ class GhostBusser():
                 netname, dw, portnames, source = entry[:4]
                 signed = entry[9]
                 rangestr = getUnparsedWidthRange(source)
-                #print(f"7531 {pbus.name} {netname}: {portnames}")
                 for port in portnames:
                     pbus.set_port(port, netname, portwidth=dw, rangestr=rangestr, source=source)
                     if pbus.port_is_data(port) and signed:
@@ -1054,7 +1066,6 @@ class GhostBusser():
         # Now bundle up passengers from generate blocks
         for base_instance_name, plist in passenger_dict.items():
             # Sort by index
-            #print(f"7532 plist {plist}")
             plist.sort(key=lambda x: x[2])
             indices = [p[2] for p in plist]
             if not check_complete_indices(indices):

@@ -793,7 +793,7 @@ class VParser():
                 nettype, index_hi, index_lo, signed, elem_lo, elem_hi = parse_typestr(_type)
             else:
                 nettype = _type.get("name")
-                _range = _type.get("range", None)
+                _drange = _type.get("range", None)
                 elementType = _type.get("elementType", None)
                 if elementType is not None:
                     elementRange = elementType.get("range", None)
@@ -820,6 +820,10 @@ class VParser():
                 index_hi_str, index_lo_str = (None, None)
             elem_lo = int(elem_lo) if elem_lo is not None else None
             elem_hi = int(elem_hi) if elem_hi is not None else None
+            if None in (elem_hi, elem_lo):
+                array = None
+            else:
+                array = (elem_hi, elem_lo)
             netdict = {
                 "name": netname,
                 "type": nettype,
@@ -828,7 +832,7 @@ class VParser():
                 # TODO include depth and depthstr
                 "attributes": gbattrs,
                 "src" : src,
-                "array": (elem_lo, elem_hi),
+                "array": array,
                 "initval": 0, # TODO
                 "signed": False, # TODO
             }

@@ -40,11 +40,11 @@ class GBRegister(Register):
                 default = default.copy()
             setattr(self, name, default)
 
-    def configFromTokens(self, strobe=None, alias=None, domain=None, addr=None):
-        self.strobe = strobe
-        self.alias = alias
-        self.domain = domain
-        self.manual_addr = addr
+    def configFromTokens(self, **kwargs):
+        self.strobe = kwargs.get("strobe", None)
+        self.alias = kwargs.get("alias", None)
+        self.domain = kwargs.get("domain", None)
+        self.manual_addr = kwargs.get("addr", None)
         return
 
     @property
@@ -182,6 +182,21 @@ class GBMemory(Memory):
             if hasattr(default, "copy"):
                 default = default.copy()
             setattr(self, name, default)
+
+    def configFromTokens(self, **kwargs):
+        self.alias = kwargs.get("alias", None)
+        self.domain = kwargs.get("domain", None)
+        self.manual_addr = kwargs.get("addr", None)
+        return
+
+    @property
+    def initval(self):
+        return 0
+
+    @initval.setter
+    def initval(self, val):
+        # Ignored for compatibility
+        return
 
     @property
     def base_list(self):
