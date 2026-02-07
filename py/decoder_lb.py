@@ -376,7 +376,7 @@ class BusLB():
                 #    print(f"  ############# {self.name}: setting {wparam}_range = ({rangestr}, None)")
                 #    if rangestr is None:
                 #        raise Exception()
-                if rangestr is not None:
+                if not (None in rangestr):
                     self._bus[wparam+"_range"] = (rangestr, None)
                     self._bus[wparam+"_str"] = (rangestr[0] + "+1", None)
         return

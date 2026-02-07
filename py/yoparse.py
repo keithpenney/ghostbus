@@ -567,11 +567,11 @@ class VParser(StructWalker):
                 "name": netname,
                 "type": None, # TODO nettype
                 "range": (index_hi, index_lo),
-                "rangestr": _ww,
-                # TODO include depth and depthstr
+                "range_str": _ww,
                 "attributes": gbattrs,
                 "src" : src,
-                "array": array,
+                "depth": array,
+                "depth_str": (None, None), # TODO
                 "initval": get_value(val.get('bits')),
                 "signed": False, # TODO
             }

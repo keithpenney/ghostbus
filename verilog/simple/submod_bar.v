@@ -16,6 +16,9 @@ module submod_bar #(
   `GHOSTBUSPORTS
 );
 
+localparam RAM_MIN = 0;
+localparam RAM_MAX = 7;
+
 reg [3:0] bar_reg=1;                            // Non-host-accessible register
 
 (* ghostbus_ha *) reg signed [7:0] bar_ha_reg=8'hcc;      // Host-accessible register (will be auto-decoded)
@@ -23,6 +26,7 @@ reg [3:0] bar_reg=1;                            // Non-host-accessible register
 
 (* ghostbus_ha, ghostbus_addr='h100 *)
 reg [7:0] bar_ram [0:63];                       // Host-accessible RAM with pre-defined relative address (0x100)
+reg [15:0] zap_ram [RAM_MIN:RAM_MAX];                       // Host-accessible RAM with pre-defined relative address (0x100)
 integer N=0;
 initial begin
   for (N=0; N<64; N=N+1) begin

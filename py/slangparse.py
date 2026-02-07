@@ -556,6 +556,68 @@ def extract_range(dd, netname):
     return index_left, index_right
 
 
+def extract_depth(dd, netname):
+    """
+    Extracting the range from the CST:
+      0. Find the net in question
+         trace[-1] (key) == "text", val == net name
+         trace[-2] == "name"
+         trace[-3] == some int index // ignore this one
+         trace[-4] == "declarators"
+      1. Back up to same level as "name", and get val associated with key "dimensions"
+      2. Take the zero-th element, because we're not supporting any higher dimensions
+         dd = dimensions[0]
+         specifier = dd.get("specifier")
+         selector = specifier.get("selector")
+         left  = selector.get("left")
+         range = selector.get("range")
+         right = selector.get("right")
+      2. Confirm range.get("kind") == "Colon"
+         Assemble text in "left" and "right"
+    """
+    traces = []
+    def get_subtrace(trace, val):
+        if len(trace) < 4:
+            return False
+        if (val == netname) and (trace[-1] == "text") and (trace[-2] == "name") and (trace[-4] == "declarators"):
+            # Normal nets
+            traces.append((0, trace.copy()))
+        elif (val == netname) and (trace[-1] == "text") and (trace[-2] == "name"):
+            # Ports
+            traces.append((1, trace.copy()))
+        return False
+    sw = StructWalker(dd)
+    sw.walk(do=get_subtrace)
+    if len(traces) == 0:
+        print(f"    WARNING: Found no range for: {netname}")
+        return None, None
+    matchtype, trace = traces[0]
+    #print(trace)
+    _dd = dd
+    if matchtype == 0:
+        offset = -2
+    elif matchtype == 1:
+        offset = -3
+    for key in trace[:offset]:
+        _dd = _dd[key]
+    if matchtype == 0:
+        # Normal nets
+        newdd = _dd["dimensions"][0]["specifier"]["selector"]
+    elif matchtype == 1:
+        # Ports
+        newdd = _dd["header"]["dataType"]["dimensions"][0]["specifier"]["selector"]
+    else:
+        return None, None
+    left = newdd.get("left")
+    _range = newdd.get("range")
+    if _range.get("kind") != "Colon":
+        raise Exception("This don't look right")
+    right = newdd.get("right")
+    index_left = collectText(left)
+    index_right = collectText(right)
+    return index_left, index_right
+
+
 class SlangParsingError(Exception):
     def __init__(self, msg):
         super().__init__(msg)
@@ -786,6 +848,7 @@ class VParser():
                     gbattrs[attrname] = attrval
             netname = val.get("name", None)
             _type = val.get("type", None)
+            initval = val.get("initializer", {}).get("constant", 0)
             index_hi, index_lo = None, None
             elem_hi, elem_lo = None, None
             signed = False
@@ -822,19 +885,21 @@ class VParser():
             elem_hi = int(elem_hi) if elem_hi is not None else None
             if None in (elem_hi, elem_lo):
                 array = None
+                array_str = (None, None)
             else:
                 array = (elem_hi, elem_lo)
+                array_str = extract_depth(sub_cst, netname)
             netdict = {
                 "name": netname,
                 "type": nettype,
                 "range": (index_hi, index_lo),
-                "rangestr": (index_hi_str, index_lo_str),
-                # TODO include depth and depthstr
+                "range_str": (index_hi_str, index_lo_str),
                 "attributes": gbattrs,
                 "src" : src,
-                "array": array,
-                "initval": 0, # TODO
-                "signed": False, # TODO
+                "depth": array,
+                "depth_str": array_str,
+                "initval": initval,
+                "signed": False, # TODO Dammit. I can't find this in the AST.  Do I really need to dig into the CST for this one?
             }
             yield netdict
         return

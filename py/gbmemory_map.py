@@ -187,6 +187,9 @@ class GBMemory(Memory):
         self.alias = kwargs.get("alias", None)
         self.domain = kwargs.get("domain", None)
         self.manual_addr = kwargs.get("addr", None)
+        self.initval = kwargs.get("initval", 0)
+        self.signed = kwargs.get("signed", False)
+        self.genblock = kwargs.get("genblock", None)
         return
 
     @property
