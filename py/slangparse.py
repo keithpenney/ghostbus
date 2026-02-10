@@ -107,286 +107,6 @@ def get_value(bitlist):
     return val
 
 
-def getUnparsedWidth(source):
-    """Get the width of a net as a unparsed string (i.e. however it is declared in source)
-    The 'source' arg should come directly from the 'src' attribute of a given net
-    and describes the location in the source code where the net is defined."""
-    _range = getUnparsedWidthRange(source)
-    if _range is not None:
-        # Assume _range[1] is always '0'
-        return "{}+1".format(_range[0])
-    return None
-
-
-def getUnparsedWidthAndDepthRange(source):
-    """A convenience method to do both getUnparsedWidthRange() and
-    getUnparsedDepthRange() with a single file access.
-    Returns (getUnparsedWidthRange(), getUnparsedDepthRange())"""
-    snippet, offset = _getSourceSnippet(source)
-    _ww = _getUnparsedWidthRange(snippet, offset, get_type=False)
-    _dd = _getUnparsedDepthRange(snippet, offset)
-    return (_ww, _dd)
-
-
-def getUnparsedWidthAndDepthRangeAndType(source):
-    """A convenience method to do both getUnparsedWidthRange() and
-    getUnparsedDepthRange() with a single file access.
-    Returns (range_spec, depth_spec, net_type)"""
-    snippet, offset = _getSourceSnippet(source)
-    _ww, net_type = _getUnparsedWidthRange(snippet, offset)
-    _dd = _getUnparsedDepthRange(snippet, offset)
-    return (_ww, _dd, net_type)
-
-
-def getUnparsedWidthRangeType(source):
-    """Get the range and net type of a net (wire/reg/input/output/inout). The range
-    is returned as an unparsed string (i.e. however it is declared in source).
-    The net type is one of enum NetType.
-    Returns ('0', '0') for the range if a net type keyword is encountered (walking
-    backward) before a range spec, otherwise returns (str range_high, str range_low)."""
-    snippet, offset = _getSourceSnippet(source)
-    return _getUnparsedWidthRange(snippet, offset)
-
-
-def getUnparsedWidthRange(source):
-    """Get the range of a net (wire/reg/input/output/inout) as an unparsed string
-    (i.e. however it is declared in source).
-    Returns ('0', '0') if a net type keyword is encountered (walking backward) before
-    a range spec, otherwise returns (str range_high, str range_low)."""
-    snippet, offset = _getSourceSnippet(source)
-    return _getUnparsedWidthRange(snippet, offset, get_type=False)
-
-
-def _getUnparsedWidthRange(snippet, offset, get_type=True):
-    _range = None
-    if snippet is not None:
-        _rangeStr, net_type = _findRangeStr(snippet, offset, get_type=get_type)
-        split = _rangeStr.split(':')
-        if len(split) > 1:
-            _range = (split[0], split[1])
-    if get_type:
-        return (_range, net_type)
-    return _range
-
-
-def getUnparsedDepthRange(source):
-    """Get the depth of a memory (RAM) as an unparsed string (i.e. however it is
-    declared in source).
-    Returns ('0', '0') if a ';' is encountered before a depth spec, otherwise
-    returns (str start, str end)."""
-    snippet, offset = _getSourceSnippet(source)
-    return _getUnparsedDepthRange(snippet, offset)
-
-
-def _getUnparsedDepthRange(snippet, offset):
-    _depth = None
-    if snippet is not None:
-        _depthStr = _findDepthStr(snippet, offset)
-        split = _depthStr.split(':')
-        if len(split) > 1:
-            _depth = (split[0], split[1])
-    return _depth
-
-
-def _getSourceSnippet(yosrc, size=1024):
-    """Get a snippet (string) of source code surrounding a line defined
-    by the Yosys 'src' attribute 'yosrc' of a given net.
-    Returns (str snippet, int offset) where the net name begins 'offset'
-    characters into the string 'snippet'"""
-    groups = srcParse(yosrc)
-    if groups is None:
-        return None, None
-    filepath, linestart, charstart, lineend, charend = groups
-    snippet = None
-    offset = 0
-    try:
-        line = ""
-        with open(filepath, 'r') as fd:
-            for n in range(linestart):
-                line = fd.readline()
-            # Rewind up to size/2 chars before start of register name
-            tell = fd.tell()
-            # Set tell to the start of the identifier
-            tell -= 1+len(line)-charstart
-            fd.seek(max(0, tell-int(size//2)))
-            # Read up to 1024 chars
-            snippet = fd.read(int(size))
-            offset = min(tell, int(size//2))
-            #namestr = snippet[offset:offset+charend-charstart]
-            #print("_readRange: namestr = {}, offset = {}, len(snippet) = {}, rangeStr = {}".format(
-            #    namestr, offset, len(snippet), rangeStr))
-    except OSError:
-        # print("Cannot open file {}".format(filepath))
-        return None, None
-    return snippet, offset
-
-
-def _getSourceFromStart(yosrc):
-    """Read in the file reference by 'yosrc' and return the portion from the beginning of the file
-    up until the line/char referenced by 'yosrc'."""
-    groups = srcParse(yosrc)
-    if groups is None:
-        return False
-    filepath, linestart, charstart, lineend, charend = groups
-    lines = []
-    try:
-        with open(filepath, 'r') as fd:
-            nline = 0
-            line = True
-            while line:
-                line = fd.readline()
-                nline += 1
-                if nline == linestart:
-                    lines.append(line[:charstart])
-                else:
-                    lines.append(line)
-    except OSError:
-        return None
-    return "".join(lines)
-
-
-def _matchKw(ss):
-    for kw in _net_keywords:
-        if re.search(r"\b" + kw + r"\b", ss):
-            return kw
-    return None
-
-
-def _findRangeStr(snippet, offset, get_type=True):
-    """Start at char offset. Read backwards. Look for ']' to open a range.
-    If we find either keyword 'reg' or 'wire' before the ']', we'll break and
-    decide the reg is 1-bit."""
-    grouplevel = 0
-    endix = None
-    rangestr = None
-    keywords = _net_keywords
-    nettype = None
-    maxlen = max([len(kw) for kw in keywords])
-    #print(f"  ::{snippet[offset:offset+10]} -----", end="")
-    for n in range(offset, -1, -1):
-        char = snippet[n]
-        # Room for whitespace+'r'+'e'+'g'+whitespace
-        slc = snippet[n:n+maxlen].replace('\n', ' ').replace('.', ' ')
-        kw = _matchKw(slc.strip())
-        if (grouplevel == 0) and kw is not None:
-            nettype = NetTypes.get(kw)
-            if rangestr is None:
-                rangestr = "0:0"
-            #print(f"xx Breaking at offset {offset-n}: {snippet[n:n+10]} (kw = {kw}) (using input \"{slc.strip()}\")")
-            break
-        elif char == ']': # walking backwards
-            if grouplevel == 0:
-                endix = n
-            grouplevel += 1
-        elif char == '[':
-            grouplevel -= 1
-            if grouplevel == 0:
-                rangestr = snippet[n+1:endix]
-                if not get_type:
-                    #print(f"xy Breaking at offset {offset-n}: {snippet[n:n+10]}")
-                    break
-        if n == 0:
-            raise Exception("Reached 0 looking for a keyword from netname {snippet[offset:offset+10]}")
-    return (rangestr, nettype)
-
-
-def _findDepthStr(snippet, offset):
-    """Start at char offset. Read forward. Look for '[' to open a range.
-    If we find a semicolon '[', we'll break and decide the depth is 1.
-    """
-    grouplevel = 0
-    startix = None
-    depthstr = None
-    for n in range(offset, len(snippet)):
-        char = snippet[n]
-        if char == '[':
-            if grouplevel == 0:
-                startix = n
-            grouplevel += 1
-        elif char == ']':
-            grouplevel -= 1
-            if grouplevel == 0:
-                depthstr = snippet[startix+1:n]
-                break
-        elif char == ';':
-            break
-    return depthstr
-
-
-# HACK ALERT!
-def decomment(ss):
-    """A hackish attempt to de-comment a block of Verilog code"""
-    cbs = "/*"
-    cbe = "*/"
-    cls = "//"
-    cle = "\n"
-    result = []
-    start = 0
-    NO_COMMENT = 0
-    BLOCK_COMMENT = 1
-    LINE_COMMENT = 2
-    comment = NO_COMMENT
-    for n in range(2, len(ss)):
-        chrs = ss[n-2:n]
-        if comment == NO_COMMENT:
-            if cbs in chrs:
-                comment = BLOCK_COMMENT
-            elif cls in chrs:
-                comment = LINE_COMMENT
-            if comment != NO_COMMENT:
-                result.append(ss[start:n-2])
-        elif comment == BLOCK_COMMENT:
-            if cbe in chrs:
-                start = n
-                comment = NO_COMMENT
-        elif comment == LINE_COMMENT:
-            if cle in chrs:
-                start = n-1 # Will hit when cle is chrs[0]
-                comment = NO_COMMENT
-    if comment == NO_COMMENT:
-        result.append(ss[start:])
-    return "".join(result)
-
-
-def _matchForLoop(ss):
-    """Match the last Verilog generate-for-loop opening statement in the string 'ss'
-    NOTE: This hack only catches simple for-loops.  It's pretty easy to break this if you're trying.
-    I need a proper lexer to do this generically.
-    Return (loop_index, start, stop, inc)"""
-    ss = decomment(ss)
-    restr = r"generate\s+for\s+\(\s*(\w+)\s*=\s*([^;]+);\s*(\w+)\s*([=<>!]+)\s*([^;]+);\s*(\w+)\s*=\s*(\w+)\s*([\+\-*/]+)\s*(\w+)\)"
-    #_match = re.search(restr, ss)
-    #if _match:
-    _matches = re.findall(restr, ss)
-    if len(_matches) > 0:
-        groups = _matches[-1]
-        #groups = _match.groups()
-        loop_index = groups[0]
-        # We can only understand simple for loops such that loop_index also appears at groups()[2, 5, and 6]
-        for x in (2, 5, 6):
-            if loop_index != groups[x].strip():
-                ms = ss[_match.start(), _match.end()]
-                raise SlangParsingError(f"I'm not smart enough to parse this construct; please simplify it: {ms}")
-        start = groups[1].strip()
-        comp_op = groups[3]
-        comp_val = groups[4]
-        inc_op = groups[7]
-        inc_val = groups[8]
-        return (loop_index, start, comp_op, comp_val, inc_op+inc_val)
-    else:
-        #print(f"Failed to find for-loop in the following:\n  {ss}")
-        pass
-    return (None, None, None, None, None)
-
-
-def findForLoop(yosrc):
-    # We want to match the last for-loop in the portion of the string only up to the offset
-    # loop_index, start, comp, inc
-    #snippet, offset = _getSourceSnippet(yosrc, size=4096)
-    snippet = _getSourceFromStart(yosrc)
-    return _matchForLoop(snippet)
-
-
 def _split_body(bodystr):
     restr = r"(\d+)\s+"
     _match = re.search(restr, bodystr)
@@ -631,9 +351,6 @@ class Broken(Exception):
 #==============================================================================
 # Finder Functions
 #==============================================================================
-#=======================
-#========== 1 ==========
-#=======================
 def get_modules(trace, val):
     """slang"""
     if hasattr(val, "get"):
@@ -644,9 +361,6 @@ def get_modules(trace, val):
     return False
 
 
-#=======================
-#========== 2 ==========
-#=======================
 def get_gbnets(trace, val):
     """slang"""
     if hasattr(val, "get"):
@@ -661,14 +375,27 @@ def get_gbnets(trace, val):
     return False
 
 
-#=======================
-#========== 3 ==========
-#=======================
 def get_instances(trace, val):
     """slang"""
     if hasattr(val, "get"):
         kind = val.get("kind", None)
         if kind == "Instance":
+            return True
+    return False
+
+
+def get_ports(trace, val):
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind == "Port":
+            return True
+    return False
+
+
+def get_params(trace, val):
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind == "Parameter":
             return True
     return False
 
@@ -915,6 +642,7 @@ class VParser():
 
     @staticmethod
     def _extract_top(preamble):
+        # TODO DEPRECATE?
         restr = r"^Top level design units:" + "\n" + r"\s+(\w+)"
         _match = re.search(restr, preamble)
         if _match:
@@ -948,6 +676,7 @@ class VParser():
         return mod_dict
 
     def find_top_module(self):
+        # TODO DEPRECATE?
         if self._resolved:
             return
         if self._top is None:
@@ -1011,7 +740,7 @@ class VParser():
                     yield (mod_hash, md)
 
     def getInstGenerator(self, mod_dict):
-        # TODO deprecate/delete this in favor of 'get_instances'
+        # TODO DEPRECATE/delete this in favor of 'get_instances'
         top_dict = self.getTopDict()
         #print("================================")
         #print(strStruct(top_dict, depth=2))
@@ -1049,55 +778,20 @@ class VParser():
         return False
 
     def _getTopHash(self):
-        if self._top_hash is None:
+        if self._top_hash is None and self._top is not None:
             top_dict = self.getTopDict()
             self._top_hash = int(top_dict["body"]["addr"])
         return self._top_hash
 
-    def getPorts(self, parsed=True):
-        """Return list of (0, name, dirstr, rangeStart, rangeEnd), one for
-        each port in the parsed module. The first '0' in the list is for compatibility
-        with the non-Yosys parser which captures inline macros as well.  These need to
-        be inserted at the proper location so they are included in the ports list (with
-        non-zero as the first entry).  The Yosys parser acts on the preprocessed source
-        so all macros are already resolved.
-        If 'parsed', rangeStart and rangeEnd are integers (resolved expressions).
-        Otherwise, they are unparsed strings (directly copied from the source code)."""
-        ports = []
-        for portname,vdict in self.ports.items():
-            portdir = vdict.get('direction', 'unknown')
-            pbits = vdict.get('bits', [0])
-            if parsed:
-                pw = len(pbits)
-                if len(pbits) > 1:
-                    rangeStart = len(pbits)-1
-                    rangeEnd = 0
-                else:
-                    rangeStart = None
-                    rangeEnd = None
-            else:
-                _range = vdict['range']
-                if _range is None:
-                    print(f"{portname} _range is None!")
-                    rangeStart = None
-                    rangeEnd = None
-                else:
-                    if _range[0] == '0' and _range[1] == '0':
-                        rangeStart, rangeEnd = (None, None)
-                    else:
-                        rangeStart, rangeEnd = _range[:2]
-            ports.append((self.LINETYPE_PORT, portname, portdir, rangeStart, rangeEnd))
-        return ports
+    @classmethod
+    def getPorts(cls, mod_dict):
+        jb = StructWalker(mod_dict)
+        return jb.iter_walk(do=get_ports, depth=4)
 
-    def getParams(self, module=None):
-        """Returns {param_name: default_value, ...}"""
-        if len(self.params) == 0:
-            return {}
-        if module is None:
-            # Just get the first module
-            module = [key for key in self.params.keys()][0]
-        mdict = self.params[module]
-        return mdict
+    @classmethod
+    def getParams(cls, mod_dict):
+        jb = StructWalker(mod_dict)
+        return jb.iter_walk(do=get_params, depth=4)
 
     def getTopName(self):
         return self.modname
