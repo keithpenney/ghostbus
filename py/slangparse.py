@@ -387,7 +387,7 @@ def get_instances(trace, val):
 def get_ports(trace, val):
     if hasattr(val, "get"):
         kind = val.get("kind", None)
-        if kind == "Port":
+        if kind in ("Port", "InterfacePort"):
             return True
     return False
 
@@ -403,7 +403,7 @@ def get_params(trace, val):
 #==============================================================================
 # Parser
 #==============================================================================
-class VParser():
+class SlangParser():
     # Helper values
     LINETYPE_PARAM = 0
     LINETYPE_PORT  = 0
@@ -412,11 +412,14 @@ class VParser():
     # Default value for attributes without one
     default_attrval = 1
 
-    def __init__(self, filelist, top=None, include_dirs=None, sv=False):
+    def __init__(self, filelist, ast_args=[], cst_args=[], top=None, include_dirs=None, sv=False, catch_slang_errors=False):
         for filename in filelist:
             if not os.path.exists(filename):
                 raise Exception(f"File {filename} not found")
                 return None
+        self._catch_slang_errors = catch_slang_errors
+        self._ast_args = ast_args
+        self._cst_args = cst_args
         self._filelist = filelist
         self._top = top
         self._top_hash = None
@@ -432,29 +435,17 @@ class VParser():
 
     def _slang_cmd(self, ast=True):
         filestr = " ".join(self._filelist)
-        scopestr = ""
-        if self._top is not None:
-            topstr = f" --top {self._top}"
-            if ast:
-                scopestr = f" --ast-json-scope {self._top}"
-        else:
-            topstr = ""
         if self._include_dirs is not None and len(self._include_dirs) > 0:
             incstr = " ".join([f"-I {inc}" for inc in self._include_dirs])
         else:
             incstr = ""
-        # NOTE --cst-json isn't included in a release yet (as of v9.1), but was introduced in commit 805e160fac on 8/8/25
+        # NOTE --cst-json was introduced in commit 805e160fac on 8/8/25 and is included in release 10.0
         # TODO experiment with pyslang (much more of a pain to install but could be a lot better than walking the JSON manually)
-        slang_args="-q --ignore-unknown-modules --timescale=1ns/1ns --allow-toplevel-iface-ports"
         if ast:
-            slang_args += " --ast-json-source-info"
-            if not SLANG_TYPE_IS_STRING:
-                slang_args += " --ast-json-detailed-types"
-        if ast:
-            jscmd = "--ast-json"
+            slang_args = " ".join(self._ast_args)
         else:
-            jscmd = "--cst-json"
-        scmd = f'slang -DSLANG {incstr}{filestr}{topstr}{scopestr} {slang_args} {jscmd} -'
+            slang_args = " ".join(self._cst_args)
+        scmd = f"slang {incstr}{filestr} {slang_args}"
         return scmd
 
     def create_ast(self):
@@ -464,7 +455,10 @@ class VParser():
             jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
         except subprocess.CalledProcessError as e:
             err = str(e)
-        if err is not None:
+        if self._catch_slang_errors:
+            with open("deleteme_ast", 'r') as fd:
+                jsfile = fd.read()
+        elif err is not None:
             raise SlangParsingError(err)
         dd = json.loads(jsfile)
         self.ast = dd
@@ -478,7 +472,10 @@ class VParser():
             jsfile = subprocess.check_output(scmd, shell=True).decode('latin-1')
         except subprocess.CalledProcessError as e:
             err = str(e)
-        if err is not None:
+        if self._catch_slang_errors:
+            with open("deleteme_cst", 'r') as fd:
+                jsfile = fd.read()
+        elif err is not None:
             raise SlangParsingError(err)
         dd = json.loads(jsfile)
         self.cst = dd
@@ -838,6 +835,32 @@ class VParser():
             name = modinst["name"]
             print("  " + name)
         return
+
+
+class VParser(SlangParser):
+    def __init__(self, filelist, top=None, include_dirs=None, sv=False, catch_slang_errors=False):
+        common_args = [
+            "-DSLANG",
+            "-q",
+            "--ignore-unknown-modules",
+            "--timescale=1ns/1ns",
+            "--allow-toplevel-iface-ports",
+        ]
+        ast_args = common_args
+        cst_args = common_args.copy()
+        # TODO this hackish filename needs to be communicated to SlangParser.  It's currently a brittle shared secret
+        astout = "deleteme_ast" if catch_slang_errors else "-"
+        ast_args.extend([
+            "--ast-json-source-info",
+            f"--ast-json {astout}",
+        ])
+        # TODO This one too
+        cstout = "deleteme_cst" if catch_slang_errors else "-"
+        cst_args.extend([
+            f"--cst-json {cstout}",
+        ])
+        super().__init__(filelist, ast_args=ast_args, cst_args=cst_args, top=top,
+                         include_dirs=include_dirs, catch_slang_errors=catch_slang_errors)
 
 
 def doBrowse():
