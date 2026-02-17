@@ -167,6 +167,7 @@ def extract(svfile, modname=None, catch_slang_errors=False):
         "params": [],
         "ports": [],
     }
+    cst_port_dict = vp.get_CST_port_dict()
     for mod_hash, mod_dict in vp.get_modules():
         module_name = vp.get_module_name(mod_dict, mod_hash=mod_hash)
         if (modname is not None) and (module_name != modname):
@@ -193,7 +194,11 @@ def extract(svfile, modname=None, catch_slang_errors=False):
             # The _type == "<error>" case happens when we use a top-level Interface without
             # supplying the definition file or using a modport
             if direction is None or _type == "<error>":
-                dirstr = ""
+                pd = cst_port_dict.get(name)
+                if pd is not None:
+                    dirstr = pd.get("direction")
+                    if dirstr is None:
+                        dirstr = pd["type"]
             else:
                 dirstr = dir_dict.get(direction, "output")
             if _type is None:

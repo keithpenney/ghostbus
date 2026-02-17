@@ -349,7 +349,7 @@ class Broken(Exception):
 
 
 #==============================================================================
-# Finder Functions
+# AST Finder Functions
 #==============================================================================
 def get_modules(trace, val):
     """slang"""
@@ -396,6 +396,17 @@ def get_params(trace, val):
     if hasattr(val, "get"):
         kind = val.get("kind", None)
         if kind == "Parameter":
+            return True
+    return False
+
+
+#==============================================================================
+# CST Finder Functions
+#==============================================================================
+def cst_get_port_subdict(trace, val):
+    if hasattr(val, "get"):
+        kind = val.get("kind", None)
+        if kind == "AnsiPortList":
             return True
     return False
 
@@ -672,6 +683,71 @@ class SlangParser():
             self.cst_dict[module_name] = mod_dict
         return mod_dict
 
+    def get_CST_port_dict(self, module_name=None):
+        if module_name is not None:
+            mod_dict = self.get_CST_module_dict(module_name)
+            sw = StructWalker(mod_dict)
+            _iter = sw.iter_walk(do=cst_get_port_subdict)
+        else:
+            _iter = self.cst_walker.iter_walk(do=cst_get_port_subdict)
+        dd = None
+        # There's only supposed to be one of these per module, so de-iter it
+        for key, val in _iter:
+            dd = val
+            break
+        if dd is None:
+            raise Exception("Couldn't find port dict in the CST")
+        port_dict = {}
+        for pdict in dd["ports"]:
+            kind = pdict["kind"]
+            if kind == "Comma":
+                continue
+            hdr = pdict["header"]
+            direction = hdr.get("direction")
+            if direction is not None:
+                direction = direction["text"]
+            dtype = hdr.get("dataType")
+            if dtype is None:
+                modport = hdr.get("modport")
+                typename = hdr.get("nameOrKeyword")
+                if typename is not None:
+                    typename = typename["text"]
+                else:
+                    typename = ""
+                if modport is not None:
+                    modport = modport["member"]["text"]
+                else:
+                    modport = ""
+                _type = f"{typename}.{modport}"
+                dims = None
+            else:
+                dims = dtype.get("dimensions")
+                _type = dtype["kind"]
+                if _type == "ImplicitType":
+                    _type = None
+                elif _type == "NamedType":
+                    td = hdr["dataType"]["name"]
+                    _type = td["identifier"]["text"]
+                else:
+                    _type = hdr["dataType"]["keyword"]["text"]
+            if dims is not None:
+                #raise Exception(strStruct(dims))
+                sel = dims[0]["specifier"]["selector"]
+                left = sel["left"]
+                right = sel["right"]
+                index_left = collectText(left)
+                index_right = collectText(right)
+                _range = (index_left, index_right)
+            else:
+                _range = (None, None)
+            name = pdict["declarator"]["name"]["text"]
+            port_dict[name] = {
+                "direction": direction,
+                "type": _type,
+                "range": _range,
+            }
+        return port_dict
+
     def find_top_module(self):
         # TODO DEPRECATE?
         if self._resolved:
@@ -782,13 +858,13 @@ class SlangParser():
 
     @classmethod
     def getPorts(cls, mod_dict):
-        jb = StructWalker(mod_dict)
-        return jb.iter_walk(do=get_ports, depth=4)
+        sw = StructWalker(mod_dict)
+        return sw.iter_walk(do=get_ports, depth=4)
 
     @classmethod
     def getParams(cls, mod_dict):
-        jb = StructWalker(mod_dict)
-        return jb.iter_walk(do=get_params, depth=4)
+        sw = StructWalker(mod_dict)
+        return sw.iter_walk(do=get_params, depth=4)
 
     def getTopName(self):
         return self.modname
